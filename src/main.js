@@ -329,12 +329,17 @@ function lightUp(p, reason, always = false) {
     n.show();
   }
 }
+const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
+function resetCounts(p) { const had = p.unread || p.glow || p.waiting; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
+  return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
+
   if (p.msgMode || !canAlert(p)) return;
   p.unread = (p.unread || 0) + 1;
   lightUp(p, reason);
 }
 function onMsgCount(p, c) {
+  if (!isBotUrl(p.view.webContents.getURL())) { resetCounts(p); return; }
   const prev = p.msgMode ? p.unread : null;
   p.msgMode = true;
   const same = p.lastMsg && p.lastMsg.user === c.user && p.lastMsg.bot === c.bot && p.lastMsg.botSince === c.botSince;
@@ -498,7 +503,7 @@ function addPane(spec = {}, { focus = true } = {}) {
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
   wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.favicon = ''; });
-  wc.on('did-navigate-in-page', () => { p.lastUserCount = null; });
+  wc.on('did-navigate-in-page', () => { p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { sendState(); markActivity(p, 'title'); });
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
@@ -762,7 +767,7 @@ paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
   if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, method: String(c.method).slice(0, 40) });
 });
-paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p && p.msgMode) { p.msgMode = false; p.unread = 0; p.lastUserCount = null; sendState(); updateBadge(); } });
+paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
 paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
 paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
 paneOn('pane:mouseup', e => { if (byWc(e.sender)) splitEnd(); });

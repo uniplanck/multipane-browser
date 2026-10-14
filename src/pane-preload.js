@@ -11,7 +11,7 @@ let lastLen = -1, timer = null;
 //   2. class hints: "user"/"human" vs "assistant"/"bot"/"response"; flex alignment items-end/justify-end
 //   3. geometry: bubble right-aligned (its right edge near the chat's right, left edge well
 //      right of the chat's left) and narrow => user; otherwise bot.
-const grokChat = () => location.hostname === 'grok.com' && /^\/(bot|chat|c)\//.test(location.pathname);
+const grokChat = () => location.hostname === 'grok.com' && /^\/bot\//.test(location.pathname);
 const MSG_SEL = [
   '[data-message-author-role]', '[data-testid*="message" i]', '[data-role="user"]', '[data-role="assistant"]',
   '.message-bubble', '[class*="message-bubble"]', '[class*="MessageBubble"]', '[id^="response-"]',
@@ -128,7 +128,8 @@ function check() {
     }
     return;
   }
-  if (lastSent) { lastSent = null; ipcRenderer.send('pane:msgmode-off'); }
+  if (lastSent !== 'off') { lastSent = 'off'; ipcRenderer.send('pane:msgmode-off'); }
+  return;
   const len = document.body ? document.body.textContent.length : 0;
   if (lastLen >= 0 && len !== lastLen) ipcRenderer.send('pane:mutation');
   lastLen = len;
