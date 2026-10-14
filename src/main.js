@@ -391,7 +391,7 @@ function applyThrottling() {
 const GROK_BOT_RE = /^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/;
 const probeCode = id => `(() => {
   const id = ${JSON.stringify(id)};
-  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left > 120; };
+  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const box = [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis);
   if (box && location.pathname.includes(id)) return 'rendered';
   const txt = (document.body && document.body.innerText) || '';
@@ -463,9 +463,7 @@ async function grokFix(p, target, id, viaHome) {
     p.grokPending = { target, id };
     wc.loadURL('https://grok.com/').catch(() => {});
   } else {
-    dlog(`pane${p.id}`, 'grokfix gave up; restoring', target);
-    p.grokSkipOnce = true;
-    wc.loadURL(target).catch(() => {});
+    dlog(`pane${p.id}`, 'grokfix gave up; leaving page as is', target);
   }
 }
 function onGrokLoad(p) {
