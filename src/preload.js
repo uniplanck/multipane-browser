@@ -1,0 +1,25 @@
+// Preload for the app's own UI pages (index.html, overlay.html). Exposes a narrow API only.
+const { contextBridge, ipcRenderer } = require('electron');
+const send = (ch, ...a) => ipcRenderer.send(ch, ...a);
+contextBridge.exposeInMainWorld('mpb', {
+  platform: process.platform,
+  navigate: (id, url) => send('navigate', id, String(url)),
+  back: id => send('back', id), forward: id => send('forward', id),
+  reload: id => send('reload', id), close: id => send('close', id),
+  add: () => send('add'), layout: l => send('layout', l),
+  focusPane: id => send('focus-pane', id), activatePane: id => send('activate-pane', id),
+  setReload: (id, m) => send('set-reload', id, m),
+  swap: (a, b) => send('swap', a, b), maximize: id => send('maximize', id),
+  paneMenu: id => send('pane-menu', id), palette: () => send('palette'),
+  run: action => send('overlay-run', action), closeOverlay: () => send('overlay-close'),
+  ready: () => send('ready'),
+  favOpen: (id, where) => send('fav-open', id, where), favMenu: id => send('fav-menu', id),
+  favMove: (a, b) => send('fav-move', a, b), favAdd: (url, label) => send('fav-add', String(url), String(label || '')),
+  renamePane: id => send('rename-pane', id),
+  chipMenu: id => send('chip-menu', id), wsMenu: () => send('ws-menu'),
+  splitStart: (a, i) => send('split-start', a, i), splitEnd: () => send('split-end'), splitReset: a => send('split-reset', a),
+  usage: force => ipcRenderer.invoke('usage:get', !!force),
+  onState: cb => ipcRenderer.on('state', (_, s) => cb(s)),
+  onFocusUrl: cb => ipcRenderer.on('focus-url', (_, id) => cb(id)),
+  onOverlayOpen: cb => ipcRenderer.on('overlay-open', (_, o) => cb(o)),
+});

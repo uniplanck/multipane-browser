@@ -1,0 +1,14 @@
+:root{color-scheme:light dark;--bg:#1c1c1e;--text:#ececf0;--dim:#8e8e93;--field:#2c2c2e;--line:rgba(255,255,255,.1);--accent:#0a84ff}
+@media (prefers-color-scheme:light){:root{--bg:#fff;--text:#1d1d1f;--dim:#6e6e73;--field:#f2f2f4;--line:rgba(0,0,0,.1)}}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font:13px -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
+main{height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px;text-align:center}
+.logo{font-size:30px;opacity:.35}
+h1{margin:0;font-size:17px;font-weight:600}
+form{width:min(460px,92%)}
+input{width:100%;box-sizing:border-box;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--field);color:var(--text);font:14px inherit;outline:none;transition:box-shadow .15s,border-color .15s}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 25%,transparent)}
+.quick{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.quick a{color:var(--text);text-decoration:none;padding:6px 12px;border-radius:8px;background:var(--field);border:1px solid var(--line);transition:transform .12s}
+.quick a:hover{transform:translateY(-1px)}
+.hint{color:var(--dim);font-size:11px;line-height:2}
+kbd{font:10.5px inherit;border:1px solid var(--line);border-radius:4px;padding:0 4px;background:var(--field)}

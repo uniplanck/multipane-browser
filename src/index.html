@@ -1,0 +1,18 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:">
+<link rel="stylesheet" href="style.css"></head><body>
+<header id="top">
+  <div id="tl-space"></div>
+  <div class="seg" id="presets" role="tablist" aria-label="レイアウト"></div>
+  <div id="strip" aria-label="ペイン一覧"></div>
+  <div id="unread-sum" title="次の未読ペインへ (⌘J)"></div>
+  <button class="icon-btn" id="ws-btn" title="レイアウト保存・切替（保存したペイン構成をワンクリックで開く）">⧉</button>
+  <button class="icon-btn" id="add" title="新しいペイン (⌘T)">＋</button>
+  <button class="pill" id="cmdk" title="コマンドパレット (⌘K)"><span>検索・コマンド</span><kbd>⌘K</kbd></button>
+  <button class="pill usage" id="usage" title="使用量を読み込み中…"><span class="umode"></span><span class="uval">–</span></button>
+</header>
+<nav id="favbar" aria-label="お気に入り"><span id="fav-star" title="お気に入り：クリックで選択中のペイン、⌘クリックで新しいペイン、⇧クリックで別ウィンドウ、右クリックでメニュー。URLやリンクをここにドロップで追加">★</span><div id="favs"></div><span id="fav-hint">⋯メニュー・⌘K・URLのドロップでお気に入りに追加</span></nav>
+<div id="panes"></div>
+<div id="drop-hint"></div>
+<div id="splits"></div>
+<script src="renderer.js"></script></body></html>

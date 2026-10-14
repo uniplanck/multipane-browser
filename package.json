@@ -1,0 +1,32 @@
+{
+  "name": "multipane-browser",
+  "productName": "MultiPane Browser",
+  "version": "1.0.0",
+  "description": "1ウィンドウに最大10ペインを並べられるChromiumベースのブラウザ",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac --universal",
+    "dist:mac-split": "electron-builder --mac --arm64 --x64",
+    "install:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.identity=null && codesign --force --deep -s - 'dist/mac-arm64/MultiPane Browser.app' && rm -rf '/Applications/MultiPane Browser.app' && ditto 'dist/mac-arm64/MultiPane Browser.app' '/Applications/MultiPane Browser.app'"
+  },
+  "build": {
+    "appId": "com.multipanebrowser.app",
+    "productName": "MultiPane Browser",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
+  }
+}
