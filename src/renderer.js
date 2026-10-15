@@ -98,7 +98,7 @@ mpb.onState(s => {
   document.body.classList.toggle('light', !s.dark);
   document.body.classList.toggle('has-max', s.maximizedId != null);
   $('#presets').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.k === (s.effLayout || s.layout)));
-  const glowN = s.panes.filter(p => p.glow).length, unreadN = s.panes.reduce((a, p) => a + (p.unread || 0), 0);
+  const glowN = 0, unreadN = s.panes.filter(p => p.needsReply).length;
   const us = $('#unread-sum');
   us.innerHTML = glowN || unreadN ? `<span class="dot"></span>${glowN ? `新着 ${glowN}ペイン` : `未返信 ${unreadN}`}<kbd>${MOD}J</kbd>` : '';
   us.classList.toggle('show', !!(glowN || unreadN));

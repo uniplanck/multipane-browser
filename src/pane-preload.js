@@ -72,6 +72,20 @@ function geoRole(el, box) {
   const farFromLeft = r.left - box.left > w * 0.25;
   return nearRight && farFromLeft && r.width < w * 0.8 ? 'user' : 'bot';
 }
+// ASK-BEGIN
+// Does the latest bot message wait for the user? (explicit marker / question / choice widget / asking phrases)
+function looksAsking(text, hasWidget) {
+  const raw = String(text || '');
+  const flat = raw.replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-');
+  if (/◆-+出力待ち-+◆/.test(flat.slice(-300))) return true;
+  if (hasWidget) return true;
+  const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
+  const last = lines[lines.length - 1] || '';
+  if (/[?？][)）」』"'”’\s]*$/.test(last)) return true;
+  const tail = raw.replace(/\s+/g, '').slice(-200);
+  return /教えてください|どちら|確認してください|よろしいですか/.test(tail);
+}
+// ASK-END
 function scanMessages() {
   // grok.com/bot: each turn is a ".group/bot-entry" block; user turns contain [data-testid="user-message"]
   let ents = [...document.querySelectorAll('[class*="group/bot-entry"]')];
@@ -80,7 +94,10 @@ function scanMessages() {
     let user = 0, bot = 0, botSince = 0;
     for (const e of ents) { if (e.querySelector('[data-testid="user-message"]')) { user++; botSince = 0; } else { bot++; botSince++; } }
     const t = (ents[ents.length - 1].textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-');
-    return { user, bot, botSince, waiting: botSince > 0 && /◆-+出力待ち-+◆$/.test(t), method: 'bot-entry' };
+    const le = ents[ents.length - 1];
+    const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
+    const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
+    return { user, bot, botSince, waiting: botSince > 0 && /◆-+出力待ち-+◆$/.test(t), asks, method: 'bot-entry' };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -106,11 +123,11 @@ function scanMessages() {
   }
   const lastEl = els[els.length - 1];
   const waiting = !!lastEl && /◆-+出力待ち-+◆$/.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-'));
-  return { user, bot, botSince, waiting, method };
+  return { user, bot, botSince, waiting, asks: waiting, method };
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}`;
+  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.asks}`;
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -123,7 +140,7 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     const c = scanMessages();
     if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}`;
+      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.asks}`;
       if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     }
     return;

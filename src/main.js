@@ -84,7 +84,7 @@ function loadInto(wc, url) {
 // ======================= global (all windows) =======================
 function broadcast() { ctxs.forEach(c => c.sendState()); }
 function updateDockBadge() {
-  const n = ctxs.reduce((a, c) => a + c.panes.filter(p => !p.muted).reduce((b, p) => b + (p.msgMode ? (p.unread || 0) : (p.glow ? 1 : 0)), 0), 0);
+  const n = ctxs.reduce((a, c) => a + c.panes.filter(p => !p.muted).reduce((b, p) => b + (p.msgMode && p.needsReply ? (p.unread || 0) : 0), 0), 0);
   if (isMac) app.dock?.setBadge(n ? String(n) : '');
   else app.setBadgeCount?.(n);
 }
@@ -279,7 +279,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -330,7 +330,7 @@ function lightUp(p, reason, always = false) {
   }
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
-function resetCounts(p) { const had = p.unread || p.glow || p.waiting; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; if (had) { updateBadge(); sendState(); } }
+function resetCounts(p) { const had = p.unread || p.glow || p.waiting || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
   return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
 
@@ -350,8 +350,11 @@ function onMsgCount(p, c) {
   p.unread = c.botSince;
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
-  if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; }
-  else if (prev != null && c.botSince > prev && canAlert(p)) { lightUp(p, `bot message (${c.botSince})`, true); return; }
+  const wasAsk = p.needsReply; p.needsReply = !!(c.asks || c.waiting) && c.botSince > 0;
+  if (wasAsk !== p.needsReply) dlog(`pane${p.id}`, 'needsReply', p.needsReply);
+  if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; p.needsReply = false; }
+  else if (!p.needsReply) { p.glow = false; }                      // plain progress report: grey number only
+  else if (prev != null && (!wasAsk || c.botSince > prev) && canAlert(p)) { lightUp(p, `bot asks (${c.botSince})`, true); return; }   // glow + notification only when waiting for the user
   updateBadge(); sendState();
 }
 function updateBadge() { updateDockBadge(); }
@@ -359,7 +362,7 @@ function nextUnread() {
   const n = panes.length;
   for (let k = 1; k <= n; k++) {
     const i = (focused + k) % n;
-    if (panes[i].glow || panes[i].unread) { focusPane(i, { clear: false }); return; }
+    if (panes[i].glow || panes[i].needsReply) { focusPane(i, { clear: false }); return; }
   }
 }
 function moveFocus(dir) {
@@ -795,7 +798,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, method: String(c.method).slice(0, 40) });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, asks: c.asks === true, method: String(c.method).slice(0, 40) });
 });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
 paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
