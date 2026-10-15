@@ -233,16 +233,49 @@ mpb.ready();
   const load=async force=>{try{last=await mpb.usage(force);}catch(e){last={ok:false,err:String(e)};}render();};
   let hold=null,held=false;
   let popT=null;
-  const showPop=()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom});};
+  const showPop=()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind:'grok'});};
   btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(showPop,280);};
   btn.addEventListener('mouseleave',()=>{clearTimeout(popT);mpb.usagePopLeave();});
   mpb.onUsageUpdated(()=>load(false));
   btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
   btn.onmouseup=()=>clearTimeout(hold); btn.addEventListener('mouseleave',()=>clearTimeout(hold));
-  btn.onclick=()=>{if(held)return;mode=mode==='used'?'left':'used';localStorage.setItem(KEY,mode);render();if(!last||!last.ok)load(true);};
+  btn.onclick=()=>{if(held)return;mode=mode==='used'?'left':'used';localStorage.setItem(KEY,mode);render();window.dispatchEvent(new Event('mpb-usage-mode'));if(!last||!last.ok)load(true);};
+  window.addEventListener('mpb-usage-mode',()=>{mode=localStorage.getItem(KEY)==='used'?'used':'left';render();});
   window.addEventListener('focus',()=>load(false));
   setInterval(()=>load(true),5*60*1000);
   render(); setTimeout(()=>load(true),8000); setTimeout(()=>{if(!last||!last.ok)load(true);},25000);
 })();
 window.addEventListener('mouseup', () => { if (document.body.classList.contains('splitting')) { document.body.classList.remove('splitting', 'split-c', 'split-r'); mpb.splitEnd(); } });
 window.addEventListener('blur', () => { document.body.classList.remove('splitting', 'split-c', 'split-r'); });
+
+// Codex / Claude usage pills (left of the Grok one). Same 残/使 mode as the Grok pill (shared in localStorage).
+(function(){
+  const KEY='mpb-usage-mode';
+  document.querySelectorAll('.pill.usage.ai').forEach(btn=>{
+    const kind=btn.dataset.kind; let last=null;
+    const mode=()=>localStorage.getItem(KEY)==='used'?'used':'left';
+    const pick=b=>{const m=(b||[]).filter(x=>x.main);const a=m.length?m:b||[];return a.find(x=>x.weekly)||a[0]||null;};
+    const render=()=>{
+      const m=mode(), u=btn.querySelector('.uval');
+      btn.classList.toggle('used',m==='used'); btn.classList.toggle('left',m==='left');
+      btn.querySelector('.umode').textContent=m==='used'?'使':'残';
+      const b=last&&last.ok?pick(last.buckets):null;
+      btn.classList.toggle('err',!b);
+      if(!b){u.textContent='--';btn.classList.remove('warn');return;}
+      const used=Math.round(b.used), left=Math.max(0,100-used);
+      u.textContent=String(m==='used'?used:left); btn.classList.toggle('warn',left<=10);
+    };
+    const load=async force=>{try{last=await mpb.aiUsage(kind,force);}catch(e){last={ok:false,err:String(e),buckets:[]};}render();};
+    let hold=null,held=false,popT=null;
+    btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
+    btn.onmouseup=()=>clearTimeout(hold);
+    btn.onclick=()=>{if(held)return;localStorage.setItem(KEY,mode()==='used'?'left':'used');window.dispatchEvent(new Event('mpb-usage-mode'));};
+    btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind});},280);};
+    btn.addEventListener('mouseleave',()=>{clearTimeout(hold);clearTimeout(popT);mpb.usagePopLeave();});
+    window.addEventListener('mpb-usage-mode',render);
+    window.addEventListener('focus',()=>load(false));
+    mpb.onUsageUpdated(()=>load(false));
+    setInterval(()=>load(true),5*60*1000);
+    render(); setTimeout(()=>load(true),3000); setTimeout(()=>{if(!last||!last.ok)load(true);},30000);
+  });
+})();

@@ -161,7 +161,23 @@ function upRender(d) {
 // update numbers in place while the margin input is being edited
 function upFill(d) { const g = up.querySelector('.big'); if (g) g.textContent = d.allowance == null ? '-' : f1(d.allowance) + '%'; const rows = up.querySelectorAll('.row b'); if (rows[6]) rows[6].textContent = d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'; }
 function upSize() { requestAnimationFrame(() => mpb.usagePopSize(up.offsetHeight + 2)); }
-mpb.onUsagePop(d => { if (document.activeElement && document.activeElement.id === 'up-margin') return; upRender(d); });
+let upKind = 'grok';
+const hm = t => new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+const remain = ms => { const m = Math.max(0, Math.floor(ms / 60000)); const d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}日${h}時間` : h ? `${h}時間${m % 60}分` : `${m}分`; };
+function aiRender(d) {
+  document.body.classList.add('upop');
+  const name = d.kind === 'codex' ? 'Codex' : 'Claude';
+  const at = d.at ? new Date(d.at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) : '-';
+  const rows = (d.buckets || []).map(b => {
+    const used = Math.round(b.used * 10) / 10, left = Math.max(0, Math.round((100 - b.used) * 10) / 10);
+    return `<div class="row"><span>${esc(b.label)}</span><b>残り ${left}% ／ 使用 ${used}%</b></div>` +
+      `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : 'リセット時刻なし'}</div>`;
+  }).join('');
+  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.ok ? rows : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
+    `<hr><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得・クリックで 残/使 切替</div>`;
+  upSize();
+}
+mpb.onUsagePop(d => { if (document.activeElement && document.activeElement.id === 'up-margin') return; upKind = d.kind || 'grok'; if (upKind === 'grok') upRender(d); else aiRender(d); });
 up.addEventListener('mouseenter', () => mpb.usagePopKeep());
 document.documentElement.addEventListener('mouseleave', () => { if (document.activeElement && document.activeElement.id === 'up-margin') return; mpb.usagePopLeave(); });
-mpb.onUsageUpdated(() => { if (document.body.classList.contains('upop')) mpb.usage(false).then(() => mpb.usageMargin(Number.NaN)).then(upRender).catch(() => {}); });
+mpb.onUsageUpdated(() => { if (document.body.classList.contains('upop') && upKind === 'grok') mpb.usage(false).then(() => mpb.usageMargin(Number.NaN)).then(upRender).catch(() => {}); });

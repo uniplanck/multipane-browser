@@ -738,11 +738,13 @@ async function reloadAll() {
 // ---- usage hover popover (lives in the overlay view, sized to the popover so it never blocks the panes) ----
 let popOpen = false, popTimer = null, popRect = null;
 function popBounds(h) { const [w] = win.getContentSize(); const W = 320; const x = Math.max(4, Math.min(w - W - 4, Math.round((popRect?.right || w) - W))); return { x, y: Math.round((popRect?.bottom || 40) + 4), width: W, height: Math.max(60, Math.min(520, Math.round(h || 360))) }; }
+let popKind = 'grok';
 function popShow(rect) {
   if (!overlay || overlayOpen) return;
+  if (rect && typeof rect === 'object') popKind = ['codex', 'claude'].includes(rect.kind) ? rect.kind : 'grok';
   clearTimeout(popTimer); popRect = rect && typeof rect === 'object' ? { right: Number(rect.right) || 0, bottom: Number(rect.bottom) || 0 } : popRect;
   if (!popOpen) { popOpen = true; overlay.setBounds(popBounds(360)); bringOverlayToFront(); overlay.setVisible(true); }
-  overlay.webContents.send('usage-pop', usageDetail());
+  overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : { kind: popKind, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
 }
 function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) overlay.setVisible(false); }
 function popLater(ms = 350) { clearTimeout(popTimer); popTimer = setTimeout(popHide, ms); }
@@ -1081,6 +1083,13 @@ function usageDetail() {
   }
   return d;
 }
+const AIU = require('./ai-usage');
+ipcMain.handle('aiusage:get', async (_, kind, force) => {
+  if (!['codex', 'claude'].includes(kind)) return null;
+  const r = await AIU.get(kind, !!force);
+  dlog('aiusage', kind, r.ok ? 'ok ' + r.buckets.map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') : 'err ' + r.err);
+  return r;
+});
 ipcMain.handle('usage:detail', () => usageDetail());
 ipcMain.handle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });
 ipcMain.handle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());
