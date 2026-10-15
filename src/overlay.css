@@ -40,3 +40,15 @@ body.bc #bc-foot{display:flex;align-items:center;gap:8px;padding:8px 14px;border
 #bc-foot #bc-go{background:var(--sel);color:#fff;border-color:transparent}
 #bc-foot #bc-go:disabled{opacity:.4}
 .bci input{margin:0 4px 0 2px}
+
+#upop{display:none;position:fixed;left:0;top:0;width:100%;background:var(--panel);backdrop-filter:blur(30px) saturate(180%);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.4);padding:12px 14px;font-size:12.5px;line-height:1.5}
+body.upop #scrim,body.upop #box{display:none}
+body.upop #upop{display:block}
+#upop h4{margin:0 0 6px;font-size:12px;color:var(--dim);font-weight:600}
+#upop .row{display:flex;justify-content:space-between;gap:10px;margin:2px 0}
+#upop .row b{font-variant-numeric:tabular-nums}
+#upop .big{font-size:15px;font-weight:700}
+#upop .sm{font-size:10.5px;color:var(--dim);margin:1px 0 6px}
+#upop hr{border:0;border-top:1px solid var(--line);margin:8px 0}
+#upop input{width:46px;background:var(--ctl);border:1px solid var(--line);border-radius:5px;color:var(--text);padding:1px 4px;font:12px var(--font);text-align:right}
+#upop .g{color:#30d158}

@@ -44,7 +44,7 @@ function build() {
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
     ['フォーカス中のペインをお気に入りに追加', '★', { type: 'fav-add-current' }],
     ['新しいウィンドウ', '⧉', { type: 'new-window', url: '' }, `${MOD}N`],
-    ['すべてのペインを再読み込み', '↻', { type: 'reload-all' }],
+    ['すべてのペインを再読み込み（一括更新）', '↻', { type: 'reload-all' }, `${MOD}⇧R`],
     ['すべての未読をクリア', '✓', { type: 'clear-unread' }],
     ['新しい空のペイン', '＋', { type: 'open-new', url: '' }, `${MOD}T`],
     ['Grok を新しいペインで開く', '✦', { type: 'open-new', url: 'https://grok.com/' }],
@@ -90,6 +90,7 @@ list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.
 $('#scrim').onclick = () => mpb.closeOverlay();
 mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette') render(); else if (mode === 'broadcast') renderBc(true); });
 mpb.onOverlayOpen(o => {
+  document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
   document.body.classList.toggle('bc', mode === 'broadcast');
   if (mode === 'broadcast') { bcSel.clear(); bcText.value = ''; $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
@@ -131,3 +132,35 @@ bcText.onkeydown = e => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); bcGo(); }
   else if (e.key === 'Escape') { e.preventDefault(); mpb.closeOverlay(); }
 };
+
+// ---- usage hover popover ----
+const up = $('#upop');
+const f1 = v => v == null || !Number.isFinite(v) ? '-' : (Math.round(v * 10) / 10).toString();
+function upRender(d) {
+  document.body.classList.add('upop');
+  if (!d || !d.ok) { up.innerHTML = `<h4>サブスク使用量</h4><div>取得できません${d && d.err ? `（${esc(d.err)}）` : ''}</div><div class="sm">クリックで再取得</div>`; return upSize(); }
+  const rem = d.remD == null ? '-' : `${d.remD}日${d.remH}時間${d.remM}分`;
+  up.innerHTML = `<h4>1週間の期限</h4>
+    <div class="row"><span>リセット</span><b>${esc(d.endText || '-')}</b></div>
+    <div class="row"><span>残り時間</span><b>${esc(rem)}</b></div>
+    <hr><div class="row"><span>残り</span><b>${f1(d.left)}%</b></div>
+    <div class="row"><span>使用</span><b>${f1(d.used)}%</b></div>
+    <hr><h4>今日使える目安</h4>
+    <div class="row"><span>目安</span><b class="big g">${d.allowance == null ? '-' : f1(d.allowance) + '%'}</b></div>
+    <div class="sm">= max(0, 残り ${f1(d.left)}% ÷ 残り${d.daysLeft == null ? '-' : f1(d.daysLeft)}日 − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%)</div>
+    <div class="row"><span>今日の使用</span><b>${d.usedToday == null ? '-' : f1(d.usedToday) + '%'}</b></div>
+    <div class="row"><span>今日の残り枠</span><b>${d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'}</b></div>
+    <div class="sm">${d.baseAt ? `今日の基準: ${new Date(d.baseAt).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })} 時点の使用量からの増加分` : '今日の基準を取得中'}</div>
+    <hr><div class="sm" style="margin:0">更新: ${esc(d.atText || '-')}</div>`;
+  const inp = $('#up-margin');
+  inp.oninput = async () => { const v = Number(inp.value); if (inp.value !== '' && v >= 0 && v <= 50) { const n = await mpb.usageMargin(v); upFill(n); } };
+  inp.onblur = () => { if (!up.matches(':hover')) mpb.usagePopLeave(); };
+  upSize();
+}
+// update numbers in place while the margin input is being edited
+function upFill(d) { const g = up.querySelector('.big'); if (g) g.textContent = d.allowance == null ? '-' : f1(d.allowance) + '%'; const rows = up.querySelectorAll('.row b'); if (rows[6]) rows[6].textContent = d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'; }
+function upSize() { requestAnimationFrame(() => mpb.usagePopSize(up.offsetHeight + 2)); }
+mpb.onUsagePop(d => { if (document.activeElement && document.activeElement.id === 'up-margin') return; upRender(d); });
+up.addEventListener('mouseenter', () => mpb.usagePopKeep());
+document.documentElement.addEventListener('mouseleave', () => { if (document.activeElement && document.activeElement.id === 'up-margin') return; mpb.usagePopLeave(); });
+mpb.onUsageUpdated(() => { if (document.body.classList.contains('upop')) mpb.usage(false).then(() => mpb.usageMargin(Number.NaN)).then(upRender).catch(() => {}); });

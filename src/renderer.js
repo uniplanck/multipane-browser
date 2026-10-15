@@ -19,6 +19,7 @@ PK.forEach((k, i) => {
   b.onclick = () => mpb.layout(k); $('#presets').appendChild(b);
 });
 $('#add').onclick = () => mpb.add();
+$('#reload-all').onclick = () => mpb.reloadAll();
 $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
@@ -222,17 +223,22 @@ mpb.ready();
   const render=()=>{
     btn.classList.toggle('used',mode==='used'); btn.classList.toggle('left',mode==='left');
     btn.querySelector('.umode').textContent=mode==='used'?'使':'残';
-    if(!last||!last.ok){btn.querySelector('.uval').textContent='–';btn.classList.remove('warn');btn.title='サブスク使用量を取得できません'+(last&&last.err?'（'+last.err+'）':'')+'\nクリックで再取得';return;}
+    if(!last||!last.ok){btn.querySelector('.uval').textContent='–';btn.classList.remove('warn');btn.removeAttribute('title');return;}
     const used=Math.round(last.used), left=Math.max(0,100-used), v=mode==='used'?used:left;
     btn.querySelector('.uval').textContent=String(v);
     btn.classList.toggle('warn',left<=10);
     const end=last.periodEnd?new Date(last.periodEnd).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    btn.title=(mode==='used'?`使用量 ${used}%（残り ${left}%）`:`残量 ${left}%（使用 ${used}%）`)+(end?`\nリセット: ${end}`:'')+`\n更新: ${new Date(last.at).toLocaleTimeString('ja-JP')}\nクリック: 残量／使用量を切替（長押しで再取得）`;
+    btn.removeAttribute('title'); void (mode==='used'?`使用量 ${used}%（残り ${left}%）`:`残量 ${left}%（使用 ${used}%）`)+(end?`\nリセット: ${end}`:'')+`\n更新: ${new Date(last.at).toLocaleTimeString('ja-JP')}\nクリック: 残量／使用量を切替（長押しで再取得）`;
   };
   const load=async force=>{try{last=await mpb.usage(force);}catch(e){last={ok:false,err:String(e)};}render();};
   let hold=null,held=false;
+  let popT=null;
+  const showPop=()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom});};
+  btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(showPop,280);};
+  btn.addEventListener('mouseleave',()=>{clearTimeout(popT);mpb.usagePopLeave();});
+  mpb.onUsageUpdated(()=>load(false));
   btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
-  btn.onmouseup=btn.onmouseleave=()=>clearTimeout(hold);
+  btn.onmouseup=()=>clearTimeout(hold); btn.addEventListener('mouseleave',()=>clearTimeout(hold));
   btn.onclick=()=>{if(held)return;mode=mode==='used'?'left':'used';localStorage.setItem(KEY,mode);render();if(!last||!last.ok)load(true);};
   window.addEventListener('focus',()=>load(false));
   setInterval(()=>load(true),5*60*1000);

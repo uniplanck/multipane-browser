@@ -582,6 +582,7 @@ function handleKey(input, pane) {
   if (k === 'l') { closeOverlay(); focusUrlBar(); return true; }
   if (k === 'j') { nextUnread(); return true; }
   if (k === 'enter') { toggleMaximize(); return true; }
+  if (k === 'r' && input.shift) { reloadAll(); return true; }
   if (k === 'r' && !input.shift) { if (fp) { fp.lastReload = Date.now(); fp.view.webContents.reload(); } return true; }
   if (k === '[' ) { fp?.view.webContents.navigationHistory.goBack(); return true; }
   if (k === ']' ) { fp?.view.webContents.navigationHistory.goForward(); return true; }
@@ -597,6 +598,7 @@ function handleKey(input, pane) {
 function bringOverlayToFront() { win.contentView.removeChildView(overlay); win.contentView.addChildView(overlay); }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
+  popOpen = false; clearTimeout(popTimer);
   overlayOpen = true;
   const [w, h] = win.getContentSize();
   overlay.setBounds({ x: 0, y: 0, width: w, height: h });
@@ -662,7 +664,7 @@ function runAction(a) {
     case 'next-unread': closeOverlay(); nextUnread(); break;
     case 'maximize': closeOverlay(); toggleMaximize(); break;
     case 'clear-unread': closeOverlay(); clearAll(); break;
-    case 'reload-all': closeOverlay(); panes.forEach(p => p.view.webContents.reload()); break;
+    case 'reload-all': closeOverlay(); reloadAll(); break;
     case 'rename': { const p = byId(a.id); if (p) { p.name = String(a.value || '').slice(0, 60); sendState(); save(); } closeOverlay(); break; }
     case 'rename-prompt': openOverlay('rename', { id: panes[focused]?.id, value: panes[focused]?.name || '' }); break;
     case 'ws-save-prompt': openOverlay('ws-save'); break;
@@ -716,6 +718,31 @@ function wsMenu() {
     { label: '削除', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => { delete workspaces[n]; save(); buildMenu(); broadcast(); } })) : [{ label: '-', enabled: false }] },
   ]).popup({ window: win });
 }
+let reloadingAll = false;
+async function reloadAll() {
+  if (reloadingAll) return; reloadingAll = true;
+  try {
+    for (const p of [...panes]) {
+      if (p.view.webContents.isDestroyed()) continue;
+      const u = paneUrl(p); p.lastReload = Date.now();
+      try { if (isBotUrl(u)) loadInto(p.view.webContents, u); else p.view.webContents.reload(); } catch (e) { dlog(`pane${p.id}`, 'reload-all err', String(e)); }
+      await sleep(300);
+    }
+    dlog('reload-all done', panes.length);
+    fetchUsage();
+  } finally { reloadingAll = false; }
+}
+// ---- usage hover popover (lives in the overlay view, sized to the popover so it never blocks the panes) ----
+let popOpen = false, popTimer = null, popRect = null;
+function popBounds(h) { const [w] = win.getContentSize(); const W = 320; const x = Math.max(4, Math.min(w - W - 4, Math.round((popRect?.right || w) - W))); return { x, y: Math.round((popRect?.bottom || 40) + 4), width: W, height: Math.max(60, Math.min(520, Math.round(h || 360))) }; }
+function popShow(rect) {
+  if (!overlay || overlayOpen) return;
+  clearTimeout(popTimer); popRect = rect && typeof rect === 'object' ? { right: Number(rect.right) || 0, bottom: Number(rect.bottom) || 0 } : popRect;
+  if (!popOpen) { popOpen = true; overlay.setBounds(popBounds(360)); bringOverlayToFront(); overlay.setVisible(true); }
+  overlay.webContents.send('usage-pop', usageDetail());
+}
+function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) overlay.setVisible(false); }
+function popLater(ms = 350) { clearTimeout(popTimer); popTimer = setTimeout(popHide, ms); }
 function chipMenu(id) {
   const p = byId(id); if (!p) return;
   Menu.buildFromTemplate([
@@ -747,6 +774,11 @@ on('swap', (a, b) => swapPanes(a, b));
 on('maximize', id => toggleMaximize(id));
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
+on('reload-all', () => reloadAll());
+on('usage-pop-show', r => popShow(r));
+on('usage-pop-keep', () => clearTimeout(popTimer));
+on('usage-pop-leave', () => popLater());
+on('usage-pop-size', h => { if (popOpen && !overlayOpen) overlay.setBounds(popBounds(Number(h))); });
 on('ws-menu', () => wsMenu());
 on('split-start', (axis, i) => splitStart(String(axis), Number(i)));
 on('split-end', () => splitEnd());
@@ -808,7 +840,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  sendState, newPane, closePane, toggleMaximize, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   loadWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
@@ -870,6 +902,7 @@ function buildMenu() {
     { role: 'editMenu', label: '編集' },
     { label: '表示', submenu: [
       acc('CmdOrCtrl+R', () => cur()?.focusedPane?.view.webContents.reload(), 'ペインを再読み込み'),
+      acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+Enter', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, '拡大'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, '縮小'),
@@ -1004,9 +1037,44 @@ async function fetchUsage() {
     const per = fields.find(([f, v]) => f === 8 && typeof v !== 'number');
     if (per) { const e = pbFields(per[1]).find(([f]) => f === 3); if (e) { const sec = pbFields(e[1]).find(([f]) => f === 1); if (sec) periodEnd = sec[1] * 1000; } }
     usageCache = { ok: true, used, periodEnd, at: Date.now() };
+    const dk = tokyoDay(Date.now());
+    if (!settings.usageBase || settings.usageBase.day !== dk) settings.usageBase = { day: dk, used, at: Date.now() };
+    else if (used < settings.usageBase.used) settings.usageBase = { day: dk, used, at: Date.now() };   // period reset
+    save();
     dlog('usage', JSON.stringify(usageCache));
   } catch (e) { dlog('usage err', String(e)); usageCache = { ...(usageCache || {}), ok: !!usageCache?.ok, err: String(e.message || e), at: Date.now() }; }
   finally { usageBusy = false; }
+  ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} });
   return usageCache;
 }
+const TOKYO = { timeZone: 'Asia/Tokyo' };
+const tokyoDay = t => new Intl.DateTimeFormat('sv-SE', { ...TOKYO, year: 'numeric', month: '2-digit', day: '2-digit' }).format(t);
+function fmtTokyo(t) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('ja-JP', { ...TOKYO, month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(t).map(x => [x.type, x.value]));
+  return `${p.month}/${p.day}(${p.weekday}) ${p.hour}:${p.minute}`;
+}
+function usageDetail() {
+  const u = usageCache, margin = Number.isFinite(settings.usageMargin) ? settings.usageMargin : 5;
+  const d = { ok: !!u?.ok, err: u?.err || '', margin, at: u?.at || 0, atText: u?.at ? new Intl.DateTimeFormat('ja-JP', { ...TOKYO, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(u.at) : '' };
+  if (!u?.ok) return d;
+  const now = Date.now();
+  d.used = u.used; d.left = Math.max(0, 100 - u.used);
+  if (u.periodEnd && u.periodEnd > now) {
+    const ms = u.periodEnd - now, days = ms / 86400000;
+    d.endText = fmtTokyo(u.periodEnd);
+    d.remD = Math.floor(ms / 86400000); d.remH = Math.floor(ms % 86400000 / 3600000); d.remM = Math.floor(ms % 3600000 / 60000);
+    d.daysLeft = Math.max(1, days);
+    d.allowance = Math.max(0, d.left / d.daysLeft - margin);
+    const b = settings.usageBase;
+    if (b && b.day === tokyoDay(now)) {
+      d.usedToday = Math.max(0, u.used - b.used); d.baseAt = b.at;
+      const dBase = Math.max(1, (u.periodEnd - b.at) / 86400000);
+      d.allowStart = Math.max(0, (100 - b.used) / dBase - margin);
+      d.allowLeft = Math.max(0, d.allowStart - d.usedToday);
+    }
+  }
+  return d;
+}
+ipcMain.handle('usage:detail', () => usageDetail());
+ipcMain.handle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });
 ipcMain.handle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());
