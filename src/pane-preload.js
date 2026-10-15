@@ -72,16 +72,32 @@ function geoRole(el, box) {
   const farFromLeft = r.left - box.left > w * 0.25;
   return nearRight && farFromLeft && r.width < w * 0.8 ? 'user' : 'bot';
 }
-// Waiting marker (text is whitespace-stripped and heavy bars normalised to '-'):
-//   ◆ ━━ 入力待ち/出力待ち/入力待機中 ━━ ◆   |   🟢 ━━ 入力待機中(30|60) ━━ 🟢   (+ optional trailing `◆ 2026-10-15 16:33 ◆`)
-const WAIT_CORE = '(?:◆-*(?:[入出]力待ち|入力待機中)-*◆|🟢-*入力待機中(?:30|60)?-*🟢)(?:`?◆[^◆]{0,40}◆`?)?';
-const WAIT_ANY = new RegExp(WAIT_CORE), WAIT_END = new RegExp(WAIT_CORE + '$');
+// MARK-BEGIN
+// Closing markers of the latest bot message. Text is whitespace-stripped; heavy bars -> '-'; bold/backticks/brackets are dropped.
+//   waiting (green): 🟢 ━━ 入力待機中(30|60) ━━ 🟢   and the older ◆ ━━ 入力待ち/出力待ち/入力待機中 ━━ ◆
+//   working (red)  : 🔴 ━━ 【 作業中 】 ━━ 🔴
+// Allowed after the marker (end of message only): --- rules, a ◆ yyyy-MM-dd hh:mm ◆ stamp (same line or separate lines).
+const normMark = t => String(t || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-').replace(/[*`_【】\[\]「」『』()（）]/g, '');
+const WAIT_CORE = '(?:◆-*(?:[入出]力待ち|入力待機中)(?:30|60)?-*◆|🟢-*入力待機中(?:30|60)?-*🟢)';
+const WORK_CORE = '🔴-*作業中-*🔴';
+const MARK_TAIL = '(?:-+|◆[^◆]{0,40}◆)*';
+const WAIT_ANY = new RegExp(WAIT_CORE), WAIT_END = new RegExp(WAIT_CORE + MARK_TAIL + '$'), WORK_END = new RegExp(WORK_CORE + MARK_TAIL + '$');
+// -> 'wait' | 'work' | null, judged only at the very end (last ~300 chars) of the message
+function markerOf(text) {
+  const t = normMark(text).slice(-300);
+  const w = WAIT_END.exec(t), k = WORK_END.exec(t);
+  if (w && k) return k.index > w.index ? 'work' : 'wait';   // the later one wins
+  return w ? 'wait' : k ? 'work' : null;
+}
+// MARK-END
 // ASK-BEGIN
 // Does the latest bot message wait for the user? (explicit marker / question / choice widget / asking phrases)
 function looksAsking(text, hasWidget) {
   const raw = String(text || '');
   const flat = raw.replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-');
-  if (WAIT_ANY.test(flat.slice(-300))) return true;
+  const mk = markerOf(raw);
+  if (mk === 'work') return false;       // latest marker says: still working
+  if (mk === 'wait' || WAIT_ANY.test(flat.slice(-300))) return true;
   if (hasWidget) return true;
   const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
   const last = lines[lines.length - 1] || '';
@@ -101,7 +117,8 @@ function scanMessages() {
     const le = ents[ents.length - 1];
     const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
     const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
-    return { user, bot, botSince, waiting: botSince > 0 && WAIT_END.test(t), asks, method: 'bot-entry' };
+    const mk = botSince > 0 ? markerOf(le.textContent) : null;
+    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', asks: asks && mk !== 'work', method: 'bot-entry' };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -126,12 +143,12 @@ function scanMessages() {
     if (role === 'user') { user++; botSince = 0; lastBot = null; } else { bot++; botSince++; lastBot = e; }
   }
   const lastEl = els[els.length - 1];
-  const waiting = !!lastEl && WAIT_END.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-'));
-  return { user, bot, botSince, waiting, asks: waiting, method };
+  const mk = lastEl && botSince > 0 ? markerOf(lastEl.textContent) : null, waiting = mk === 'wait';
+  return { user, bot, botSince, waiting, working: mk === 'work', asks: waiting, method };
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.asks}`;
+  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}`;
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -144,7 +161,7 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     const c = scanMessages();
     if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.asks}`;
+      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}`;
       if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     }
     return;

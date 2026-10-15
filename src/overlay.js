@@ -115,7 +115,7 @@ function renderBc(soft) {
   if (mode !== 'broadcast') return;
   const ps = grokPanes();
   [...bcSel].forEach(id => { if (!ps.some(p => p.id === id)) bcSel.delete(id); });
-  list.innerHTML = '<div class="sec">送信先（Grokのペイン）</div>' + (ps.length ? ps.map(p => `<label class="it bci"><input type="checkbox" data-id="${p.id}" ${bcSel.has(p.id) ? 'checked' : ''}><span class="lb">${esc(p.name || p.title)}<small>${esc(p.url)}</small></span><span class="rt">${p.waiting ? '<span style="color:#30d158">● 入力待ち</span>' : ''}<kbd>${p.index + 1}</kbd></span></label>`).join('') : '<div class="empty">Grokのペインがありません</div>');
+  list.innerHTML = '<div class="sec">送信先（Grokのペイン）</div>' + (ps.length ? ps.map(p => `<label class="it bci"><input type="checkbox" data-id="${p.id}" ${bcSel.has(p.id) ? 'checked' : ''}><span class="lb">${esc(p.name || p.title)}<small>${esc(p.url)}</small></span><span class="rt">${p.waiting ? '<span style="color:#30d158">● 入力待ち</span>' : p.working ? '<span style="color:#ff453a">● 作業中</span>' : ''}<kbd>${p.index + 1}</kbd></span></label>`).join('') : '<div class="empty">Grokのペインがありません</div>');
   list.querySelectorAll('input[type=checkbox]').forEach(cb => cb.onchange = () => { const id = Number(cb.dataset.id); cb.checked ? bcSel.add(id) : bcSel.delete(id); bcFootR(); });
   bcFootR();
 }

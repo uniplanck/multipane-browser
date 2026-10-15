@@ -1,0 +1,59 @@
+// node test/marker.test.js  — tests the waiting/working marker matcher extracted from src/pane-preload.js
+const fs = require('fs'), path = require('path');
+const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'pane-preload.js'), 'utf8');
+const body = src.slice(src.indexOf('// MARK-BEGIN'), src.indexOf('// MARK-END')) + src.slice(src.indexOf('// ASK-BEGIN'), src.indexOf('// ASK-END'));
+const { markerOf, looksAsking } = new Function(body + ';return { markerOf, looksAsking };')();
+const D = '`◆ 2026-10-15 16:33 ◆`';
+const cases = [
+  // [name, text, expected marker]
+  ['wait basic', '🟢 ━━ 入力待機中 ━━ 🟢', 'wait'],
+  ['wait + inline datetime', `完了です。\n\n🟢 ━━ 入力待機中 ━━ 🟢 ${D}`, 'wait'],
+  ['wait + rules above/below + datetime', `本文\n---\n🟢 ━━ 入力待機中 ━━ 🟢 ${D}\n---`, 'wait'],
+  ['wait datetime on separate line', `本文\n🟢 ━━ 入力待機中 ━━ 🟢\n${D}`, 'wait'],
+  ['wait datetime separate + rule after', `本文\n---\n🟢 ━━ 入力待機中 ━━ 🟢\n◆ 2026-10-15 16:33 ◆\n---`, 'wait'],
+  ['wait 30', '本文\n🟢 ━━ 入力待機中30 ━━ 🟢\n◆ 2026-10-15 16:33 ◆', 'wait'],
+  ['wait 60', '本文\n🟢 ━━ 入力待機中60 ━━ 🟢 ' + D, 'wait'],
+  ['wait bold', '本文\n**🟢 ━━ 入力待機中 ━━ 🟢**', 'wait'],
+  ['wait bold + datetime', `本文\n**🟢 ━━ 入力待機中 ━━ 🟢** ${D}`, 'wait'],
+  ['wait few bars', '本文\n🟢 ━ 入力待機中 ━ 🟢', 'wait'],
+  ['wait many bars', '本文\n🟢 ━━━━━━━━ 入力待機中 ━━━━━━━━ 🟢', 'wait'],
+  ['wait ascii dashes', '本文\n🟢 --- 入力待機中 --- 🟢', 'wait'],
+  ['wait no spaces', '本文\n🟢━━入力待機中━━🟢', 'wait'],
+  ['wait em dash', '本文\n🟢 —— 入力待機中 —— 🟢', 'wait'],
+  ['wait fullwidth spaces', '本文\n🟢　━━　入力待機中　━━　🟢', 'wait'],
+  ['wait brackets', '本文\n🟢 ━━ 【 入力待機中 】 ━━ 🟢', 'wait'],
+  ['old wait heavy', '本文\n◆ ━━ 入力待機中 ━━ ◆', 'wait'],
+  ['old wait 入力待ち', '本文\n◆ --- 入力待ち --- ◆', 'wait'],
+  ['old wait 出力待ち', '本文\n◆ ━ 出力待ち ━ ◆', 'wait'],
+  ['old wait + datetime', `本文\n◆ ━━ 入力待機中 ━━ ◆\n${D}`, 'wait'],
+  ['work basic', '🔴 ━━ 【 作業中 】 ━━ 🔴', 'work'],
+  ['work + inline datetime', `途中経過です。\n🔴 ━━ 【 作業中 】 ━━ 🔴 ${D}`, 'work'],
+  ['work rules above/below', `本文\n---\n🔴 ━━ 【 作業中 】 ━━ 🔴 ${D}\n---`, 'work'],
+  ['work datetime separate line', `本文\n🔴 ━━ 【 作業中 】 ━━ 🔴\n${D}`, 'work'],
+  ['work brackets tight', '本文\n🔴 ━━ 【作業中】 ━━ 🔴', 'work'],
+  ['work no brackets', '本文\n🔴 ━━ 作業中 ━━ 🔴', 'work'],
+  ['work square brackets', '本文\n🔴 ━━ [ 作業中 ] ━━ 🔴', 'work'],
+  ['work bold', '本文\n**🔴 ━━ 【 作業中 】 ━━ 🔴**', 'work'],
+  ['work ascii dashes', '本文\n🔴 --- 【 作業中 】 --- 🔴', 'work'],
+  ['work many bars', '本文\n🔴 ━━━━━━ 【 作業中 】 ━━━━━━ 🔴', 'work'],
+  ['work fullwidth spaces', '本文\n🔴　━━　【　作業中　】　━━　🔴', 'work'],
+  ['latest wins: work after wait', '🟢 ━━ 入力待機中 ━━ 🟢\n続けます\n🔴 ━━ 【 作業中 】 ━━ 🔴', 'work'],
+  ['latest wins: wait after work', '🔴 ━━ 【 作業中 】 ━━ 🔴\n完了\n🟢 ━━ 入力待機中 ━━ 🟢', 'wait'],
+  // negatives
+  ['neg: wait marker followed by more body', '🟢 ━━ 入力待機中 ━━ 🟢\n追記です。まだ続きがあります', null],
+  ['neg: work marker followed by body', '🔴 ━━ 【 作業中 】 ━━ 🔴\nその後の本文です', null],
+  ['neg: prose 入力待機中です', '現在は入力待機中です。', null],
+  ['neg: prose 作業中です', 'ただいま作業中です', null],
+  ['neg: plain text', '進捗です。残り2件', null],
+  ['neg: only emoji', '🟢🔴', null],
+  ['neg: empty', '', null],
+  ['neg: half marker', '本文\n🟢 ━━ 入力待機中', null],
+  ['neg: mismatched emoji', '本文\n🟢 ━━ 作業中 ━━ 🔴', null],
+];
+let bad = 0;
+for (const [name, text, exp] of cases) { const r = markerOf(text); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
+// looksAsking: working marker must never ask; waiting marker must
+const asks = [['asks: wait', '本文\n🟢 ━━ 入力待機中 ━━ 🟢 ' + D, false, true], ['asks: work with question mark before', 'どちらにしますか？\n🔴 ━━ 【 作業中 】 ━━ 🔴', false, false], ['asks: plain', '進捗です', false, false]];
+for (const [name, text, w, exp] of asks) { const r = looksAsking(text, w); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
+console.log(`${cases.length + asks.length} cases, ${bad} failed`);
+process.exit(bad ? 1 : 0);

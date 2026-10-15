@@ -105,11 +105,11 @@ body.dragging .pane{outline-style:dashed}
 .fic{width:14px;height:14px;border-radius:4px;background:var(--ctl-hi);font-size:9px;font-weight:700;display:grid;place-items:center;flex:none;color:var(--dim)}
 .flabel{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:clip;text-align:left;font-size:11.5px}
 .cfav.ccount{min-width:14px;width:auto;height:14px;padding:0 3px;border-radius:7px;background:#8e8e93;color:#fff;font-size:10px;font-weight:700;line-height:14px;font-variant-numeric:tabular-nums}
-.cfav.ccount.hot{background:#ff3b30}
+.cfav.ccount.hot{background:var(--glow)}
 .chip{height:24px;line-height:1}
 .chip .cicon{flex:none;box-sizing:border-box;min-width:16px;height:16px;padding:0 3px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;background:var(--ctl-hi);color:var(--text);font-size:10px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
 .chip .cicon.ccount{border-radius:8px;background:#8e8e93;color:#fff}
-.chip .cicon.ccount.hot{background:#ff3b30}
+.chip .cicon.ccount.hot{background:var(--glow)}
 .chip .clabel{display:flex;align-items:center;height:16px;line-height:16px;font-size:12px}
 .compact-btn{flex:none;height:24px;min-width:24px;border:none;border-radius:6px;background:transparent;color:var(--dim);font-size:13px;cursor:pointer}
 .compact-btn:hover{background:var(--ctl)}
@@ -155,3 +155,19 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 @media (max-width:900px){.pill.usage .uico{display:none}.pill.usage{padding:0 3px}}
 
 .pill.usage.stale{opacity:.55}
+
+/* waiting = green, working = red (decided by the bot's latest closing marker) */
+:root{--work:#ff453a}
+.pane.working{outline:2px solid var(--work);box-shadow:0 0 0 1px var(--work),0 0 14px color-mix(in srgb,var(--work) 45%,transparent);animation:none}
+.pane.working.unread{outline-color:var(--work)}
+.pane.working .head{background:linear-gradient(90deg,color-mix(in srgb,var(--work) 20%,var(--head)),var(--head) 70%)}
+.pane.waiting{animation:none}
+.chip.waiting{border-color:color-mix(in srgb,var(--wait) 65%,transparent);background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--text)}
+.chip.working{border-color:color-mix(in srgb,var(--work) 65%,transparent);background:color-mix(in srgb,var(--work) 14%,transparent);color:var(--text)}
+.chip.waiting .cicon.ccount{background:var(--wait);color:#fff}
+.chip.working .cicon.ccount{background:var(--work);color:#fff}
+.chip .wdot.work{background:var(--work);box-shadow:0 0 4px var(--work)}
+.badge.wait{background:var(--wait)} .badge.work{background:var(--work)}
+.chip .cicon{cursor:pointer}
+.chip .cicon.copied{background:var(--wait);color:#fff}
+.pane.waiting.unread{box-shadow:0 0 0 1px var(--wait),0 0 16px color-mix(in srgb,var(--wait) 50%,transparent);animation:none}

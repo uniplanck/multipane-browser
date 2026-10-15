@@ -279,7 +279,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -330,7 +330,7 @@ function lightUp(p, reason, always = false) {
   }
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
-function resetCounts(p) { const had = p.unread || p.glow || p.waiting || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; if (had) { updateBadge(); sendState(); } }
+function resetCounts(p) { const had = p.unread || p.glow || p.waiting || p.working || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
   return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
 
@@ -350,7 +350,9 @@ function onMsgCount(p, c) {
   p.unread = c.botSince;
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
-  const wasAsk = p.needsReply; p.needsReply = !!(c.asks || c.waiting) && c.botSince > 0;
+  const wasK = p.working; p.working = !!c.working && !p.waiting && !userSent && c.botSince > 0;   // red: latest marker says '作業中' (UI only; no notification / badge)
+  if (wasK !== p.working) dlog(`pane${p.id}`, 'working', p.working);
+  const wasAsk = p.needsReply; p.needsReply = !!(c.asks || c.waiting) && !c.working && c.botSince > 0;
   if (wasAsk !== p.needsReply) dlog(`pane${p.id}`, 'needsReply', p.needsReply);
   if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; p.needsReply = false; }
   else if (!p.needsReply) { p.glow = false; }                      // plain progress report: grey number only
@@ -539,7 +541,7 @@ function addPane(spec = {}, { focus = true } = {}) {
   const upd = () => { sendState(); save(); };
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
-  wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.favicon = ''; });
+  wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; });
   wc.on('did-navigate-in-page', () => { p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { sendState(); markActivity(p, 'title'); });
@@ -813,6 +815,7 @@ const paneOn = (ch, fn) => { paneIpc[ch] = fn; registerPane(ch); };
 on('navigate', (id, url) => { const p = byId(id); if (p) loadInto(p.view.webContents, url); });
 on('back', id => byId(id)?.view.webContents.navigationHistory.goBack());
 on('forward', id => byId(id)?.view.webContents.navigationHistory.goForward());
+on('copy-pane-url', id => { const p = byId(id); if (p) { const u = paneUrl(p) || p.url; if (u) clipboard.writeText(String(u)); } });
 on('reload', id => { const p = byId(id); if (p) reloadPane(p); });
 on('close', id => closePane(id));
 on('add', () => newPane(''));
@@ -846,7 +849,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, asks: c.asks === true, method: String(c.method).slice(0, 40) });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, method: String(c.method).slice(0, 40) });
 });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
 paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
@@ -1030,6 +1033,7 @@ function startup() {
     const c = ctxs[0];
     if (process.env.MPB_PALETTE) { c.openOverlay('palette'); await sleep(1200); }
     if (process.env.MPB_SHOT_GLOW) { const p = c.panes[Number(process.env.MPB_SHOT_GLOW)]; if (p) { p.unread = 3; p.glow = true; c.sendState(); await sleep(400); } }
+    if (process.env.MPB_SHOT_STATE) { for (const it of process.env.MPB_SHOT_STATE.split(',')) { const [i, st] = it.split(':'); const p = c.panes[Number(i)]; if (!p) continue; p.msgMode = true; p.unread = 2; p.waiting = st === 'wait'; p.working = st === 'work'; } c.sendState(); await sleep(500); }   // dev only: preview the green / red states
     const { execFileSync } = require('child_process');
     try { execFileSync('sh', ['-c', `ffmpeg -y -loglevel error -f x11grab -video_size 1600x1000 -i "$DISPLAY" -frames:v 1 "${process.env.MPB_SCREENSHOT}"`]); }
     catch { const img = await c.win.webContents.capturePage(); fs.writeFileSync(process.env.MPB_SCREENSHOT, img.toPNG()); }

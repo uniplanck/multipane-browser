@@ -75,14 +75,24 @@ function mk(id) {
 }
 function startEdit(d) { const inp = d.querySelector('.url'); inp.focus(); }
 
+const copied = new Map();
+function flashIcon(c) { const ic = c.querySelector('.cicon'); if (ic) { ic.textContent = '✓'; ic.classList.add('copied'); ic.title = 'リンクをコピーしました'; } }
 function chip(p) {
   const c = document.createElement('button');
   c.className = 'chip'; c.dataset.id = p.id;
-  c.onclick = () => mpb.activatePane(p.id);
+  c.onmousedown = () => { c._down = Date.now(); c._dragged = false; };
+  c.onclick = e => {
+    const ic = e.target.closest && e.target.closest('.cicon');
+    if (ic && !c._dragged && Date.now() - (c._down || Date.now()) < 450) {      // short press on the icon: copy this pane's link (long press / drag keeps the reorder behaviour)
+      mpb.copyPaneUrl(p.id); copied.set(p.id, Date.now() + 1100); flashIcon(c);
+      setTimeout(() => { if (S) onS(S); }, 1150);
+    }
+    mpb.activatePane(p.id);
+  };
   c.ondblclick = () => mpb.renamePane(p.id);
   c.oncontextmenu = e => { e.preventDefault(); mpb.chipMenu(p.id); };
   c.draggable = true;
-  c.ondragstart = e => { e.dataTransfer.setData('text/x-mpb-pane', String(p.id)); };
+  c.ondragstart = e => { c._dragged = true; e.dataTransfer.setData('text/x-mpb-pane', String(p.id)); };
   c.ondragover = e => { if (e.dataTransfer.types.includes('text/x-mpb-pane')) e.preventDefault(); };
   c.ondrop = e => { const from = Number(e.dataTransfer.getData('text/x-mpb-pane')); if (from && from !== p.id) mpb.swap(from, p.id); };
   return c;
@@ -92,7 +102,7 @@ function favHtml(p) {
   return `<span class="letter">${esc((p.name || p.title || '?').trim().charAt(0).toUpperCase() || '•')}</span>`;
 }
 
-mpb.onState(s => {
+const onS = s => {
   S = s;
   renderFavs(s.favorites || []);
   document.body.classList.toggle('light', !s.dark);
@@ -115,14 +125,16 @@ mpb.onState(s => {
     c.classList.toggle('focused', p.id === s.focusedId);
     c.classList.toggle('glow', p.glow);
     c.classList.toggle('waiting', !!p.waiting);
+    c.classList.toggle('working', !!p.working);
     c.classList.toggle('colored', !!color);
     c.title = `${p.name || p.title}（ダブルクリックで名前変更・右クリックでメニュー）\n${p.url || '新しいペイン'}${p.muted ? '\n🔕 通知ミュート' : ''}`;
     const n = p.unread || 0;
     const chars = Array.from(String(p.name || p.title || '').trim());
     const first = (chars[0] || '•').toUpperCase();
     const lbl = shortLabel(chars.slice(1).join(''));
-    c.innerHTML = (n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}">${n > 99 ? '99' : n}</span>` : `<span class="cicon">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.waiting ? '<span class="wdot" title="入力待ち"></span>' : '');
+    const justCopied = (copied.get(p.id) || 0) > Date.now();
+    c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
+      `<span class="clabel">${esc(lbl)}</span>` + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
   });
 
   // splitters
@@ -146,6 +158,7 @@ mpb.onState(s => {
     d.classList.toggle('loading', p.loading);
     d.classList.toggle('unread', !!p.glow);
     d.classList.toggle('waiting', !!p.waiting);
+    d.classList.toggle('working', !!p.working);
     d.classList.toggle('maxed', p.id === s.maximizedId);
     const color = s.colors[p.color];
     d.style.setProperty('--pc', color || 'transparent');
@@ -164,11 +177,13 @@ mpb.onState(s => {
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
     b.title = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
     b.classList.toggle('quiet', !p.glow);
+    b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working);
     d.querySelector('[data-a=back]').disabled = !p.canBack;
     d.querySelector('[data-a=forward]').disabled = !p.canForward;
     d.querySelector('[data-a=maximize]').textContent = p.id === s.maximizedId ? '⤡' : '⤢';
   }
-});
+};
+mpb.onState(onS);
 const favs = $('#favs');
 function renderFavs(list) {
   $('#fav-hint').style.display = list.length ? 'none' : '';
