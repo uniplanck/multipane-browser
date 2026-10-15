@@ -257,7 +257,7 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     };
     const render=()=>{
       const c=calc(), u=btn.querySelector('.uval');
-      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err');
+      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'');
       if(!c){u.textContent='--';return;}
       u.textContent=fmt(c.v);
     };
@@ -281,8 +281,8 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     btn.addEventListener('mouseleave',()=>{clearTimeout(hold);clearTimeout(popT);mpb.usagePopLeave();});
     window.addEventListener('focus',()=>load(false));
     mpb.onUsageUpdated(()=>load(false));
-    setInterval(()=>load(true),5*60*1000);
+    setInterval(()=>load(kind==='grok'),5*60*1000);
     if(kind==='grok') setInterval(()=>{mpb.usageDetail().then(d=>{det=d;render();}).catch(()=>{});},60000);
-    render(); setTimeout(()=>load(true),kind==='grok'?8000:3000); setTimeout(()=>{if(!last||!last.ok)load(true);},30000);
+    render(); setTimeout(()=>load(kind==='grok'),kind==='grok'?8000:1500); setTimeout(()=>{if(!last||!last.ok)load(kind==='grok');},30000);
   });
 })();

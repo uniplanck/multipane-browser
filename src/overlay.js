@@ -176,7 +176,7 @@ function aiRender(d) {
     return `<div class="row"><span>${shown ? '✓ ' : ''}${esc(b.label)}${shown ? ' <small style="color:#30d158">（表示中）</small>' : ''}</span><b>残り ${pc(left)} ／ 使用 ${pc(used)}</b></div>` +
       `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : 'リセット時刻なし'}</div>`;
   }).join('');
-  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err)}</div>` : '') + (d.ok ? rows : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
+  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err || '')}（更新: ${esc(at)}）</div>` : '') + (d.ok ? rows : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
     `<hr><div class="sm" style="margin:0 0 2px">右クリックで表示する枠を選べます。表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
   upSize();
 }

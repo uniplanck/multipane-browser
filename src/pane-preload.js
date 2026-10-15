@@ -72,12 +72,16 @@ function geoRole(el, box) {
   const farFromLeft = r.left - box.left > w * 0.25;
   return nearRight && farFromLeft && r.width < w * 0.8 ? 'user' : 'bot';
 }
+// Waiting marker (text is whitespace-stripped and heavy bars normalised to '-'):
+//   ◆ ━━ 入力待ち/出力待ち/入力待機中 ━━ ◆   |   🟢 ━━ 入力待機中(30|60) ━━ 🟢   (+ optional trailing `◆ 2026-10-15 16:33 ◆`)
+const WAIT_CORE = '(?:◆-*(?:[入出]力待ち|入力待機中)-*◆|🟢-*入力待機中(?:30|60)?-*🟢)(?:`?◆[^◆]{0,40}◆`?)?';
+const WAIT_ANY = new RegExp(WAIT_CORE), WAIT_END = new RegExp(WAIT_CORE + '$');
 // ASK-BEGIN
 // Does the latest bot message wait for the user? (explicit marker / question / choice widget / asking phrases)
 function looksAsking(text, hasWidget) {
   const raw = String(text || '');
   const flat = raw.replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-');
-  if (/(?:◆-*(?:[入出]力待ち|入力待機中)-*◆|🟢-*入力待機中(?:30|60)?-*🟢)/.test(flat.slice(-300))) return true;
+  if (WAIT_ANY.test(flat.slice(-300))) return true;
   if (hasWidget) return true;
   const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
   const last = lines[lines.length - 1] || '';
@@ -97,7 +101,7 @@ function scanMessages() {
     const le = ents[ents.length - 1];
     const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
     const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
-    return { user, bot, botSince, waiting: botSince > 0 && /(?:◆-*(?:[入出]力待ち|入力待機中)-*◆|🟢-*入力待機中(?:30|60)?-*🟢)$/.test(t), asks, method: 'bot-entry' };
+    return { user, bot, botSince, waiting: botSince > 0 && WAIT_END.test(t), asks, method: 'bot-entry' };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -122,7 +126,7 @@ function scanMessages() {
     if (role === 'user') { user++; botSince = 0; lastBot = null; } else { bot++; botSince++; lastBot = e; }
   }
   const lastEl = els[els.length - 1];
-  const waiting = !!lastEl && /(?:◆-*(?:[入出]力待ち|入力待機中)-*◆|🟢-*入力待機中(?:30|60)?-*🟢)$/.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-'));
+  const waiting = !!lastEl && WAIT_END.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-'));
   return { user, bot, botSince, waiting, asks: waiting, method };
 }
 let lastSent = null, pendingKey = null;

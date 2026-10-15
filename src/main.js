@@ -121,7 +121,7 @@ setInterval(() => {
     if (now - p.lastReload < p.reloadMinutes * 60000) continue;
     if (now - p.lastTyping < TYPING_GRACE_MS || p.editing || wc.isLoading()) continue;
     p.lastReload = now;
-    wc.reload();
+    reloadPane(p);
   }
 }, 15000);
 
@@ -411,6 +411,7 @@ async function grokProbe(wc, id) {
 async function grokFix(p, target, id, viaHome) {
   const wc = p.view.webContents, token = p.grokToken = Symbol();
   const alive = () => !wc.isDestroyed() && p.grokToken === token;
+  p.botTarget = target;
   dlog(`pane${p.id}`, 'grokfix start', viaHome ? '(via home)' : '(direct)', target);
   // Fast path: as soon as Next's router is up, do the known-good '/' -> target hop.
   for (let k = 0; k < 40 && alive(); k++) {
@@ -483,6 +484,41 @@ function onGrokLoad(p) {
 }
 
 
+// Reload that works for grok.com/bot/<id>: cancel any pending retry / 'gave up' state, hop via the in-site router at once
+// (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
+async function reloadPane(p) {
+  const wc = p.view.webContents; if (wc.isDestroyed()) return;
+  p.lastReload = Date.now();
+  p.grokPending = null; p.grokSkipOnce = false;
+  const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
+  const remembered = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
+  const target = m ? cu : (remembered && (!cu || /^https:\/\/grok\.com\//.test(cu)) ? remembered : null);   // a pane that gave up sits on grok.com home: use its remembered bot link
+  const id = target && target.match(GROK_BOT_RE)?.[1];
+  if (!id || !settings.grokFix) { p.grokToken = null; wc.reload(); return; }
+  const token = p.grokToken = Symbol();      // cancels a running grokFix
+  p.loadedAt = Date.now();
+  dlog(`pane${p.id}`, 'reload fast path', target);
+  const t0 = Date.now();
+  while (!wc.isDestroyed() && p.grokToken === token && Date.now() - t0 < 1000) {
+    const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
+      if (r && typeof r.push === 'function') { r.push('/'); setTimeout(() => r.push(${JSON.stringify('/bot/' + id)}), 250); return 'ok'; } return 'no'; })()`).catch(() => 'no');
+    if (rr === 'ok') {
+      dlog(`pane${p.id}`, 'reload router push at', Date.now() - t0, 'ms');
+      for (let j = 0; j < 20 && !wc.isDestroyed() && p.grokToken === token; j++) {
+        await sleep(200);
+        if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'reload ok (router)'); p.grokToken = null; p.loadedAt = Date.now(); return; }
+      }
+      if (wc.isDestroyed() || p.grokToken !== token) return;
+      p.grokToken = null; grokFix(p, target, id, false); return;     // router hop did not land: normal verified retries
+    }
+    await sleep(100);
+  }
+  if (wc.isDestroyed() || p.grokToken !== token) return;
+  p.grokToken = null;
+  dlog(`pane${p.id}`, 'reload: router not ready, hard load', target);
+  wc.loadURL(target).catch(() => {});        // did-finish-load -> onGrokLoad -> grokFix
+}
+
 // ---- panes ----
 function addPane(spec = {}, { focus = true } = {}) {
   if (panes.length >= MAX) return null;
@@ -528,7 +564,7 @@ function addPane(spec = {}, { focus = true } = {}) {
     if (params.selectionText) items.push({ role: 'copy', label: 'コピー' });
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
     items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
-      { label: '再読み込み', click: () => wc.reload() }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
+      { label: '再読み込み', click: () => reloadPane(p) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   panes.push(p);
@@ -586,7 +622,7 @@ function handleKey(input, pane) {
   if (k === 'j') { nextUnread(); return true; }
   if (!input.shift && (k === '\\' || k === '¥' || input.code === 'Backslash' || input.code === 'IntlYen')) { toggleMaximize(); return true; }
   if (k === 'r' && input.shift) { reloadAll(); return true; }
-  if (k === 'r' && !input.shift) { if (fp) { fp.lastReload = Date.now(); fp.view.webContents.reload(); } return true; }
+  if (k === 'r' && !input.shift) { if (fp) reloadPane(fp); return true; }
   if (k === '[' ) { fp?.view.webContents.navigationHistory.goBack(); return true; }
   if (k === ']' ) { fp?.view.webContents.navigationHistory.goForward(); return true; }
   if (k === '=' || k === '+' || (k === ';' && input.shift)) { setZoom(fp, (fp?.zoom || 1) + 0.1); return true; }
@@ -728,7 +764,7 @@ async function reloadAll() {
     for (const p of [...panes]) {
       if (p.view.webContents.isDestroyed()) continue;
       const u = paneUrl(p); p.lastReload = Date.now();
-      try { if (isBotUrl(u)) loadInto(p.view.webContents, u); else p.view.webContents.reload(); } catch (e) { dlog(`pane${p.id}`, 'reload-all err', String(e)); }
+      try { reloadPane(p); } catch (e) { dlog(`pane${p.id}`, 'reload-all err', String(e)); }
       await sleep(300);
     }
     dlog('reload-all done', panes.length);
@@ -761,7 +797,7 @@ function chipMenu(id) {
   const p = byId(id); if (!p) return;
   Menu.buildFromTemplate([
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || chipDefault(p) }) },
-    { label: '再読み込み', click: () => { p.lastReload = Date.now(); p.view.webContents.reload(); } },
+    { label: '再読み込み', click: () => reloadPane(p) },
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
@@ -777,7 +813,7 @@ const paneOn = (ch, fn) => { paneIpc[ch] = fn; registerPane(ch); };
 on('navigate', (id, url) => { const p = byId(id); if (p) loadInto(p.view.webContents, url); });
 on('back', id => byId(id)?.view.webContents.navigationHistory.goBack());
 on('forward', id => byId(id)?.view.webContents.navigationHistory.goForward());
-on('reload', id => { const p = byId(id); if (p) { p.lastReload = Date.now(); p.view.webContents.reload(); } });
+on('reload', id => { const p = byId(id); if (p) reloadPane(p); });
 on('close', id => closePane(id));
 on('add', () => newPane(''));
 on('layout', l => applyPreset(l));
@@ -916,7 +952,7 @@ function buildMenu() {
       isMac ? { role: 'close', label: 'ウィンドウを閉じる', accelerator: 'CmdOrCtrl+Shift+W' } : { role: 'quit', label: '終了' } ] },
     { role: 'editMenu', label: '編集' },
     { label: '表示', submenu: [
-      acc('CmdOrCtrl+R', () => cur()?.focusedPane?.view.webContents.reload(), 'ペインを再読み込み'),
+      acc('CmdOrCtrl+R', () => { const fp = cur()?.focusedPane; if (fp) reloadPane(fp); }, 'ペインを再読み込み'),
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, '拡大'),
@@ -1094,10 +1130,11 @@ function usageDetail() {
   return d;
 }
 const AIU = require('./ai-usage');
+AIU.setOnChange(() => { ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} }); });
 ipcMain.handle('aiusage:get', async (_, kind, force) => {
   if (!['codex', 'claude'].includes(kind)) return null;
   const r = await AIU.get(kind, !!force);
-  dlog('aiusage', kind, r.ok ? 'ok ' + r.buckets.map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') : 'err ' + r.err);
+  dlog('aiusage', kind, (r.ok ? 'ok ' : 'err ') + (r.stale ? 'STALE ' : '') + (r.buckets || []).map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') + (r.err ? ' | ' + r.err : ''));
   return r;
 });
 ipcMain.handle('usage:detail', () => usageDetail());

@@ -52,7 +52,7 @@ async function getJson(url, headers) {
   try {
     const r = await fetch(url, { headers: { Accept: 'application/json', ...headers }, signal: ctl.signal });
     if (r.status === 401 || r.status === 403) { const e = new Error('ログインの期限切れ'); e.auth = true; throw e; }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; const ra = Number(r.headers.get('retry-after')); if (Number.isFinite(ra) && ra > 0) e.retryAfter = ra; throw e; }
     return await r.json();
   } finally { clearTimeout(tm); }
 }
@@ -86,23 +86,59 @@ async function fetchClaude() {
   catch (e) { if (e.auth) throw new Error('Claudeのログインが期限切れです（Claude Codeを一度起動して更新）'); throw e; }
 }
 
-const cache = {}, busy = {}, tried = {};
-async function get(kind, force) {
-  const c = cache[kind];
-  if (!force && c && c.ok && Date.now() - c.at < 60000) return c;
-  if (c && tried[kind] && Date.now() - tried[kind] < (c.rate ? 150000 : 20000)) return c;   // be gentle: never hammer the endpoints (429)
-  tried[kind] = Date.now();
-  if (busy[kind]) return busy[kind];
-  busy[kind] = (async () => {
-    try { const buckets = await (kind === 'codex' ? fetchCodex() : fetchClaude()); cache[kind] = { ok: true, buckets, at: Date.now() }; }
-    catch (e) {
-      const prev = cache[kind];
-      if (/429/.test(String(e && e.message)) && prev && prev.buckets && prev.buckets.length) { cache[kind] = { ...prev, ok: true, stale: true, rate: true, err: 'HTTP 429（制限中のため前回の値を表示）' }; }
-      else cache[kind] = { ok: false, err: String(e && e.message || e), buckets: (cache[kind] && cache[kind].buckets) || [], at: Date.now(), lastOkAt: cache[kind] && cache[kind].ok ? cache[kind].at : (cache[kind] && cache[kind].lastOkAt) || 0 }; }
-    finally { delete busy[kind]; }
-    return cache[kind];
-  })();
-  return busy[kind];
+// ---- fetch scheduling: shared on-disk state (no tokens), min interval, 429 back-off, single poller ----
+const MIN_GAP = 60000, FRESH = 180000, BACKOFF = [5, 10, 20, 30];   // minutes: 5 -> 10 -> 20 -> cap 30
+const busy = {}, started = {};
+let onChange = null;
+const stateFile = () => { try { return path.join(require('electron').app.getPath('userData'), 'ai-usage-cache.json'); } catch { return null; } };
+const readAll = () => { const f = stateFile(); try { return f ? JSON.parse(fs.readFileSync(f, 'utf8')) : {}; } catch { return {}; } };
+const writeAll = o => { const f = stateFile(); if (!f) return; try { fs.writeFileSync(f + '.tmp', JSON.stringify(o)); fs.renameSync(f + '.tmp', f); } catch {} };
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const stOf = k => { const s = readAll()[k]; return s && typeof s === 'object' ? s : {}; };
+const saveSt = (k, patch) => { const all = readAll(); all[k] = { ...(all[k] || {}), ...patch }; writeAll(all); return all[k]; };
+const clock = t => new Date(t).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit' });
+function view(k) {
+  const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
+  const base = { at: s.okAt || 0, nextAt: s.nextAt || 0 };
+  if (!has) return { ok: false, err: s.err || 'まだ取得していません', buckets: [], ...base };
+  const now = Date.now(), stale = !!(s.err || (s.okAt && now - s.okAt > 15 * 60000));
+  let err = s.err || '';
+  if (/429/.test(err)) err = 'HTTP 429（制限中のため前回の値を表示）' + (s.nextAt > now ? `　次回取得 ${clock(s.nextAt)}以降` : '');
+  else if (err) err = err + '（前回の値を表示）';
+  else if (stale) err = '最終更新から時間が経っています';
+  return { ok: !(s.authErr), buckets: s.buckets, ...base, ...(stale ? { stale: true, err } : {}), ...(s.authErr ? { err: s.err } : {}) };
 }
-const peek = k => cache[k];
-module.exports = { get, peek, codexParse, claudeParse };
+async function doFetch(k) {
+  const now = Date.now(), prev = stOf(k);
+  saveSt(k, { lastTry: now, leader: { pid: process.pid, at: now } });
+  try {
+    const buckets = await (k === 'codex' ? fetchCodex() : fetchClaude());
+    saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false });
+  } catch (e) {
+    const msg = String(e && e.message || e), fails = (prev.fails || 0) + 1;
+    if (e && e.status === 429) {
+      const wait = Math.max((e.retryAfter || 0) * 1000, BACKOFF[Math.min(fails - 1, BACKOFF.length - 1)] * 60000);
+      saveSt(k, { fails, nextAt: Date.now() + wait, err: msg + (e.retryAfter ? ` Retry-After ${e.retryAfter}s` : ' (Retry-Afterなし)') });
+    } else if (/ログイン|期限切れ/.test(msg)) saveSt(k, { fails, err: msg, authErr: true });
+    else saveSt(k, { fails, err: msg, authErr: false });
+  }
+  try { onChange && onChange(k); } catch {}
+}
+// force = explicit long-press only: skips the 60 s minimum interval (never the 429 back-off).
+async function get(k, force) {
+  const now = Date.now();
+  const first = !started[k]; started[k] = true;
+  const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
+  const fresh = s.okAt && now - s.okAt < FRESH && !s.err;
+  const due = !fresh || force;
+  const blocked = (s.nextAt && now < s.nextAt) || (!force && s.lastTry && now - s.lastTry < MIN_GAP) || (force && s.lastTry && now - s.lastTry < 5000);
+  const other = s.leader && s.leader.pid !== process.pid && alive(s.leader.pid) && now - s.leader.at < 10 * 60000;   // another running instance is the poller
+  if (due && !blocked && !other) {
+    if (!busy[k]) { const p = doFetch(k).finally(() => { delete busy[k]; }); busy[k] = p.then(() => view(k)); }
+    if (first && has) return view(k);   // right after a restart: show the saved value immediately, refresh in the background
+    return busy[k];
+  }
+  return view(k);
+}
+const peek = k => view(k);
+module.exports = { get, peek, codexParse, claudeParse, setOnChange: f => { onChange = f; } };
