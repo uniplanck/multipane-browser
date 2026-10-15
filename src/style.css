@@ -117,12 +117,7 @@ body.dragging .pane{outline-style:dashed}
 body.compact .chip{width:auto;padding:3px 4px;gap:0}
 body.compact .chip .clabel{display:none}
 
-.pill.usage{padding:0 8px 0 4px;gap:5px;margin-left:6px;font-variant-numeric:tabular-nums}
-.pill.usage .umode{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff}
-.pill.usage.left .umode{background:#30d158}
-.pill.usage.used .umode{background:var(--accent)}
-.pill.usage .uval{font-size:12px;font-weight:600;color:var(--text);min-width:16px;text-align:right}
-.pill.usage.warn .uval{color:#ff453a}
+.pill.usage{padding:0 5px 0 7px;gap:6px;margin-left:0;font-variant-numeric:tabular-nums}
 .pill.usage.spin{opacity:.6}
 
 :root{--wait:#30d158}
@@ -138,12 +133,21 @@ body.compact .chip .wdot{position:absolute;top:2px;right:2px;margin:0}
 .splitter:hover,body.splitting .splitter{background:color-mix(in srgb,var(--accent) 55%,transparent)}
 body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 
-.pill.usage .ulbl{font-size:10px;font-weight:600;color:var(--dim);letter-spacing:.02em;padding-left:4px}
-.pill.usage.ai{padding:0 8px 0 4px;margin-left:0}
-.pill.usage.err .uval{color:var(--dim);font-weight:500}
-.pill.usage.err .umode{opacity:.45}
+.pill.usage .uico{display:grid;place-items:center;color:var(--text)}
+.pill.usage .uico svg{width:14px;height:14px;display:block}
+.pill.usage .uval{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:34px;height:20px;padding:0 7px;border-radius:10px;font-size:11.5px;font-weight:700;line-height:1;color:var(--text);box-sizing:border-box}
+.lv-g{--lv:#30d158}.lv-y{--lv:#ffb800}.lv-r{--lv:#ff453a}
+.pill.usage.mode-left .uval{background:var(--lv);color:#fff;text-shadow:0 0 1px rgba(0,0,0,.25)}
+.pill.usage.mode-left.lv-y .uval{color:#3a2c00;text-shadow:none}
+.pill.usage.mode-used .uval{background:transparent;color:var(--lv);box-shadow:inset 0 0 0 1.6px var(--lv)}
+.pill.usage.mode-today{border-style:dashed;border-color:color-mix(in srgb,var(--lv) 70%,transparent);background:color-mix(in srgb,var(--lv) 12%,var(--ctl))}
+.pill.usage.mode-today .uval{position:relative;background:transparent;color:var(--text);min-width:50px;padding:0 4px 0 2px;gap:4px}
+.pill.usage .usun{width:11px;height:11px;color:var(--lv);flex:none}
+.pill.usage .ring{width:20px;height:20px;border-radius:50%;flex:none;background:conic-gradient(var(--lv) var(--deg),var(--ctl-hi) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2.5px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2.5px))}
+.pill.usage.mode-today .uval b{font-weight:700;font-size:11.5px}
+.pill.usage.err .uval{background:transparent;box-shadow:none;color:var(--dim);font-weight:500}
+.pill.usage.err{opacity:.8}
 #top>.pill.usage{margin-left:0}
-#top>.pill.usage#usage{margin-left:0}
 @media (max-width:1280px){#cmdk kbd{display:none}}
-@media (max-width:1100px){.pill.usage .ulbl{display:none}#cmdk span{display:none}#cmdk::before{content:"⌘K"}}
-@media (max-width:900px){#unread-sum kbd{display:none}.pill.usage .umode{display:none}}
+@media (max-width:1100px){#cmdk span{display:none}#cmdk::before{content:"⌘K"}#unread-sum kbd{display:none}.pill.usage{padding:0 3px 0 5px;gap:4px}.pill.usage .uval{min-width:30px;padding:0 5px;font-size:11px}}
+@media (max-width:900px){.pill.usage .uico{display:none}.pill.usage{padding:0 3px}}

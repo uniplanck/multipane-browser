@@ -216,66 +216,64 @@ mpb.ready();
   apply(localStorage.getItem(KEY)==='1');
 })();
 
-// subscription usage readout: number only; click toggles 残(remaining) / 使(used)
-(function(){
-  const KEY='mpb-usage-mode', btn=document.getElementById('usage');
-  let mode=localStorage.getItem(KEY)==='used'?'used':'left', last=null;
-  const render=()=>{
-    btn.classList.toggle('used',mode==='used'); btn.classList.toggle('left',mode==='left');
-    btn.querySelector('.umode').textContent=mode==='used'?'使':'残';
-    if(!last||!last.ok){btn.querySelector('.uval').textContent='–';btn.classList.remove('warn');btn.removeAttribute('title');return;}
-    const used=Math.round(last.used), left=Math.max(0,100-used), v=mode==='used'?used:left;
-    btn.querySelector('.uval').textContent=String(v);
-    btn.classList.toggle('warn',left<=10);
-    const end=last.periodEnd?new Date(last.periodEnd).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    btn.removeAttribute('title'); void (mode==='used'?`使用量 ${used}%（残り ${left}%）`:`残量 ${left}%（使用 ${used}%）`)+(end?`\nリセット: ${end}`:'')+`\n更新: ${new Date(last.at).toLocaleTimeString('ja-JP')}\nクリック: 残量／使用量を切替（長押しで再取得）`;
-  };
-  const load=async force=>{try{last=await mpb.usage(force);}catch(e){last={ok:false,err:String(e)};}render();};
-  let hold=null,held=false;
-  let popT=null;
-  const showPop=()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind:'grok'});};
-  btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(showPop,280);};
-  btn.addEventListener('mouseleave',()=>{clearTimeout(popT);mpb.usagePopLeave();});
-  mpb.onUsageUpdated(()=>load(false));
-  btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
-  btn.onmouseup=()=>clearTimeout(hold); btn.addEventListener('mouseleave',()=>clearTimeout(hold));
-  btn.onclick=()=>{if(held)return;mode=mode==='used'?'left':'used';localStorage.setItem(KEY,mode);render();window.dispatchEvent(new Event('mpb-usage-mode'));if(!last||!last.ok)load(true);};
-  window.addEventListener('mpb-usage-mode',()=>{mode=localStorage.getItem(KEY)==='used'?'used':'left';render();});
-  window.addEventListener('focus',()=>load(false));
-  setInterval(()=>load(true),5*60*1000);
-  render(); setTimeout(()=>load(true),8000); setTimeout(()=>{if(!last||!last.ok)load(true);},25000);
-})();
 window.addEventListener('mouseup', () => { if (document.body.classList.contains('splitting')) { document.body.classList.remove('splitting', 'split-c', 'split-r'); mpb.splitEnd(); } });
 window.addEventListener('blur', () => { document.body.classList.remove('splitting', 'split-c', 'split-r'); });
 
-// Codex / Claude usage pills (left of the Grok one). Same 残/使 mode as the Grok pill (shared in localStorage).
+// ---- usage readouts: Codex / Claude / Grok. Each pill has its own mode (click cycles), number in a coloured frame. ----
 (function(){
-  const KEY='mpb-usage-mode';
-  document.querySelectorAll('.pill.usage.ai').forEach(btn=>{
-    const kind=btn.dataset.kind; let last=null;
-    const mode=()=>localStorage.getItem(KEY)==='used'?'used':'left';
-    const pick=b=>{const m=(b||[]).filter(x=>x.main);const a=m.length?m:b||[];return a.find(x=>x.weekly)||a[0]||null;};
-    const render=()=>{
-      const m=mode(), u=btn.querySelector('.uval');
-      btn.classList.toggle('used',m==='used'); btn.classList.toggle('left',m==='left');
-      btn.querySelector('.umode').textContent=m==='used'?'使':'残';
-      const b=last&&last.ok?pick(last.buckets):null;
-      btn.classList.toggle('err',!b);
-      if(!b){u.textContent='--';btn.classList.remove('warn');return;}
-      const used=Math.round(b.used), left=Math.max(0,100-used);
-      u.textContent=String(m==='used'?used:left); btn.classList.toggle('warn',left<=10);
+  const ICON={
+    codex:'<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 6.2l2.4 1.8L5 9.8M8.9 10h2.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    claude:'<svg viewBox="0 0 16 16"><g stroke="#d97757" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.8v12.4M1.8 8h12.4M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></g></svg>',
+    grok:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.3 10.7l5.4-5.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>'};
+  const SUN='<svg class="usun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3"/></g></svg>';
+  const NAME={codex:'Codex',claude:'Claude',grok:'Grok'};
+  const MODES={codex:['left','used'],claude:['left','used'],grok:['left','used','today']};
+  const seed=localStorage.getItem('mpb-usage-mode')==='used'?'used':'left';
+  const R=Math.round;
+  document.querySelectorAll('.pill.usage').forEach(btn=>{
+    const kind=btn.dataset.kind, KEY='mpb-um-'+kind, modes=MODES[kind];
+    btn.querySelector('.uico').innerHTML=ICON[kind]; btn.querySelector('.uico').title=NAME[kind];
+    let mode=localStorage.getItem(KEY); if(!modes.includes(mode)) mode=seed;
+    let last=null, det=null;
+    const pickBucket=b=>{const m=(b||[]).filter(x=>x.main);const a=m.length?m:b||[];return a.find(x=>x.weekly)||a[0]||null;};
+    const level=(m,pct)=>m==='used'?(pct<=50?'g':pct<=80?'y':'r'):(pct>=50?'g':pct>=20?'y':'r');
+    const calc=()=>{
+      if(kind==='grok'){
+        if(!last||!last.ok) return null;
+        const used=R(last.used), left=Math.max(0,100-used);
+        if(mode==='today'){ if(!det||det.allowance==null||det.allowLeft==null) return null;
+          const frac=det.allowance>0?Math.max(0,Math.min(1,det.allowLeft/det.allowance)):0;
+          return {v:R(det.allowLeft),pct:frac*100,frac}; }
+        return {v:mode==='used'?used:left,pct:mode==='used'?used:left};
+      }
+      const b=last&&last.ok?pickBucket(last.buckets):null; if(!b) return null;
+      const used=R(b.used), left=Math.max(0,100-used);
+      return {v:mode==='used'?used:left,pct:mode==='used'?used:left};
     };
-    const load=async force=>{try{last=await mpb.aiUsage(kind,force);}catch(e){last={ok:false,err:String(e),buckets:[]};}render();};
+    const render=()=>{
+      const c=calc(), u=btn.querySelector('.uval');
+      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err');
+      if(!c){u.textContent='--';return;}
+      if(mode==='today'){u.innerHTML=SUN+'<span class="ring" style="--deg:'+R(c.frac*360)+'deg"></span><b>'+c.v+'%</b>';}
+      else u.textContent=c.v+'%';
+    };
+    const load=async force=>{
+      try{
+        if(kind==='grok'){last=await mpb.usage(force);det=await mpb.usageDetail();}
+        else last=await mpb.aiUsage(kind,force);
+      }catch(e){last={ok:false,err:String(e),buckets:[]};}
+      render();
+    };
     let hold=null,held=false,popT=null;
     btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
     btn.onmouseup=()=>clearTimeout(hold);
-    btn.onclick=()=>{if(held)return;localStorage.setItem(KEY,mode()==='used'?'left':'used');window.dispatchEvent(new Event('mpb-usage-mode'));};
+    btn.onclick=()=>{if(held)return;mode=modes[(modes.indexOf(mode)+1)%modes.length];localStorage.setItem(KEY,mode);render();if(kind==='grok'&&mode==='today'&&!det)load(false);};
     btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind});},280);};
     btn.addEventListener('mouseleave',()=>{clearTimeout(hold);clearTimeout(popT);mpb.usagePopLeave();});
-    window.addEventListener('mpb-usage-mode',render);
     window.addEventListener('focus',()=>load(false));
     mpb.onUsageUpdated(()=>load(false));
     setInterval(()=>load(true),5*60*1000);
-    render(); setTimeout(()=>load(true),3000); setTimeout(()=>{if(!last||!last.ok)load(true);},30000);
+    if(kind==='grok') setInterval(()=>{mpb.usageDetail().then(d=>{det=d;render();}).catch(()=>{});},60000);
+    render(); setTimeout(()=>load(true),kind==='grok'?8000:3000); setTimeout(()=>{if(!last||!last.ok)load(true);},30000);
   });
 })();

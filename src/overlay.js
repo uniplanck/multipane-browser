@@ -135,6 +135,7 @@ bcText.onkeydown = e => {
 
 // ---- usage hover popover ----
 const up = $('#upop');
+const ri = v => v == null || !Number.isFinite(v) ? '-' : String(Math.round(v));
 const f1 = v => v == null || !Number.isFinite(v) ? '-' : (Math.round(v * 10) / 10).toString();
 function upRender(d) {
   document.body.classList.add('upop');
@@ -143,14 +144,14 @@ function upRender(d) {
   up.innerHTML = `<h4>1週間の期限</h4>
     <div class="row"><span>リセット</span><b>${esc(d.endText || '-')}</b></div>
     <div class="row"><span>残り時間</span><b>${esc(rem)}</b></div>
-    <hr><div class="row"><span>残り</span><b>${f1(d.left)}%</b></div>
-    <div class="row"><span>使用</span><b>${f1(d.used)}%</b></div>
+    <hr><div class="row"><span>残り</span><b>${ri(d.left)}%</b></div>
+    <div class="row"><span>使用</span><b>${ri(d.used)}%</b></div>
     <hr><h4>今日使える目安</h4>
-    <div class="row"><span>目安</span><b class="big g">${d.allowance == null ? '-' : f1(d.allowance) + '%'}</b></div>
-    <div class="sm" id="up-formula">= (今日の開始時点の残り ${f1(d.baseLeft)}% − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%) ÷ ${d.days == null ? '-' : f1(d.days)}日</div>
+    <div class="row"><span>目安</span><b class="big g">${d.allowance == null ? '-' : ri(d.allowance) + '%'}</b></div>
+    <div class="sm" id="up-formula">= (今日の開始時点の残り ${ri(d.baseLeft)}% − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%) ÷ ${d.days == null ? '-' : f1(d.days)}日</div>
     <div class="sm">日数 ${d.days == null ? '-' : f1(d.days) + '日'}${d.daysWhole ? ` (${esc(d.daysFrom)}〜${esc(d.daysTo)} + 最終日 ${d.daysWeight})` : ` (最終日 ${d.daysWeight})`}　※毎日9:00に日付が切替</div>
-    <div class="row"><span>今日の使用</span><b>${d.usedToday == null ? '-' : f1(d.usedToday) + '%'}</b></div>
-    <div class="row"><span>今日の残り枠</span><b>${d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'}</b></div>
+    <div class="row"><span>今日の使用</span><b>${d.usedToday == null ? '-' : ri(d.usedToday) + '%'}</b></div>
+    <div class="row"><span>今日の残り枠</span><b>${d.allowLeft == null ? '-' : ri(d.allowLeft) + '%'}</b></div>
     <div class="sm">${d.baseAt ? `今日の基準（9:00起点）: ${new Date(d.baseAt).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })} 時点の使用量からの増加分` : '今日の基準を取得中'}</div>
     <hr><div class="sm" style="margin:0">更新: ${esc(d.atText || '-')}</div>`;
   const inp = $('#up-margin');
@@ -159,7 +160,7 @@ function upRender(d) {
   upSize();
 }
 // update numbers in place while the margin input is being edited
-function upFill(d) { const g = up.querySelector('.big'); if (g) g.textContent = d.allowance == null ? '-' : f1(d.allowance) + '%'; const rows = up.querySelectorAll('.row b'); if (rows[6]) rows[6].textContent = d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'; }
+function upFill(d) { const g = up.querySelector('.big'); if (g) g.textContent = d.allowance == null ? '-' : ri(d.allowance) + '%'; const rows = up.querySelectorAll('.row b'); if (rows[6]) rows[6].textContent = d.allowLeft == null ? '-' : ri(d.allowLeft) + '%'; }
 function upSize() { requestAnimationFrame(() => mpb.usagePopSize(up.offsetHeight + 2)); }
 let upKind = 'grok';
 const hm = t => new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -169,7 +170,7 @@ function aiRender(d) {
   const name = d.kind === 'codex' ? 'Codex' : 'Claude';
   const at = d.at ? new Date(d.at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) : '-';
   const rows = (d.buckets || []).map(b => {
-    const used = Math.round(b.used * 10) / 10, left = Math.max(0, Math.round((100 - b.used) * 10) / 10);
+    const used = Math.round(b.used), left = Math.max(0, 100 - used);
     return `<div class="row"><span>${esc(b.label)}</span><b>残り ${left}% ／ 使用 ${used}%</b></div>` +
       `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : 'リセット時刻なし'}</div>`;
   }).join('');
