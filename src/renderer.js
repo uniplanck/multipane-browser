@@ -225,14 +225,17 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     codex:'<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 6.2l2.4 1.8L5 9.8M8.9 10h2.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     claude:'<svg viewBox="0 0 16 16"><g stroke="#d97757" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.8v12.4M1.8 8h12.4M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></g></svg>',
     grok:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.3 10.7l5.4-5.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>'};
-  const SUN='<svg class="usun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3"/></g></svg>';
   const NAME={codex:'Codex',claude:'Claude',grok:'Grok'};
   const MODES={codex:['left','used'],claude:['left','used'],grok:['left','used','today']};
   const seed=localStorage.getItem('mpb-usage-mode')==='used'?'used':'left';
-  const R=Math.round;
+  const R=Math.round, fmt=v=>v>=100?'MAX':String(v).padStart(2,'0')+'%';
   document.querySelectorAll('.pill.usage').forEach(btn=>{
     const kind=btn.dataset.kind, KEY='mpb-um-'+kind, modes=MODES[kind];
-    btn.querySelector('.uico').innerHTML=ICON[kind]; btn.querySelector('.uico').title=NAME[kind];
+    const L=window.MPB_ICONS&&window.MPB_ICONS[kind], ico=btn.querySelector('.uico');
+    if(L&&L.mask) ico.innerHTML='<span class="mico" style="background:'+(L.color||'currentColor')+';-webkit-mask-image:url('+L.mask+');mask-image:url('+L.mask+')"></span>';
+    else if(L&&L.img) ico.innerHTML='<img class="gico" alt="" src="'+L.img+'">';
+    else ico.innerHTML=ICON[kind];
+    ico.title=NAME[kind];
     let mode=localStorage.getItem(KEY); if(!modes.includes(mode)) mode=seed;
     let last=null, det=null;
     const pickBucket=b=>{const m=(b||[]).filter(x=>x.main);const a=m.length?m:b||[];return a.find(x=>x.weekly)||a[0]||null;};
@@ -254,8 +257,7 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
       const c=calc(), u=btn.querySelector('.uval');
       btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err');
       if(!c){u.textContent='--';return;}
-      if(mode==='today'){u.innerHTML=SUN+'<span class="ring" style="--deg:'+R(c.frac*360)+'deg"></span><b>'+c.v+'%</b>';}
-      else u.textContent=c.v+'%';
+      u.textContent=fmt(c.v);
     };
     const load=async force=>{
       try{
