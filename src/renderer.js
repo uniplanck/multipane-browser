@@ -238,7 +238,9 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     ico.title=NAME[kind];
     let mode=localStorage.getItem(KEY); if(!modes.includes(mode)) mode=seed;
     let last=null, det=null;
-    const pickBucket=b=>{const m=(b||[]).filter(x=>x.main);const a=m.length?m:b||[];return a.find(x=>x.weekly)||a[0]||null;};
+    const WKEY='mpb-uwin-'+kind; let selId=localStorage.getItem(WKEY)||'';
+    const defBucket=bs=>{const m=bs.filter(x=>x.main);const a=m.length?m:bs;return a.find(x=>x.five)||a.find(x=>x.weekly)||a[0]||null;};   // default: 5-hour window if present, else 1-week
+    const pickBucket=bs=>{bs=bs||[];return bs.find(x=>x.id===selId)||defBucket(bs);};
     const level=(m,pct)=>m==='used'?(pct<=50?'g':pct<=80?'y':'r'):(pct>=50?'g':pct>=20?'y':'r');
     const calc=()=>{
       if(kind==='grok'){
@@ -270,7 +272,12 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
     btn.onmouseup=()=>clearTimeout(hold);
     btn.onclick=()=>{if(held)return;mode=modes[(modes.indexOf(mode)+1)%modes.length];localStorage.setItem(KEY,mode);render();if(kind==='grok'&&mode==='today'&&!det)load(false);};
-    btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind});},280);};
+    const curId=()=>{const b=kind==='grok'?null:(last&&last.ok?pickBucket(last.buckets):null);return b?b.id:'';};
+    btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind,sel:curId()});},280);};
+    if(kind!=='grok'){
+      btn.oncontextmenu=e=>{e.preventDefault();clearTimeout(popT);mpb.usagePopLeave();const go=()=>mpb.usageWinMenu(kind,curId());(last&&last.buckets&&last.buckets.length)?go():load(false).then(go);};
+      mpb.onUsageWin((k,id)=>{if(k!==kind)return;selId=id;localStorage.setItem(WKEY,id);render();});
+    }
     btn.addEventListener('mouseleave',()=>{clearTimeout(hold);clearTimeout(popT);mpb.usagePopLeave();});
     window.addEventListener('focus',()=>load(false));
     mpb.onUsageUpdated(()=>load(false));

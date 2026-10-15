@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('mpb', {
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),
   usageMargin: v => ipcRenderer.invoke('usage:margin', v),
   onUsagePop: cb => ipcRenderer.on('usage-pop', (_, d) => cb(d)), onUsageUpdated: cb => ipcRenderer.on('usage-updated', () => cb()),
+  usageWinMenu: (kind, sel) => send('usage-win-menu', kind, sel), onUsageWin: cb => ipcRenderer.on('usage-win-chosen', (_, k, id) => cb(k, id)),
   usageDetail: () => ipcRenderer.invoke('usage:detail'),
   aiUsage: (kind, force) => ipcRenderer.invoke('aiusage:get', kind, !!force),
   usage: force => ipcRenderer.invoke('usage:get', !!force),

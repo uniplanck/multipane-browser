@@ -738,13 +738,22 @@ async function reloadAll() {
 // ---- usage hover popover (lives in the overlay view, sized to the popover so it never blocks the panes) ----
 let popOpen = false, popTimer = null, popRect = null;
 function popBounds(h) { const [w] = win.getContentSize(); const W = 320; const x = Math.max(4, Math.min(w - W - 4, Math.round((popRect?.right || w) - W))); return { x, y: Math.round((popRect?.bottom || 40) + 4), width: W, height: Math.max(60, Math.min(520, Math.round(h || 360))) }; }
-let popKind = 'grok';
+let popKind = 'grok', popSel = '';
+function usageWinMenu(kind, sel) {
+  if (!['codex', 'claude'].includes(kind)) return;
+  const c = AIU.peek(kind), bs = (c && c.buckets) || [];
+  const pc = v => { const n = Math.round(v); return n >= 100 ? 'MAX' : String(n).padStart(2, '0') + '%'; };
+  const tpl = bs.length ? bs.map(b => ({ label: `${b.label}　残り ${pc(Math.max(0, 100 - Math.round(b.used)))} ／ 使用 ${pc(b.used)}`, type: 'radio', checked: b.id === sel, click: () => win.webContents.send('usage-win-chosen', kind, b.id) }))
+    : [{ label: c && c.err ? `取得できません: ${c.err}` : 'まだ取得していません', enabled: false }];
+  tpl.unshift({ label: `${kind === 'codex' ? 'Codex' : 'Claude'}: 表示する枠を選択`, enabled: false }, { type: 'separator' });
+  Menu.buildFromTemplate(tpl).popup({ window: win });
+}
 function popShow(rect) {
   if (!overlay || overlayOpen) return;
-  if (rect && typeof rect === 'object') popKind = ['codex', 'claude'].includes(rect.kind) ? rect.kind : 'grok';
+  if (rect && typeof rect === 'object') { popKind = ['codex', 'claude'].includes(rect.kind) ? rect.kind : 'grok'; popSel = String(rect.sel || '').slice(0, 120); }
   clearTimeout(popTimer); popRect = rect && typeof rect === 'object' ? { right: Number(rect.right) || 0, bottom: Number(rect.bottom) || 0 } : popRect;
   if (!popOpen) { popOpen = true; overlay.setBounds(popBounds(360)); bringOverlayToFront(); overlay.setVisible(true); }
-  overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : { kind: popKind, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
+  overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : { kind: popKind, sel: popSel, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
 }
 function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) overlay.setVisible(false); }
 function popLater(ms = 350) { clearTimeout(popTimer); popTimer = setTimeout(popHide, ms); }
@@ -781,6 +790,7 @@ on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
 on('reload-all', () => reloadAll());
 on('usage-pop-show', r => popShow(r));
+on('usage-win-menu', (kind, sel) => usageWinMenu(String(kind), String(sel || '')));
 on('usage-pop-keep', () => clearTimeout(popTimer));
 on('usage-pop-leave', () => popLater());
 on('usage-pop-size', h => { if (popOpen && !overlayOpen) overlay.setBounds(popBounds(Number(h))); });

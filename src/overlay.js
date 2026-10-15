@@ -172,11 +172,12 @@ function aiRender(d) {
   const at = d.at ? new Date(d.at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) : '-';
   const rows = (d.buckets || []).map(b => {
     const used = Math.round(b.used), left = Math.max(0, 100 - used);
-    return `<div class="row"><span>${esc(b.label)}</span><b>残り ${pc(left)} ／ 使用 ${pc(used)}</b></div>` +
+    const shown = !!d.sel && b.id === d.sel;
+    return `<div class="row"><span>${shown ? '✓ ' : ''}${esc(b.label)}${shown ? ' <small style="color:#30d158">（表示中）</small>' : ''}</span><b>残り ${pc(left)} ／ 使用 ${pc(used)}</b></div>` +
       `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : 'リセット時刻なし'}</div>`;
   }).join('');
-  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.ok ? rows : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
-    `<hr><div class="sm" style="margin:0 0 2px">表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
+  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err)}</div>` : '') + (d.ok ? rows : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
+    `<hr><div class="sm" style="margin:0 0 2px">右クリックで表示する枠を選べます。表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
   upSize();
 }
 mpb.onUsagePop(d => { if (document.activeElement && document.activeElement.id === 'up-margin') return; upKind = d.kind || 'grok'; if (upKind === 'grok') upRender(d); else aiRender(d); });
