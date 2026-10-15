@@ -147,7 +147,7 @@ function upRender(d) {
     <div class="row"><span>使用</span><b>${f1(d.used)}%</b></div>
     <hr><h4>今日使える目安</h4>
     <div class="row"><span>目安</span><b class="big g">${d.allowance == null ? '-' : f1(d.allowance) + '%'}</b></div>
-    <div class="sm" id="up-formula">= (残り ${f1(d.left)}% − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%) ÷ ${d.days == null ? '-' : f1(d.days)}日</div>
+    <div class="sm" id="up-formula">= (今日の開始時点の残り ${f1(d.baseLeft)}% − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%) ÷ ${d.days == null ? '-' : f1(d.days)}日</div>
     <div class="sm">日数 ${d.days == null ? '-' : f1(d.days) + '日'}${d.daysWhole ? ` (${esc(d.daysFrom)}〜${esc(d.daysTo)} + 最終日 ${d.daysWeight})` : ` (最終日 ${d.daysWeight})`}　※毎日9:00に日付が切替</div>
     <div class="row"><span>今日の使用</span><b>${d.usedToday == null ? '-' : f1(d.usedToday) + '%'}</b></div>
     <div class="row"><span>今日の残り枠</span><b>${d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'}</b></div>

@@ -1038,8 +1038,10 @@ async function fetchUsage() {
     if (per) { const e = pbFields(per[1]).find(([f]) => f === 3); if (e) { const sec = pbFields(e[1]).find(([f]) => f === 1); if (sec) periodEnd = sec[1] * 1000; } }
     usageCache = { ok: true, used, periodEnd, at: Date.now() };
     const dk = UD.dayKey(Date.now());
-    if (!settings.usageBase || settings.usageBase.day !== dk) settings.usageBase = { day: dk, used, at: Date.now() };
-    else if (used < settings.usageBase.used) settings.usageBase = { day: dk, used, at: Date.now() };   // period reset
+    const ub = settings.usageBase, newPeriod = !!(ub && ub.periodEnd && periodEnd && Math.abs(ub.periodEnd - periodEnd) > 3600000);
+    if (newPeriod || (ub && used < ub.used)) settings.usageBase = { day: dk, used: 0, at: Date.now(), periodEnd };   // new weekly period: starts at 0% used
+    else if (!ub || ub.day !== dk) settings.usageBase = { day: dk, used, at: Date.now(), periodEnd };        // new 09:00 day: baseline = usage at first fetch
+    else if (!ub.periodEnd && periodEnd) settings.usageBase.periodEnd = periodEnd;
     save();
     dlog('usage', JSON.stringify(usageCache));
   } catch (e) { dlog('usage err', String(e)); usageCache = { ...(usageCache || {}), ok: !!usageCache?.ok, err: String(e.message || e), at: Date.now() }; }
@@ -1066,13 +1068,12 @@ function usageDetail() {
     d.remD = Math.floor(ms / 86400000); d.remH = Math.floor(ms % 86400000 / 3600000); d.remM = Math.floor(ms % 3600000 / 60000);
     const ad = UD.allowanceDays(now, u.periodEnd);
     d.days = ad.days; d.daysWhole = ad.whole; d.daysWeight = ad.weight; d.daysFrom = ad.from; d.daysTo = ad.to;
-    d.allowance = UD.allowance(d.left, margin, ad.days);
     const b = settings.usageBase;
     if (b && b.day === UD.dayKey(now)) {
+      d.baseLeft = Math.max(0, 100 - b.used);
       d.usedToday = Math.max(0, u.used - b.used); d.baseAt = b.at;
-      const as = UD.allowance(100 - b.used, margin, UD.allowanceDays(b.at, u.periodEnd).days);
-      d.allowStart = as;
-      d.allowLeft = as == null ? null : Math.max(0, UD.floor1(as - d.usedToday));
+      d.allowance = UD.allowance(d.baseLeft, margin, ad.days);   // from remaining at the START of the day: constant during the day
+      d.allowLeft = d.allowance == null ? null : Math.max(0, UD.floor1(d.allowance - d.usedToday));
     }
   }
   return d;
