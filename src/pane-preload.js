@@ -77,7 +77,7 @@ function geoRole(el, box) {
 function looksAsking(text, hasWidget) {
   const raw = String(text || '');
   const flat = raw.replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-');
-  if (/◆-+出力待ち-+◆/.test(flat.slice(-300))) return true;
+  if (/◆-+[入出]力待ち-+◆/.test(flat.slice(-300))) return true;
   if (hasWidget) return true;
   const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
   const last = lines[lines.length - 1] || '';
@@ -97,7 +97,7 @@ function scanMessages() {
     const le = ents[ents.length - 1];
     const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
     const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
-    return { user, bot, botSince, waiting: botSince > 0 && /◆-+出力待ち-+◆$/.test(t), asks, method: 'bot-entry' };
+    return { user, bot, botSince, waiting: botSince > 0 && /◆-+[入出]力待ち-+◆$/.test(t), asks, method: 'bot-entry' };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -122,7 +122,7 @@ function scanMessages() {
     if (role === 'user') { user++; botSince = 0; lastBot = null; } else { bot++; botSince++; lastBot = e; }
   }
   const lastEl = els[els.length - 1];
-  const waiting = !!lastEl && /◆-+出力待ち-+◆$/.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-'));
+  const waiting = !!lastEl && /◆-+[入出]力待ち-+◆$/.test((lastEl.textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–]/g, '-'));
   return { user, bot, botSince, waiting, asks: waiting, method };
 }
 let lastSent = null, pendingKey = null;
