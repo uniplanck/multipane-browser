@@ -228,7 +228,7 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
   const NAME={codex:'Codex',claude:'Claude',grok:'Grok'};
   const MODES={codex:['left','used'],claude:['left','used'],grok:['left','used','today']};
   const seed=localStorage.getItem('mpb-usage-mode')==='used'?'used':'left';
-  const R=Math.round, fmt=v=>v>=100?'MAX':String(v).padStart(2,'0')+'%';
+  const R=Math.round, fmt=v=>v>=100?'MAX':String(v).padStart(2,'0');
   document.querySelectorAll('.pill.usage').forEach(btn=>{
     const kind=btn.dataset.kind, KEY='mpb-um-'+kind, modes=MODES[kind];
     const L=window.MPB_ICONS&&window.MPB_ICONS[kind], ico=btn.querySelector('.uico');
