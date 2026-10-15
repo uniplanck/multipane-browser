@@ -581,7 +581,7 @@ function handleKey(input, pane) {
   if (k === 'w' && !input.shift) { if (fp) closePane(fp.id); return true; }
   if (k === 'l') { closeOverlay(); focusUrlBar(); return true; }
   if (k === 'j') { nextUnread(); return true; }
-  if (k === 'enter') { toggleMaximize(); return true; }
+  if (!input.shift && (k === '\\' || k === '¥' || input.code === 'Backslash' || input.code === 'IntlYen')) { toggleMaximize(); return true; }
   if (k === 'r' && input.shift) { reloadAll(); return true; }
   if (k === 'r' && !input.shift) { if (fp) { fp.lastReload = Date.now(); fp.view.webContents.reload(); } return true; }
   if (k === '[' ) { fp?.view.webContents.navigationHistory.goBack(); return true; }
@@ -903,7 +903,7 @@ function buildMenu() {
     { label: '表示', submenu: [
       acc('CmdOrCtrl+R', () => cur()?.focusedPane?.view.webContents.reload(), 'ペインを再読み込み'),
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
-      acc('CmdOrCtrl+Enter', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
+      acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, '拡大'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, '縮小'),
       acc('CmdOrCtrl+0', () => { const k = cur(); k?.setZoom(k.focusedPane, 1); }, '実際のサイズ'),
@@ -1037,7 +1037,7 @@ async function fetchUsage() {
     const per = fields.find(([f, v]) => f === 8 && typeof v !== 'number');
     if (per) { const e = pbFields(per[1]).find(([f]) => f === 3); if (e) { const sec = pbFields(e[1]).find(([f]) => f === 1); if (sec) periodEnd = sec[1] * 1000; } }
     usageCache = { ok: true, used, periodEnd, at: Date.now() };
-    const dk = tokyoDay(Date.now());
+    const dk = UD.dayKey(Date.now());
     if (!settings.usageBase || settings.usageBase.day !== dk) settings.usageBase = { day: dk, used, at: Date.now() };
     else if (used < settings.usageBase.used) settings.usageBase = { day: dk, used, at: Date.now() };   // period reset
     save();
@@ -1053,6 +1053,7 @@ function fmtTokyo(t) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('ja-JP', { ...TOKYO, month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(t).map(x => [x.type, x.value]));
   return `${p.month}/${p.day}(${p.weekday}) ${p.hour}:${p.minute}`;
 }
+const UD = require('./usage-days');
 function usageDetail() {
   const u = usageCache, margin = Number.isFinite(settings.usageMargin) ? settings.usageMargin : 5;
   const d = { ok: !!u?.ok, err: u?.err || '', margin, at: u?.at || 0, atText: u?.at ? new Intl.DateTimeFormat('ja-JP', { ...TOKYO, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(u.at) : '' };
@@ -1060,17 +1061,18 @@ function usageDetail() {
   const now = Date.now();
   d.used = u.used; d.left = Math.max(0, 100 - u.used);
   if (u.periodEnd && u.periodEnd > now) {
-    const ms = u.periodEnd - now, days = ms / 86400000;
+    const ms = u.periodEnd - now;
     d.endText = fmtTokyo(u.periodEnd);
     d.remD = Math.floor(ms / 86400000); d.remH = Math.floor(ms % 86400000 / 3600000); d.remM = Math.floor(ms % 3600000 / 60000);
-    d.daysLeft = Math.max(1, days);
-    d.allowance = Math.max(0, d.left / d.daysLeft - margin);
+    const ad = UD.allowanceDays(now, u.periodEnd);
+    d.days = ad.days; d.daysWhole = ad.whole; d.daysWeight = ad.weight; d.daysFrom = ad.from; d.daysTo = ad.to;
+    d.allowance = UD.allowance(d.left, margin, ad.days);
     const b = settings.usageBase;
-    if (b && b.day === tokyoDay(now)) {
+    if (b && b.day === UD.dayKey(now)) {
       d.usedToday = Math.max(0, u.used - b.used); d.baseAt = b.at;
-      const dBase = Math.max(1, (u.periodEnd - b.at) / 86400000);
-      d.allowStart = Math.max(0, (100 - b.used) / dBase - margin);
-      d.allowLeft = Math.max(0, d.allowStart - d.usedToday);
+      const as = UD.allowance(100 - b.used, margin, UD.allowanceDays(b.at, u.periodEnd).days);
+      d.allowStart = as;
+      d.allowLeft = as == null ? null : Math.max(0, UD.floor1(as - d.usedToday));
     }
   }
   return d;

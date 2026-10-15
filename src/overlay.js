@@ -38,7 +38,7 @@ function build() {
     badge: p.unread, glow: p.glow, key: `${p.index + 1}`, act: { type: 'focus', id: p.id } }));
   const cmds = [
     ['次の未読ペインへ', '●', { type: 'next-unread' }, `${MOD}J`],
-    ['フォーカス中のペインを最大化 / 元に戻す', '⤢', { type: 'maximize' }, `${MOD}↵`],
+    ['フォーカス中のペインを最大化 / 元に戻す', '⤢', { type: 'maximize' }, `${MOD}\\`],
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
     ['ワークスペースとして保存…', '⧉', { type: 'ws-save-prompt' }],
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
@@ -147,10 +147,11 @@ function upRender(d) {
     <div class="row"><span>使用</span><b>${f1(d.used)}%</b></div>
     <hr><h4>今日使える目安</h4>
     <div class="row"><span>目安</span><b class="big g">${d.allowance == null ? '-' : f1(d.allowance) + '%'}</b></div>
-    <div class="sm">= max(0, 残り ${f1(d.left)}% ÷ 残り${d.daysLeft == null ? '-' : f1(d.daysLeft)}日 − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%)</div>
+    <div class="sm" id="up-formula">= (残り ${f1(d.left)}% − 余裕 <input id="up-margin" type="number" min="0" max="50" step="1" value="${d.margin}">%) ÷ ${d.days == null ? '-' : f1(d.days)}日</div>
+    <div class="sm">日数 ${d.days == null ? '-' : f1(d.days) + '日'}${d.daysWhole ? ` (${esc(d.daysFrom)}〜${esc(d.daysTo)} + 最終日 ${d.daysWeight})` : ` (最終日 ${d.daysWeight})`}　※毎日9:00に日付が切替</div>
     <div class="row"><span>今日の使用</span><b>${d.usedToday == null ? '-' : f1(d.usedToday) + '%'}</b></div>
     <div class="row"><span>今日の残り枠</span><b>${d.allowLeft == null ? '-' : f1(d.allowLeft) + '%'}</b></div>
-    <div class="sm">${d.baseAt ? `今日の基準: ${new Date(d.baseAt).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })} 時点の使用量からの増加分` : '今日の基準を取得中'}</div>
+    <div class="sm">${d.baseAt ? `今日の基準（9:00起点）: ${new Date(d.baseAt).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })} 時点の使用量からの増加分` : '今日の基準を取得中'}</div>
     <hr><div class="sm" style="margin:0">更新: ${esc(d.atText || '-')}</div>`;
   const inp = $('#up-margin');
   inp.oninput = async () => { const v = Number(inp.value); if (inp.value !== '' && v >= 0 && v <= 50) { const n = await mpb.usageMargin(v); upFill(n); } };

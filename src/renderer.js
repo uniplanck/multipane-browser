@@ -46,7 +46,7 @@ function mk(id) {
       <button data-a="back" title="戻る (${MOD}[)">‹</button>
       <button data-a="forward" title="進む (${MOD}])">›</button>
       <button data-a="reload" title="再読み込み (${MOD}R)">↻</button>
-      <button data-a="maximize" title="最大化 / 元に戻す (${MOD}Enter・ダブルクリック)">⤢</button>
+      <button data-a="maximize" title="最大化 / 元に戻す (${MOD}\\・ダブルクリック)">⤢</button>
       <button data-a="paneMenu" title="名前・色・ミュート・自動リロード・ズームなど">⋯</button>
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
