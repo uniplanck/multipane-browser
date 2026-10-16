@@ -185,7 +185,8 @@ const onS = s => {
     const meta = [];
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
-    if (p.zoom && Math.abs(p.zoom - 1) > 0.01) meta.push(`<span title="ズーム">${Math.round(p.zoom * 100)}%</span>`);
+    if (p.zoomIndiv) meta.push(`<span class="zind" title="ズームは個別設定（全体ズームの影響を受けません）">🔍個別 ${Math.round(p.zoom * 100)}%</span>`);
+    else if (p.zoom && Math.abs(p.zoom - 1) > 0.01) meta.push(`<span title="全体ズーム">${Math.round(p.zoom * 100)}%</span>`);
     d.querySelector('.meta').innerHTML = meta.join('');
     const b = d.querySelector('.badge');
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
@@ -286,7 +287,7 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     };
     const render=()=>{
       const c=calc(), u=btn.querySelector('.uval');
-      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'');
+      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'')+(kind==='claude'&&last&&last.needLogin?' needlogin':'');
       if(!c){u.textContent='--';return;}
       u.textContent=fmt(c.v);
     };
@@ -300,7 +301,9 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     let hold=null,held=false,popT=null;
     btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
     btn.onmouseup=()=>clearTimeout(hold);
-    btn.onclick=()=>{if(held)return;mode=modes[(modes.indexOf(mode)+1)%modes.length];localStorage.setItem(KEY,mode);render();if(kind==='grok'&&mode==='today'&&!det)load(false);};
+    btn.onclick=()=>{if(held)return;
+      if(kind==='claude'&&last&&last.needLogin){clearTimeout(popT);mpb.usagePopLeave();mpb.claudeAuthDialog().then(()=>{load(true);setTimeout(()=>load(true),20000);});return;}
+      mode=modes[(modes.indexOf(mode)+1)%modes.length];localStorage.setItem(KEY,mode);render();if(kind==='grok'&&mode==='today'&&!det)load(false);};
     const curId=()=>{const b=kind==='grok'?null:(last&&last.ok?pickBucket(last.buckets):null);return b?b.id:'';};
     btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind,sel:curId()});},280);};
     if(kind!=='grok'){

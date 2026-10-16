@@ -225,3 +225,9 @@ ipcRenderer.on('mpb:pc', (_e, on) => {
     if (seen || waited > 5000) pcStop(true);
   }, 400);
 });
+
+// ---- per-pane zoom (main sends the zoom for THIS page; the site-wide zoom level stays at 100% so panes on the same site don't affect each other) ----
+let paneZoom = 1;
+const applyPaneZoom = () => { try { webFrame.setZoomFactor(paneZoom); } catch {} };
+ipcRenderer.on('mpb:zoom', (_e, z) => { paneZoom = Number(z) > 0 ? Number(z) : 1; applyPaneZoom(); });
+window.addEventListener('DOMContentLoaded', () => { if (paneZoom !== 1) applyPaneZoom(); });

@@ -178,3 +178,9 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 #sync-cols.na{opacity:.35;cursor:default}
 #sync-cols.pulse{animation:syncpulse .7s ease-out}
 @keyframes syncpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 80%,transparent);transform:scale(1)}40%{transform:scale(1.18)}100%{box-shadow:0 0 0 9px transparent;transform:scale(1)}}
+
+/* Claude: login expired -> muted with a small warning mark; click opens the re-auth dialog */
+.pill.usage.needlogin{opacity:.75;position:relative;cursor:pointer}
+.pill.usage.needlogin::after{content:"!";position:absolute;right:-3px;top:-4px;width:12px;height:12px;border-radius:50%;background:#ff9f0a;color:#1c1c1e;font-size:9px;font-weight:800;line-height:12px;text-align:center}
+
+.meta .zind{color:#ffb800;font-weight:600}

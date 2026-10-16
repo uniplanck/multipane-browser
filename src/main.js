@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, nativeTheme, screen, clipboard, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, nativeTheme, screen, clipboard, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -44,7 +44,7 @@ function chromeUA() {
 
 // ---- persistence (backward compatible: layout/focused/urls are always written and read) ----
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
-const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1 });
+const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv });
 function saveNow() {
   try {
     const wins = ctxs.map(c => c.snapshot());
@@ -125,6 +125,9 @@ setInterval(() => {
   }
 }, 15000);
 
+const clampZ = z => Math.round(Math.min(3, Math.max(0.3, Number(z) || 1)) * 100) / 100;
+const gZoom = () => clampZ(settings.globalZoom || 1);
+function setGlobalZoom(z) { settings.globalZoom = clampZ(z); ctxs.forEach(c => c.applyGlobalZoom()); save(); }
 // Column-width sync between grid rows. ON: every row shares settings.splits[k].c. OFF: each row has its own (sp.rc[row]).
 // OFF -> ON aligns every row to the TOP row; ON -> OFF seeds each row with the current shared widths (nothing jumps).
 function syncColsApply(on) {
@@ -316,11 +319,11 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; const g = grid(panes.length); return `${g.cols}x${g.rows}`; })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    syncCols: settings.syncCols !== false, canSync: grid(panes.length || 1).rows >= 2, splitters: splitters(), workspaces: Object.keys(workspaces), favorites, windowCount: ctxs.length,
+    globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: grid(panes.length || 1).rows >= 2, splitters: splitters(), workspaces: Object.keys(workspaces), favorites, windowCount: ctxs.length,
     panes: panes.map((p, i) => {
       const wc = p.view.webContents;
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
-        favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, isGrok: !!p.msgMode,
+        favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
         unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
@@ -575,8 +578,10 @@ function addPane(spec = {}, { focus = true } = {}) {
   const p = { id: nextPaneId++, view, url: normalize(spec.url), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
-    muted: !!spec.muted, zoom: Math.min(3, Math.max(0.3, Number(spec.zoom) || 1)),
+    muted: !!spec.muted, zoomIndiv: spec.zoomIndiv === undefined ? clampZ(spec.zoom) !== 1 : !!spec.zoomIndiv,   // older saves had per-pane zoom only: keep those panes individual
+    zoom: 1,
     lastReload: Date.now(), lastTyping: 0, editing: false, cpuRate: 1 };
+  p.zoom = p.zoomIndiv ? clampZ(spec.zoom) : gZoom();
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
@@ -589,7 +594,7 @@ function addPane(spec = {}, { focus = true } = {}) {
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { sendState(); markActivity(p, 'title'); });
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
-  wc.on('dom-ready', () => { if (p.zoom !== 1) wc.setZoomFactor(p.zoom); });
+  wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); });
   wc.on('console-message', e => {
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
   });
@@ -639,12 +644,19 @@ function newPane(url = '') {
 }
 const byId = id => panes.find(p => p.id === id);
 const byWc = wc => panes.find(p => p.view.webContents === wc);
-function setZoom(p, z) {
+// Zoom: every pane either follows the GLOBAL zoom (settings.globalZoom) or is "individual" (own p.zoom, ignores global changes).
+// Chromium keeps ONE zoom level per site (host zoom map), so wc.setZoomFactor on one grok.com pane zoomed every grok.com pane.
+// Zoom is therefore applied per page from the pane preload (webFrame.setZoomFactor); the shared site level is kept at 100%.
+function applyZoom(p, z) { p.zoom = clampZ(z); const wc = p.view.webContents; if (!wc.isDestroyed()) wc.send('mpb:zoom', p.zoom); }
+function normalizeHostZoom(wc) { try { if (wc.getZoomLevel() !== 0) { wc.setZoomLevel(0); setTimeout(() => panes.forEach(q => applyZoom(q, q.zoom)), 150); } } catch {} }
+function applyGlobalZoom() { panes.forEach(p => { if (!p.zoomIndiv) applyZoom(p, gZoom()); }); sendState(); }
+function setZoom(p, z) {            // pane zoom: changing it makes the pane individual
   if (!p) return;
-  p.zoom = Math.round(Math.min(3, Math.max(0.3, z)) * 100) / 100;
-  p.view.webContents.setZoomFactor(p.zoom);
+  p.zoomIndiv = true; applyZoom(p, z);
   sendState(); save();
 }
+function resetPaneZoom(p) { if (p && p.zoomIndiv) setZoom(p, 1); }
+function setZoomIndiv(p, on) { if (!p) return; p.zoomIndiv = !!on; if (!on) applyZoom(p, gZoom()); sendState(); save(); }
 
 function focusUrlBar() { win.webContents.focus(); win.webContents.send('focus-url', panes[focused]?.id); }
 function handleKey(input, pane) {
@@ -659,6 +671,7 @@ function handleKey(input, pane) {
   }
   if (!mod) return false;
   if (input.alt && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(k)) { moveFocus(k.slice(5)); return true; }
+  if (input.alt && !input.shift && ['Equal', 'Minus', 'Digit0'].includes(input.code)) { setGlobalZoom(input.code === 'Digit0' ? 1 : gZoom() + (input.code === 'Equal' ? 0.1 : -0.1)); return true; }   // ⌘⌥= / ⌘⌥- / ⌘⌥0: global zoom
   if (input.alt) return false;
   const fp = panes[focused];
   if (k === 'b' && input.shift) { openOverlay('broadcast'); return true; }
@@ -675,7 +688,7 @@ function handleKey(input, pane) {
   if (k === ']' ) { fp?.view.webContents.navigationHistory.goForward(); return true; }
   if (k === '=' || k === '+' || (k === ';' && input.shift)) { setZoom(fp, (fp?.zoom || 1) + 0.1); return true; }
   if (k === '-') { setZoom(fp, (fp?.zoom || 1) - 0.1); return true; }
-  if (k === '0') { setZoom(fp, 1); return true; }
+  if (k === '0') { resetPaneZoom(fp); return true; }
   const d = parseInt(k, 10);
   if (d >= 1 && d <= PRESET_KEYS.length && !input.shift) { applyPreset(PRESET_KEYS[d - 1]); return true; }
   return false;
@@ -713,8 +726,11 @@ function paneMenu(id) {
     { label: 'このペインの通知をミュート', type: 'checkbox', checked: !!p.muted, click: m => { p.muted = m.checked; updateBadge(); sendState(); save(); } },
     { label: '自動リロード', submenu: RELOAD_CHOICES.map(m => ({ label: m ? `${m}分ごと` : 'オフ', type: 'radio', checked: p.reloadMinutes === m,
       click: () => { p.reloadMinutes = m; p.lastReload = Date.now(); sendState(); save(); } })) },
-    { label: `ズーム（${Math.round((p.zoom || 1) * 100)}%）`, submenu: [
-      { label: '拡大', click: () => setZoom(p, p.zoom + 0.1) }, { label: '縮小', click: () => setZoom(p, p.zoom - 0.1) }, { label: 'リセット', click: () => setZoom(p, 1) }] },
+    { label: `ズーム（${Math.round((p.zoom || 1) * 100)}%${p.zoomIndiv ? '・個別' : ''}）`, submenu: [
+      { label: 'ペインズーム 拡大', click: () => setZoom(p, p.zoom + 0.1) }, { label: 'ペインズーム 縮小', click: () => setZoom(p, p.zoom - 0.1) }, { label: 'ペインズーム リセット', enabled: !!p.zoomIndiv, click: () => setZoom(p, 1) },
+      { label: 'ズームを個別設定（全体に反映しない）', type: 'checkbox', checked: !!p.zoomIndiv, click: m => setZoomIndiv(p, m.checked) },
+      { type: 'separator' },
+      { label: `全体ズーム（${Math.round(gZoom() * 100)}%） 拡大`, click: () => setGlobalZoom(gZoom() + 0.1) }, { label: '全体ズーム 縮小', click: () => setGlobalZoom(gZoom() - 0.1) }, { label: '全体ズーム リセット', click: () => setGlobalZoom(1) }] },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { type: 'separator' },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
@@ -945,7 +961,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   loadWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
@@ -1010,9 +1026,13 @@ function buildMenu() {
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),
-      acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, '拡大'),
-      acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, '縮小'),
-      acc('CmdOrCtrl+0', () => { const k = cur(); k?.setZoom(k.focusedPane, 1); }, '実際のサイズ'),
+      acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, 'ペインズーム 拡大（このペインだけ・個別になります）'),
+      acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, 'ペインズーム 縮小'),
+      acc('CmdOrCtrl+0', () => { const k = cur(); k?.resetPaneZoom(k.focusedPane); }, 'ペインズーム リセット（個別のペインのみ）'),
+      { label: 'ズームの個別設定を切替（個別＝全体に反映しない）', click: () => { const k = cur(), fp = k?.focusedPane; if (fp) k.setZoomIndiv(fp, !fp.zoomIndiv); } },
+      acc('CmdOrCtrl+Alt+=', () => setGlobalZoom(gZoom() + 0.1), '全体ズーム 拡大'),
+      acc('CmdOrCtrl+Alt+-', () => setGlobalZoom(gZoom() - 0.1), '全体ズーム 縮小'),
+      acc('CmdOrCtrl+Alt+0', () => setGlobalZoom(1), '全体ズーム リセット'),
       { type: 'separator' },
       { role: 'togglefullscreen', label: 'フルスクリーン' },
       { label: 'アプリUIの開発者ツール', click: () => cur()?.win.webContents.openDevTools({ mode: 'detach' }) } ] },
@@ -1193,6 +1213,19 @@ ipcMain.handle('aiusage:get', async (_, kind, force) => {
   const r = await AIU.get(kind, !!force);
   dlog('aiusage', kind, (r.ok ? 'ok ' : 'err ') + (r.stale ? 'STALE ' : '') + (r.buckets || []).map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') + (r.err ? ' | ' + r.err : ''));
   return r;
+});
+ipcMain.handle('claude:auth-dialog', async e => {
+  const w = BrowserWindow.fromWebContents(e.sender) || undefined;
+  const repoll = () => AIU.get('claude', true).catch(() => {});
+  const { response } = await dialog.showMessageBox(w, { type: 'warning', message: 'Claudeの認証が切れています', detail: 'Claudeの使用量を表示するには、Claude Codeの再ログインが必要です。', buttons: ['自動で再認証を試す', 'ターミナルでログイン', '閉じる'], defaultId: 0, cancelId: 2, noLink: true });
+  if (response === 0) {
+    const ok = await AIU.claudeReauth(); const r = await repoll();
+    if (!r || r.needLogin || !r.ok) await dialog.showMessageBox(w, { type: 'info', message: ok ? '再認証は実行しましたが、まだ取得できません' : '自動での再認証に失敗しました', detail: '「ターミナルでログイン」から、Claude Codeにログインしてください。', buttons: ['閉じる'] });
+  } else if (response === 1) {
+    AIU.openClaudeLoginInTerminal();
+    [30000, 90000, 180000].forEach(ms => setTimeout(repoll, ms));      // pick up the new login shortly after
+  }
+  return response;
 });
 ipcMain.handle('usage:detail', () => usageDetail());
 ipcMain.handle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });

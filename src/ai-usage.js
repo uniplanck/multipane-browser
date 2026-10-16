@@ -79,11 +79,46 @@ function claudeToken() {
   });
 }
 async function fetchClaude() {
+  const authErr = m => { const e = new Error(m); e.auth = true; return e; };
   const c = await claudeToken();
-  if (!c) throw new Error('Claude Codeにログインしていません');
-  if (c.exp && c.exp < Date.now() - 60000) throw new Error('Claudeのログインが期限切れです（Claude Codeを一度起動して更新）');
+  if (!c) throw authErr('Claude Codeにログインしていません');
+  if (c.exp && c.exp < Date.now() - 60000) throw authErr('Claudeのログインが期限切れです');
   try { return claudeParse(await getJson('https://api.anthropic.com/api/oauth/usage', { Authorization: 'Bearer ' + c.t, 'anthropic-beta': 'oauth-2025-04-20' })); }
-  catch (e) { if (e.auth) throw new Error('Claudeのログインが期限切れです（Claude Codeを一度起動して更新）'); throw e; }
+  catch (e) { if (e.auth) throw authErr('Claudeのログインが期限切れです'); throw e; }
+}
+
+// ---- silent re-auth through the Claude CLI (the same mechanism Claude Code itself uses to refresh its login) ----
+// We never read or store the refresh token: `claude -p ok` makes Claude Code refresh its own credentials. Own timeout (macOS has no `timeout`).
+const EXTRA_BIN = () => ['.local/bin', '.claude/local', '.hermes/node/bin', '.bun/bin', '.npm-global/bin', '.volta/bin', 'bin'].map(d => path.join(os.homedir(), d)).concat(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']);
+let claudeBin = null;
+function findClaude() {
+  return new Promise(res => {
+    if (claudeBin) return res(claudeBin);
+    const hit = EXTRA_BIN().map(d => path.join(d, 'claude')).find(f => { try { fs.accessSync(f, fs.constants.X_OK); return true; } catch { return false; } });
+    if (hit) { claudeBin = hit; return res(hit); }
+    execFile('/bin/zsh', ['-lc', 'command -v claude'], { timeout: 8000 }, (err, so) => { const f = !err && String(so || '').trim().split('\n').pop(); claudeBin = f && f.startsWith('/') ? f : null; res(claudeBin); });
+  });
+}
+const cliEnv = () => ({ ...process.env, PATH: [...new Set(EXTRA_BIN().concat(String(process.env.PATH || '').split(':')))].join(':'), CI: '1' });
+async function claudeCliRefresh(ms = 90000) {
+  const bin = await findClaude(); if (!bin) return false;
+  const { spawn } = require('child_process');
+  return new Promise(res => {
+    let done = false, p;
+    const fin = ok => { if (done) return; done = true; clearTimeout(tm); res(ok); };
+    try { p = spawn(bin, ['-p', 'ok'], { env: cliEnv(), stdio: ['ignore', 'ignore', 'ignore'] }); } catch { return res(false); }
+    const tm = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} fin(false); }, ms);
+    p.on('error', () => fin(false)); p.on('close', code => fin(code === 0));
+  });
+}
+async function claudeReauth() {
+  const ok = await claudeCliRefresh();
+  saveSt('claude', { refreshTry: Date.now(), nextAt: 0, lastTry: 0 });
+  return ok;
+}
+function openClaudeLoginInTerminal() {
+  // Terminal.app runs the user's own login shell (so its PATH finds `claude`); the user then signs in there.
+  execFile('/usr/bin/osascript', ['-e', 'tell application "Terminal" to activate', '-e', 'tell application "Terminal" to do script "claude"'], () => {});
 }
 
 // ---- fetch scheduling: shared on-disk state (no tokens), min interval, 429 back-off, single poller ----
@@ -100,26 +135,37 @@ const clock = t => new Date(t).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tok
 function view(k) {
   const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
   const base = { at: s.okAt || 0, nextAt: s.nextAt || 0 };
-  if (!has) return { ok: false, err: s.err || 'まだ取得していません', buckets: [], ...base };
+  if (!has) return { ok: false, needLogin: !!s.authErr, err: s.err || 'まだ取得していません', buckets: [], ...base };
   const now = Date.now(), stale = !!(s.err || (s.okAt && now - s.okAt > 15 * 60000));
   let err = s.err || '';
   if (/429/.test(err)) err = 'HTTP 429（制限中のため前回の値を表示）' + (s.nextAt > now ? `　次回取得 ${clock(s.nextAt)}以降` : '');
   else if (err) err = err + '（前回の値を表示）';
   else if (stale) err = '最終更新から時間が経っています';
-  return { ok: !(s.authErr), buckets: s.buckets, ...base, ...(stale ? { stale: true, err } : {}), ...(s.authErr ? { err: s.err } : {}) };
+  return { ok: !(s.authErr), needLogin: !!s.authErr, buckets: s.buckets, ...base, ...(stale ? { stale: true, err } : {}), ...(s.authErr ? { err: s.err } : {}) };
 }
+const REAUTH_GAP = 10 * 60000;
 async function doFetch(k) {
   const now = Date.now(), prev = stOf(k);
   saveSt(k, { lastTry: now, leader: { pid: process.pid, at: now } });
+  const run = () => (k === 'codex' ? fetchCodex() : fetchClaude());
   try {
-    const buckets = await (k === 'codex' ? fetchCodex() : fetchClaude());
+    let buckets;
+    try { buckets = await run(); }
+    catch (e) {
+      // expired / invalid Claude login: one silent refresh via the CLI, at most once per 10 min, never while rate-limited
+      const limited = prev.nextAt && Date.now() < prev.nextAt;
+      if (k === 'claude' && e && e.auth && !limited && Date.now() - (prev.refreshTry || 0) > REAUTH_GAP) {
+        saveSt(k, { refreshTry: Date.now() });
+        if (await claudeCliRefresh()) buckets = await run(); else throw e;
+      } else throw e;
+    }
     saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false });
   } catch (e) {
     const msg = String(e && e.message || e), fails = (prev.fails || 0) + 1;
     if (e && e.status === 429) {
       const wait = Math.max((e.retryAfter || 0) * 1000, BACKOFF[Math.min(fails - 1, BACKOFF.length - 1)] * 60000);
       saveSt(k, { fails, nextAt: Date.now() + wait, err: msg + (e.retryAfter ? ` Retry-After ${e.retryAfter}s` : ' (Retry-Afterなし)') });
-    } else if (/ログイン|期限切れ/.test(msg)) saveSt(k, { fails, err: msg, authErr: true });
+    } else if (e && e.auth) saveSt(k, { fails, err: msg, authErr: true });
     else saveSt(k, { fails, err: msg, authErr: false });
   }
   try { onChange && onChange(k); } catch {}
@@ -141,4 +187,4 @@ async function get(k, force) {
   return view(k);
 }
 const peek = k => view(k);
-module.exports = { get, peek, codexParse, claudeParse, setOnChange: f => { onChange = f; } };
+module.exports = { get, peek, claudeReauth, openClaudeLoginInTerminal, codexParse, claudeParse, setOnChange: f => { onChange = f; } };
