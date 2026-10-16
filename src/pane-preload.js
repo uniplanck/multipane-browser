@@ -1,6 +1,6 @@
 // Preload for web content panes. Exposes NOTHING to the page (no contextBridge);
 // it only observes the DOM from the isolated world and reports coarse signals to the main process.
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, webFrame } = require('electron');
 
 let lastLen = -1, timer = null;
 
@@ -197,3 +197,31 @@ window.addEventListener('focusout', () => setTimeout(reportEditing, 0), true);
 // Real user interaction in this pane (clears its update highlight).
 window.addEventListener('mousedown', () => ipcRenderer.send('pane:interact'), true);
 window.addEventListener('mouseup', () => ipcRenderer.send('pane:mouseup'), true);
+
+// ---- cloud PC (the bot's "ボットのコンピュータビュー" dialog) ----
+// grok.com sizes that dialog to the viewport: padding 8vw/8dvh and width min(100cqw, 1080px, 160cqh). When requested by the app
+// (menu / ⌘⇧P) we open the page's own "コンピュータを表示" button if needed and relax those limits so it fills the pane.
+const PC_CSS = `[role="dialog"] [class*="container-type:size"]{padding:10px !important}
+[role="dialog"] [class*="container-type:size"] > div[style*="cqw"]{width:min(100cqw,160cqh) !important}`;
+let pcCss = null, pcTimer = null;
+function pcStop(notify) {
+  clearInterval(pcTimer); pcTimer = null;
+  if (pcCss != null) { try { webFrame.removeInsertedCSS(pcCss); } catch {} pcCss = null; }
+  if (notify) ipcRenderer.send('pane:pc-closed');
+}
+ipcRenderer.on('mpb:pc', (_e, on) => {
+  if (!on) { pcStop(false); return; }
+  if (pcCss == null) { try { pcCss = webFrame.insertCSS(PC_CSS); } catch {} }
+  const open = () => !!document.querySelector('[data-bot-computer-vnc]');
+  if (!open()) {
+    const b = [...document.querySelectorAll('button,[role="button"]')].find(x => /コンピュータを表示|show computer|view computer/i.test(x.getAttribute('aria-label') || ''));
+    if (b) b.click();
+  }
+  let seen = open(), waited = 0;
+  clearInterval(pcTimer);
+  pcTimer = setInterval(() => {            // when the computer view goes away (Esc / close button) hand the pane back
+    waited += 400;
+    if (open()) { seen = true; return; }
+    if (seen || waited > 5000) pcStop(true);
+  }, 400);
+});

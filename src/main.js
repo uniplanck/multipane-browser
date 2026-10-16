@@ -250,6 +250,18 @@ function toggleMaximize(id) {
   relayout(true);
   p.view.webContents.focus();
 }
+// "クラウドPCを最大化": the bot's computer view is a modal that scales with the pane's viewport (and caps at 1080 px).
+// Maximise the pane to the window and have the page's own "コンピュータを表示" dialog fill it (see pane-preload).
+function setPcMax(p, on) {
+  dlog(`pane${p?.id}`, 'pcmax', on);
+  if (!p || p.view.webContents.isDestroyed() || on === !!p.pcMax) return;
+  p.pcMax = on;
+  if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.pcMaxedPane = true; } else p.pcMaxedPane = false; }
+  else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id) toggleMaximize(p.id); }
+  p.view.webContents.send('mpb:pc', on);
+}
+function togglePc(id) { const p = byId(id ?? panes[focused]?.id); if (p && isBotUrl(p.view.webContents.getURL())) setPcMax(p, !p.pcMax); }
+const pcItem = p => ({ label: p.pcMax ? 'クラウドPCを元のサイズに戻す' : 'クラウドPCを最大化', accelerator: 'CmdOrCtrl+Shift+P', enabled: isBotUrl(p.view.webContents.getURL()), click: () => setPcMax(p, !p.pcMax) });
 function swapPanes(a, b) {
   const i = panes.findIndex(p => p.id === a), j = panes.findIndex(p => p.id === b);
   if (i < 0 || j < 0 || i === j) return;
@@ -541,7 +553,7 @@ function addPane(spec = {}, { focus = true } = {}) {
   const upd = () => { sendState(); save(); };
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
-  wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; });
+  wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { sendState(); markActivity(p, 'title'); });
@@ -565,6 +577,7 @@ function addPane(spec = {}, { focus = true } = {}) {
       { label: 'リンクをコピー', click: () => clipboard.writeText(params.linkURL) }, { label: 'ブラウザで開く', click: () => shell.openExternal(params.linkURL) }, { type: 'separator' });
     if (params.selectionText) items.push({ role: 'copy', label: 'コピー' });
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
+    if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
     items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
       { label: '再読み込み', click: () => reloadPane(p) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window: win });
@@ -609,6 +622,7 @@ function handleKey(input, pane) {
   const mod = isMac ? input.meta : input.control;
   if (k === 'escape' && !mod && !input.alt && !input.shift) {
     if (overlayOpen) { closeOverlay(); return true; }
+    if (pane?.pcMax) return false;                         // Esc closes the page's computer view first (the pane then returns to normal)
     if (maximizedId != null) { toggleMaximize(maximizedId); return true; }
     return false;
   }
@@ -617,6 +631,7 @@ function handleKey(input, pane) {
   if (input.alt) return false;
   const fp = panes[focused];
   if (k === 'b' && input.shift) { openOverlay('broadcast'); return true; }
+  if (k === 'p' && input.shift) { togglePc(); return true; }
   if (k === 'k') { overlayOpen ? closeOverlay() : openOverlay('palette'); return true; }
   if (k === 't') { closeOverlay(); newPane(''); return true; }
   if (k === 'w' && !input.shift) { if (fp) closePane(fp.id); return true; }
@@ -672,6 +687,7 @@ function paneMenu(id) {
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { type: 'separator' },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
+    pcItem(p),
     { label: '複製', enabled: panes.length < MAX, click: () => { const q = addPane({ ...paneSpec(p), name: p.name ? p.name + ' (2)' : '' }); relayout(true); } },
     { label: 'URLをコピー', click: () => clipboard.writeText(paneUrl(p)) },
     { label: 'ブラウザで開く', enabled: !!paneUrl(p), click: () => shell.openExternal(paneUrl(p)) },
@@ -803,6 +819,7 @@ function chipMenu(id) {
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
+    pcItem(p),
     { type: 'separator' },
     { label: '閉じる（新しいタブに戻す）', click: () => { p.name = ''; loadInto(p.view.webContents, ''); sendState(); save(); } },
     { label: 'ペインごと閉じる', click: () => closePane(id) },
@@ -851,6 +868,7 @@ paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
   if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, method: String(c.method).slice(0, 40) });
 });
+paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
 paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
 paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
@@ -894,7 +912,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   loadWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
@@ -958,6 +976,7 @@ function buildMenu() {
       acc('CmdOrCtrl+R', () => { const fp = cur()?.focusedPane; if (fp) reloadPane(fp); }, 'ペインを再読み込み'),
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
+      acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, '拡大'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, '縮小'),
       acc('CmdOrCtrl+0', () => { const k = cur(); k?.setZoom(k.focusedPane, 1); }, '実際のサイズ'),
@@ -1029,6 +1048,7 @@ function startup() {
   wins.forEach(w => makeWindow(w, { restore: true }));
   buildMenu();
 
+  if (process.env.MPB_AUTO_PC) setTimeout(() => { const c = ctxs[0], p = c.panes[Number(process.env.MPB_AUTO_PC)]; dlog('auto-pc', p ? p.id : 'none', p ? p.view.webContents.getURL() : ''); if (p) c.togglePc(p.id); }, Number(process.env.MPB_AUTO_PC_DELAY || 40000));   // dev only: exercise the cloud-PC maximise
   if (process.env.MPB_SCREENSHOT) setTimeout(async () => {
     const c = ctxs[0];
     if (process.env.MPB_PALETTE) { c.openOverlay('palette'); await sleep(1200); }
