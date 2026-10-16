@@ -425,15 +425,19 @@ function moveFocus(dir) {
 // ---- load reduction ----
 function applyThrottling() {
   panes.forEach((p, i) => {
-    const rate = settings.ecoMode && !process.env.MPB_NO_ECO && i !== focused ? 2 : 1;
+    const wc = p.view.webContents; if (wc.isDestroyed()) return;
+    // never slow a pane that is still loading / being fixed (that made background panes load twice as slowly)
+    const settled = !wc.isLoading() && !p.grokToken && !p.grokPending && Date.now() - (p.loadedAt || 0) > 3000;
+    const rate = settings.ecoMode && !process.env.MPB_NO_ECO && i !== focused && settled ? 2 : 1;
     if (p.cpuRate === rate) return;
-    const dbg = p.view.webContents.debugger;
+    const dbg = wc.debugger;
     try {
       if (!dbg.isAttached()) dbg.attach('1.3');
       dbg.sendCommand('Emulation.setCPUThrottlingRate', { rate }).then(() => { p.cpuRate = rate; }).catch(() => {});
     } catch { /* devtools open or attach failed: just skip */ }
   });
 }
+setInterval(() => { if (!win || win.isDestroyed()) return; try { applyThrottling(); } catch {} }, 5000);   // picks up panes that finished loading
 
 // ---- grok.com/bot/<id> workaround ----
 // grok.com renders the bot chat only after client-side navigation. After a direct load we
@@ -456,25 +460,30 @@ async function grokProbe(wc, id) {
   try { return await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: probeCode(id) }]); }
   catch (e) { return 'error:' + e.message; }
 }
+const PUSH_GAP = Number(process.env.MPB_PUSH_GAP) || 3000, PUSH_FIRST = Number(process.env.MPB_PUSH_FIRST) || 1000;
 async function grokFix(p, target, id, viaHome) {
   const wc = p.view.webContents, token = p.grokToken = Symbol();
   const alive = () => !wc.isDestroyed() && p.grokToken === token;
   p.botTarget = target;
   dlog(`pane${p.id}`, 'grokfix start', viaHome ? '(via home)' : '(direct)', target);
-  // Fast path: as soon as Next's router is up, do the known-good '/' -> target hop.
-  for (let k = 0; k < 40 && alive(); k++) {
-    await sleep(250);
+  // Fast path: poll for the rendered chat; whenever Next's router is up and the page is still not rendered, do the known-good '/' -> target hop
+  // (re-tried every ~6 s while it keeps failing, so a push that landed before hydration is not lost).
+  let lastPush = 0, pushes = 0; const t0 = Date.now();
+  for (let k = 0; k < 70 && alive(); k++) {
+    await sleep(k === 0 ? 120 : 350);
     const pr = await grokProbe(wc, id);
-    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr); p.loadedAt = Date.now(); p.grokToken = null; return; }
-    const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
-      if (r && typeof r.push === 'function') { r.push('/'); setTimeout(() => r.push(${JSON.stringify('/bot/' + id)}), 350); return 'ok'; } return 'no'; })()`).catch(() => 'no');
-    if (rr !== 'ok') continue;
-    dlog(`pane${p.id}`, 'grokfix fast push at', (k + 1) * 250, 'ms');
-    for (let j = 0; j < 30 && alive(); j++) {
-      await sleep(200);
-      if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'grokfix ok (fast)'); p.loadedAt = Date.now(); p.grokToken = null; return; }
+    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr, pushes ? `after ${pushes} push(es)` : ''); p.loadedAt = Date.now(); p.grokToken = null; p.hardTries = 0; p.wdTries = 0; applyThrottling(); return; }
+    if (pushes >= 2 && Date.now() - lastPush > PUSH_GAP && (p.hardTries || 0) < 3) {
+      // the router hop keeps missing: start over with a fresh load of the bot URL (bounded) instead of pushing forever
+      p.hardTries = (p.hardTries || 0) + 1; p.grokToken = null;
+      dlog(`pane${p.id}`, 'grokfix: hop failed twice -> hard reload', p.hardTries);
+      wc.loadURL(target).catch(() => {}); return;
     }
-    break;
+    if (pushes < 6 && Date.now() - lastPush > PUSH_GAP && Date.now() - t0 > PUSH_FIRST) {
+      const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
+        if (r && typeof r.push === 'function') { r.push('/'); setTimeout(() => r.push(${JSON.stringify('/bot/' + id)}), 350); return 'ok'; } return 'no'; })()`).catch(() => 'no');
+      if (rr === 'ok') { lastPush = Date.now(); pushes++; dlog(`pane${p.id}`, 'grokfix push', pushes); }
+    }
   }
   for (let i = 0; i < 8 && alive(); i++) {
     await sleep(i === 0 ? 300 : 1200);
@@ -509,7 +518,7 @@ async function grokFix(p, target, id, viaHome) {
     }
   }
   if (!alive()) return;
-  p.grokToken = null; p.loadedAt = Date.now();
+  p.grokToken = null; p.loadedAt = Date.now(); applyThrottling();
   if (!viaHome) {                                  // fallback: go home, then click the bot link
     dlog(`pane${p.id}`, 'grokfix fallback: load grok.com/ then navigate');
     p.grokPending = { target, id };
@@ -518,6 +527,26 @@ async function grokFix(p, target, id, viaHome) {
     dlog(`pane${p.id}`, 'grokfix gave up; leaving page as is', target);
   }
 }
+// Watchdog: a bot pane that is on screen, finished its fix routine, and still shows no chat box (blank / landing page) is reloaded
+// through the fast path. Bounded (3 tries per pane, spaced out) so it can never loop.
+const GROK_RENDERED = id => `(() => { const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  return location.pathname.includes(${JSON.stringify(id)}) && [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis) || /Page not found/i.test((document.body && document.body.innerText) || ''); })()`;
+setInterval(async () => {
+  for (const c of ctxs) for (const p of c.panes) {
+    try {
+      const wc = p.view.webContents;
+      if (wc.isDestroyed() || p.grokToken || p.grokPending || wc.isLoading() || (p.loadStartedAt && !p.loadDone) || !settings.grokFix) continue;
+      const m = wc.getURL().match(GROK_BOT_RE); const id = m ? m[1] : (p.botTarget && wc.getURL().startsWith('https://grok.com') ? (p.botTarget.match(GROK_BOT_RE) || [])[1] : null);
+      if (!id) continue;
+      const b = p.view.getBounds(); if (!b.width || !b.height || Date.now() - (p.loadedAt || 0) < 20000 || Date.now() - (p.lastReload || 0) < 20000) continue;
+      if (await wc.executeJavaScript(GROK_RENDERED(id)).catch(() => true)) { p.wdTries = 0; continue; }
+      if ((p.wdTries || 0) >= 3 || Date.now() - (p.wdAt || 0) < 30000) continue;
+      p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now();
+      dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries);
+      reloadPane(p);
+    } catch {}
+  }
+}, 10000);
 function onGrokLoad(p) {
   if (!settings.grokFix) { p.grokPending = null; return; }
   const url = p.view.webContents.getURL();
@@ -568,7 +597,30 @@ async function reloadPane(p) {
 }
 
 // ---- panes ----
-function addPane(spec = {}, { focus = true } = {}) {
+// Startup / workspace loads are staggered: focused pane first, then the rest with at most LOAD_CONC loading at a time
+// (8 heavy grok.com pages at once starve each other, the router hop is missed and panes stay blank).
+const loadQ = []; let loadTimer = null;
+const LOAD_CONC = Number(process.env.MPB_LOAD_CONC) || 3;
+function pumpLoads() {
+  const step = () => {
+    const now = Date.now();
+    for (const p of panes) if (p.loadStartedAt && !p.loadDone) {
+      const wc = p.view.webContents;
+      if (wc.isDestroyed() || (!wc.isLoading() && !p.grokToken && !p.grokPending && now - p.loadStartedAt > 1500) || now - p.loadStartedAt > 25000) p.loadDone = true;
+    }
+    let act = panes.filter(p => p.loadStartedAt && !p.loadDone).length;
+    while (act < LOAD_CONC && loadQ.length) {
+      loadQ.sort((a, b) => (panes[focused] === b ? 1 : 0) - (panes[focused] === a ? 1 : 0));
+      const p = loadQ.shift();
+      if (!panes.includes(p) || p.view.webContents.isDestroyed()) continue;
+      p.loadStartedAt = now; dlog(`pane${p.id}`, 'start load', act + 1); loadInto(p.view.webContents, p.url); act++;
+    }
+    if (!loadQ.length && !panes.some(p => p.loadStartedAt && !p.loadDone)) { clearInterval(loadTimer); loadTimer = null; }
+  };
+  if (!loadTimer) loadTimer = setInterval(step, 300);
+  step();
+}
+function addPane(spec = {}, { focus = true, defer = false } = {}) {
   if (panes.length >= MAX) return null;
   const view = new WebContentsView({ webPreferences: {
     preload: process.env.MPB_NO_PRELOAD ? undefined : path.join(__dirname, 'pane-preload.js'),
@@ -596,6 +648,7 @@ function addPane(spec = {}, { focus = true } = {}) {
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
   wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); });
   wc.on('console-message', e => {
+    if (!debugOn()) return;
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
   });
   wc.on('did-fail-load', (e, code, desc, url, isMain) => dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'));
@@ -619,7 +672,7 @@ function addPane(spec = {}, { focus = true } = {}) {
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   panes.push(p);
-  loadInto(wc, p.url);
+  if (defer && p.url && p.url !== NEWTAB) loadQ.push(p); else loadInto(wc, p.url);
   if (focus) setFocused(panes.length - 1);
   relayout();
   return p;
@@ -754,9 +807,9 @@ function loadWorkspace(name) {
   maximizedId = null;
   [...panes].forEach(p => closePane(p.id, true));
   if (PRESETS[ws.layout]) layout = ws.layout;
-  (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false }));
+  (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
   if (!panes.length) addPane({ url: '' });
-  setFocused(0); relayout(); save();
+  setFocused(0); pumpLoads(); relayout(); save();
 }
 function runAction(a) {
   if (!a || typeof a !== 'object') return;
@@ -995,8 +1048,9 @@ overlay.webContents.loadFile(path.join(__dirname, 'overlay.html'));
 overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
 
 const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ url: '' }];
-specs.slice(0, MAX).forEach(s => addPane(s, { focus: false }));
+specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
 setFocused(Math.min(spec.focused || 0, panes.length - 1));
+pumpLoads();
 relayout();
 broadcast();
 return ctx;
