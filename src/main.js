@@ -62,9 +62,16 @@ let lastClosedSnapshot = null;
 let quitting = false;
 function save() { if (quitting) return; clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 500); }
 function load() { try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return null; } }
+// A pane that is still waiting in the startup queue, mid-redirect or on an error page reports about:blank / '' / chrome-error:.
+// That must never be saved, reopened or reloaded: fall back to the pane's own intended URL (p.url follows the last real page).
+const BOT_URL_RE = /^https:\/\/grok\.com\/bot\/[A-Za-z0-9_-]+\/?(?:[?#].*)?$/;
+const isBlankUrl = u => !u || u === 'about:blank' || /^chrome-error:/.test(u);
 function paneUrl(p) {
-  if (!p.view || p.view.webContents.isDestroyed()) return p.url === NEWTAB ? '' : p.url;
-  const u = (p.view.webContents.isDestroyed() ? p.url : p.view.webContents.getURL()) || p.url;
+  const keep = p.url === NEWTAB ? '' : (isBlankUrl(p.url) ? '' : p.url);
+  if (!p.view || p.view.webContents.isDestroyed()) return keep;
+  const u = p.view.webContents.getURL();
+  if (isBlankUrl(u)) return p.botTarget && keep && !BOT_URL_RE.test(keep) ? p.botTarget : keep;
+  if (p.botTarget && (p.grokToken || p.grokPending) && /^https:\/\/grok\.com\/?$/.test(u)) return p.botTarget;   // mid-fix hop through the home page
   return u.startsWith('file:') && u.includes('newtab.html') || u === NEWTAB ? '' : u;
 }
 
@@ -532,11 +539,15 @@ async function grokFix(p, target, id, viaHome) {
 const GROK_RENDERED = id => `(() => { const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   return location.pathname.includes(${JSON.stringify(id)}) && [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis) || /Page not found/i.test((document.body && document.body.innerText) || ''); })()`;
 setInterval(async () => {
+  if (process.env.MPB_NO_WATCHDOG) return;
   for (const c of ctxs) for (const p of c.panes) {
     try {
       const wc = p.view.webContents;
       if (wc.isDestroyed() || p.grokToken || p.grokPending || wc.isLoading() || (p.loadStartedAt && !p.loadDone) || !settings.grokFix) continue;
-      const m = wc.getURL().match(GROK_BOT_RE); const id = m ? m[1] : (p.botTarget && wc.getURL().startsWith('https://grok.com') ? (p.botTarget.match(GROK_BOT_RE) || [])[1] : null);
+      if (loadQ.includes(p)) continue;                                  // still queued at startup: about:blank is expected
+      const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
+      const own = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);   // the pane's own bot link
+      const id = m ? m[1] : (own && (isBlankUrl(cu) || cu.startsWith('https://grok.com')) ? (own.match(GROK_BOT_RE) || [])[1] : null);
       if (!id) continue;
       const b = p.view.getBounds(); if (!b.width || !b.height || Date.now() - (p.loadedAt || 0) < 20000 || Date.now() - (p.lastReload || 0) < 20000) continue;
       if (await wc.executeJavaScript(GROK_RENDERED(id)).catch(() => true)) { p.wdTries = 0; continue; }
@@ -566,14 +577,22 @@ function onGrokLoad(p) {
 async function reloadPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
   p.lastReload = Date.now();
-  p.grokPending = null; p.grokSkipOnce = false;
+  p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
+  const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
+  p.loadStartedAt = 0; p.loadDone = true;
   const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
   const remembered = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
-  const target = m ? cu : (remembered && (!cu || /^https:\/\/grok\.com\//.test(cu)) ? remembered : null);   // a pane that gave up sits on grok.com home: use its remembered bot link
+  const target = m ? cu : (remembered && (!cu || /^(?:about:blank|chrome-error:|https:\/\/grok\.com\/)/.test(cu)) ? remembered : null);   // a pane that gave up sits on grok.com home: use its remembered bot link
   const id = target && target.match(GROK_BOT_RE)?.[1];
-  if (!id || !settings.grokFix) { p.grokToken = null; wc.reload(); return; }
+  if (!id || !settings.grokFix) {
+    p.grokToken = null;
+    if (isBlankUrl(cu) && !isBlankUrl(p.url) && p.url !== NEWTAB) wc.loadURL(p.url).catch(() => {}); else wc.reload();   // blank pane: reload its own URL, not about:blank
+    return;
+  }
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
+  if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
+  try { applyThrottling(); } catch {}                      // grokToken is set -> CPU throttle off while we reload
   dlog(`pane${p.id}`, 'reload fast path', target);
   const t0 = Date.now();
   while (!wc.isDestroyed() && p.grokToken === token && Date.now() - t0 < 1000) {
@@ -641,6 +660,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   const upd = () => { sendState(); save(); };
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
+  const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
+  wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
   wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
@@ -875,19 +896,18 @@ function wsMenu() {
     { label: '削除', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => { delete workspaces[n]; save(); buildMenu(); broadcast(); } })) : [{ label: '-', enabled: false }] },
   ]).popup({ window: win });
 }
-let reloadingAll = false;
-async function reloadAll() {
-  if (reloadingAll) return; reloadingAll = true;
-  try {
-    for (const p of [...panes]) {
-      if (p.view.webContents.isDestroyed()) continue;
-      const u = paneUrl(p); p.lastReload = Date.now();
-      try { reloadPane(p); } catch (e) { dlog(`pane${p.id}`, 'reload-all err', String(e)); }
-      await sleep(300);
-    }
-    dlog('reload-all done', panes.length);
-    fetchUsage();
-  } finally { reloadingAll = false; }
+// Reload-all: every pane starts at the same moment (no queue, no stagger, no debounce, no focus requirement).
+// Panes are already warm (cookies / cache), so 8 in parallel is fine; reloadPane clears all retry state and the CPU throttle
+// stays off while reloading (applyThrottling re-enables it once a pane has been settled for 3 s).
+function reloadAll() {
+  loadQ.length = 0;
+  for (const p of [...panes]) {
+    if (p.view.webContents.isDestroyed()) continue;
+    reloadPane(p).catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e)));
+  }
+  dlog('reload-all started', panes.length);
+  setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
+  fetchUsage();
 }
 // ---- usage hover popover (lives in the overlay view, sized to the popover so it never blocks the panes) ----
 let popOpen = false, popTimer = null, popRect = null;
@@ -1219,10 +1239,10 @@ async function fetchUsage() {
     const per = fields.find(([f, v]) => f === 8 && typeof v !== 'number');
     if (per) { const e = pbFields(per[1]).find(([f]) => f === 3); if (e) { const sec = pbFields(e[1]).find(([f]) => f === 1); if (sec) periodEnd = sec[1] * 1000; } }
     usageCache = { ok: true, used, periodEnd, at: Date.now() };
-    const dk = UD.dayKey(Date.now());
+    const dk = UD.dayKey(nowT());
     const ub = settings.usageBase, newPeriod = !!(ub && ub.periodEnd && periodEnd && Math.abs(ub.periodEnd - periodEnd) > 3600000);
-    if (newPeriod || (ub && used < ub.used)) settings.usageBase = { day: dk, used: 0, at: Date.now(), periodEnd };   // new weekly period: starts at 0% used
-    else if (!ub || ub.day !== dk) settings.usageBase = { day: dk, used, at: Date.now(), periodEnd };        // new 09:00 day: baseline = usage at first fetch
+    if (newPeriod || (ub && used < ub.used)) settings.usageBase = { day: dk, used: 0, at: nowT(), periodEnd };   // new weekly period: starts at 0% used
+    else if (!ub || ub.day !== dk) settings.usageBase = { day: dk, used, at: nowT(), periodEnd };        // new 09:00 day: baseline = usage at first fetch
     else if (!ub.periodEnd && periodEnd) settings.usageBase.periodEnd = periodEnd;
     save();
     dlog('usage', JSON.stringify(usageCache));
@@ -1238,11 +1258,12 @@ function fmtTokyo(t) {
   return `${p.month}/${p.day}(${p.weekday}) ${p.hour}:${p.minute}`;
 }
 const UD = require('./usage-days');
+const nowT = () => Date.now();
 function usageDetail() {
   const u = usageCache, margin = Number.isFinite(settings.usageMargin) ? settings.usageMargin : 5;
   const d = { ok: !!u?.ok, err: u?.err || '', margin, at: u?.at || 0, atText: u?.at ? new Intl.DateTimeFormat('ja-JP', { ...TOKYO, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(u.at) : '' };
   if (!u?.ok) return d;
-  const now = Date.now();
+  const now = nowT();
   d.used = u.used; d.left = Math.max(0, 100 - u.used);
   if (u.periodEnd && u.periodEnd > now) {
     const ms = u.periodEnd - now;
@@ -1250,7 +1271,9 @@ function usageDetail() {
     d.remD = Math.floor(ms / 86400000); d.remH = Math.floor(ms % 86400000 / 3600000); d.remM = Math.floor(ms % 3600000 / 60000);
     const ad = UD.allowanceDays(now, u.periodEnd);
     d.days = ad.days; d.daysWhole = ad.whole; d.daysWeight = ad.weight; d.daysFrom = ad.from; d.daysTo = ad.to;
-    const b = settings.usageBase;
+    let b = settings.usageBase;
+    // the day rolled over (09:00 JST) but the baseline fetch has not happened yet (poll pending / no grok pane): assume nothing used yet today
+    if (b && b.day !== UD.dayKey(now) && u.used >= b.used) b = { ...b, day: UD.dayKey(now), used: u.used, at: now };
     if (b && b.day === UD.dayKey(now)) {
       d.baseLeft = Math.max(0, 100 - b.used);
       d.usedToday = Math.max(0, u.used - b.used); d.baseAt = b.at;
@@ -1283,4 +1306,16 @@ ipcMain.handle('claude:auth-dialog', async e => {
 });
 ipcMain.handle('usage:detail', () => usageDetail());
 ipcMain.handle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });
+// Day rollover (09:00 JST): checked every 15 s in the main process (timers in a hidden renderer are throttled) and on app focus.
+// On a change the baseline is re-fetched at once and every window redraws, instead of waiting for the next 5-minute poll.
+let lastDayKey = UD.dayKey(nowT());
+async function checkDayRollover() {
+  const dk = UD.dayKey(nowT());
+  if (dk === lastDayKey) return;
+  lastDayKey = dk; dlog('usage', 'day rollover ->', dk);
+  await fetchUsage().catch(() => {});
+  ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} });
+}
+setInterval(() => { checkDayRollover().catch(() => {}); }, 15000);
+app.on('browser-window-focus', () => { checkDayRollover().catch(() => {}); });
 ipcMain.handle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());
