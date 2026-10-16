@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('mpb', {
   favMove: (a, b) => send('fav-move', a, b), favAdd: (url, label) => send('fav-add', String(url), String(label || '')),
   renamePane: id => send('rename-pane', id),
   chipMenu: id => send('chip-menu', id), wsMenu: () => send('ws-menu'),
-  splitStart: (a, i) => send('split-start', a, i), splitEnd: () => send('split-end'), splitReset: a => send('split-reset', a),
+  splitStart: (a, i, row) => send('split-start', a, i, row), syncCols: v => send('sync-cols', v), syncReset: () => send('sync-reset'), splitEnd: () => send('split-end'), splitReset: (a, row) => send('split-reset', a, row),
   reloadAll: () => send('reload-all'),
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),
   usageMargin: v => ipcRenderer.invoke('usage:margin', v),

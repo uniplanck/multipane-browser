@@ -171,3 +171,10 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .chip .cicon{cursor:pointer}
 .chip .cicon.copied{background:var(--wait);color:#fff}
 .pane.waiting.unread{box-shadow:0 0 0 1px var(--wait),0 0 16px color-mix(in srgb,var(--wait) 50%,transparent);animation:none}
+
+/* 上下の幅を同期 */
+#sync-cols{display:grid;place-items:center;color:var(--dim)}
+#sync-cols.on{color:#fff;background:var(--accent)}
+#sync-cols.na{opacity:.35;cursor:default}
+#sync-cols.pulse{animation:syncpulse .7s ease-out}
+@keyframes syncpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 80%,transparent);transform:scale(1)}40%{transform:scale(1.18)}100%{box-shadow:0 0 0 9px transparent;transform:scale(1)}}

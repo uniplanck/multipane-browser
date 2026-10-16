@@ -102,6 +102,19 @@ function favHtml(p) {
   return `<span class="letter">${esc((p.name || p.title || '?').trim().charAt(0).toUpperCase() || '•')}</span>`;
 }
 
+// 上下の幅を同期: short press = ON/OFF, long press (600 ms) = even columns in all rows
+const SYNC_ON = '<svg viewBox="0 0 18 16" width="18" height="16"><rect x="1.5" y="1.5" width="6.5" height="5.5" rx="1.4" fill="currentColor"/><rect x="10" y="1.5" width="6.5" height="5.5" rx="1.4" fill="currentColor"/><rect x="1.5" y="9" width="6.5" height="5.5" rx="1.4" fill="currentColor"/><rect x="10" y="9" width="6.5" height="5.5" rx="1.4" fill="currentColor"/></svg>';
+const SYNC_OFF = '<svg viewBox="0 0 18 16" width="18" height="16"><rect x="1.5" y="1.5" width="6.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="10" y="1.5" width="6.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="9" width="10.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="14" y="9" width="2.5" height="5.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+const syncEl = $('#sync-cols'); let syncHold = null, syncHeld = false;
+function syncBtn(s) {
+  const on = s.syncCols !== false;
+  syncEl.innerHTML = on ? SYNC_ON : SYNC_OFF;
+  syncEl.classList.toggle('on', on && s.canSync); syncEl.classList.toggle('off', !on); syncEl.classList.toggle('na', !s.canSync);
+  syncEl.title = s.canSync ? `上下の幅を同期: ${on ? 'ON' : 'OFF'}（クリックで切替／長押しで全行を均等幅に）` : '上下の幅を同期: 2段以上のレイアウトで使えます';
+}
+syncEl.onmousedown = () => { syncHeld = false; clearTimeout(syncHold); if (!S || !S.canSync) return; syncHold = setTimeout(() => { syncHeld = true; mpb.syncReset(); syncEl.classList.add('pulse'); setTimeout(() => syncEl.classList.remove('pulse'), 700); }, 600); };
+syncEl.onmouseup = syncEl.onmouseleave = () => clearTimeout(syncHold);
+syncEl.onclick = () => { if (syncHeld || !S || !S.canSync) return; mpb.syncCols(S.syncCols === false); };
 const onS = s => {
   S = s;
   renderFavs(s.favorites || []);
@@ -137,14 +150,15 @@ const onS = s => {
       `<span class="clabel">${esc(lbl)}</span>` + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
   });
 
+  syncBtn(s);
   // splitters
   const sh = $('#splits'); sh.innerHTML = '';
   (s.splitters || []).forEach(g => {
     const e = document.createElement('div'); e.className = 'splitter ' + g.axis;
     Object.assign(e.style, { left: g.x + 'px', top: g.y + 'px', width: g.w + 'px', height: g.h + 'px' });
     e.title = 'ドラッグでサイズ変更・ダブルクリックで均等に戻す';
-    e.onmousedown = ev => { ev.preventDefault(); document.body.classList.add('splitting', 'split-' + g.axis); mpb.splitStart(g.axis, g.i); };
-    e.ondblclick = () => mpb.splitReset(g.axis);
+    e.onmousedown = ev => { ev.preventDefault(); document.body.classList.add('splitting', 'split-' + g.axis); mpb.splitStart(g.axis, g.i, g.row); };
+    e.ondblclick = () => mpb.splitReset(g.axis, g.row);
     sh.appendChild(e);
   });
 

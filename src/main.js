@@ -125,6 +125,20 @@ setInterval(() => {
   }
 }, 15000);
 
+// Column-width sync between grid rows. ON: every row shares settings.splits[k].c. OFF: each row has its own (sp.rc[row]).
+// OFF -> ON aligns every row to the TOP row; ON -> OFF seeds each row with the current shared widths (nothing jumps).
+function syncColsApply(on) {
+  if (on === (settings.syncCols !== false)) return;
+  settings.syncCols = on;
+  for (const key of Object.keys(settings.splits || {})) {
+    const sp = settings.splits[key], rows = Number(key.split('x')[1]) || 1;
+    if (on) { const top = sp.rc && sp.rc[0]; if (top) sp.c = top; delete sp.rc; }
+    else if (sp.c) sp.rc = Array.from({ length: rows }, () => [...sp.c]);
+    if (!Object.keys(sp).length) delete settings.splits[key];
+  }
+  save(); ctxs.forEach(c => c.relayout(true)); broadcast();
+}
+
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
 let win, overlay, overlayOpen = false;
@@ -152,13 +166,18 @@ function cells() {
   const sp = settings.splits?.[`${cols}x${rows}`] || {};
   const wts = (arr, k) => Array.isArray(arr) && arr.length === k && arr.every(v => v > 0.05) ? arr : Array(k).fill(1);
   const edges = (start, len, k, w) => { const tot = w.reduce((a, b) => a + b, 0); let acc = 0; const e = [start]; for (let j = 0; j < k; j++) { acc += w[j]; e.push(start + (len + GAP) * acc / tot); } return e; };
-  const cE = edges(area.x, area.w, cols, wts(sp.c, cols)), rE = edges(area.y, area.h, rows, wts(sp.r, rows));
-  lastGeom = { area, cols, rows, cE, rE, n };
+  // column edges per row: with "sync" (default) every row shares sp.c; without it each row has its own weights in sp.rc[row] (null = shared / even)
+  const sync = settings.syncCols !== false;
+  const rowW = r => wts((!sync && sp.rc && sp.rc[r]) || sp.c, cols);
+  const evenEdges = () => { const tot = area.w - GAP * (cols - 1), base = Math.floor(tot / cols), rem = tot - base * cols; const e = []; for (let j = 0; j <= cols; j++) e.push(area.x + j * (base + GAP) + Math.min(j, rem)); return e; };   // integer-exact equal columns
+  const cEs = Array.from({ length: rows }, (_, r) => { const w = rowW(r); return w.every(v => v === w[0]) ? evenEdges() : edges(area.x, area.w, cols, w); });
+  const cE = cEs[0], rE = edges(area.y, area.h, rows, wts(sp.r, rows));
+  lastGeom = { area, cols, rows, cE, cEs, rE, n, sync };
   return panes.map((p, i) => {
     const r = Math.floor(i / cols), c = i % cols;
     const inRow = r === rows - 1 ? n - cols * (rows - 1) : cols;   // last row may have fewer panes: stretch them evenly
     let x0, x1;
-    if (inRow === cols) { x0 = cE[c]; x1 = cE[c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }
+    if (inRow === cols) { x0 = cEs[r][c]; x1 = cEs[r][c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }
     const x = Math.round(x0), y = Math.round(rE[r]);
     return { x, y, w: Math.round(x1 - GAP) - x, h: Math.round(rE[r + 1] - GAP) - y };
   });
@@ -168,13 +187,14 @@ function splitters() {
   const g = lastGeom; if (!g || maximizedId != null || g.n < 2) return [];
   const out = [];
   const fullRows = g.n - g.cols * (g.rows - 1) === g.cols ? g.rows : g.rows - 1;
-  if (fullRows > 0) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cE[i] - GAP), y: g.area.y, w: GAP, h: Math.round(g.rE[fullRows] - GAP - g.area.y) });
+  if (fullRows > 0 && g.sync) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cE[i] - GAP), y: g.area.y, w: GAP, h: Math.round(g.rE[fullRows] - GAP - g.area.y) });
+  else if (fullRows > 0) for (let r = 0; r < fullRows; r++) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, row: r, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[r + 1] - GAP - g.rE[r]) });
   for (let i = 1; i < g.rows; i++) out.push({ axis: 'r', i, x: g.area.x, y: Math.round(g.rE[i] - GAP), w: g.area.w, h: GAP });
   return out;
 }
 function splitMove(pt) {
   const d = splitDrag, g = lastGeom; if (!d || !g) return;
-  const k = d.axis === 'c' ? g.cols : g.rows, E = d.axis === 'c' ? g.cE : g.rE;
+  const k = d.axis === 'c' ? g.cols : g.rows, E = d.axis === 'c' ? (g.sync ? g.cE : g.cEs[d.row || 0]) : g.rE;
   const start = d.axis === 'c' ? g.area.x : g.area.y, len = (d.axis === 'c' ? g.area.w : g.area.h) + GAP;
   const pos = (d.axis === 'c' ? pt.x : pt.y) + GAP / 2;
   const lo = E[d.i - 1] + 140, hi = E[d.i + 1] - 140; if (hi <= lo) return;
@@ -184,12 +204,14 @@ function splitMove(pt) {
   w[d.i - 1] = (np - E[d.i - 1]) / len * k; w[d.i] = pair - w[d.i - 1];
   const key = `${g.cols}x${g.rows}`;
   const sp = settings.splits[key] = { ...(settings.splits[key] || {}) };
-  sp[d.axis] = w.map(v => Math.round(v * 1000) / 1000);
+  const rw = w.map(v => Math.round(v * 1000) / 1000);
+  if (d.axis === 'c' && !g.sync) { const rc = Array.isArray(sp.rc) ? [...sp.rc] : []; while (rc.length < g.rows) rc.push(null); rc[d.row || 0] = rw; sp.rc = rc; }
+  else sp[d.axis] = rw;
   relayout();
 }
-function splitStart(axis, i) {
+function splitStart(axis, i, row) {
   if (!['c', 'r'].includes(axis) || !Number.isInteger(i)) return;
-  splitDrag = { axis, i, t0: Date.now() };
+  splitDrag = { axis, i, row: Number.isInteger(row) ? row : 0, t0: Date.now() };
   clearInterval(splitDrag.timer);
   splitDrag.timer = setInterval(() => {
     if (!splitDrag || win.isDestroyed() || Date.now() - splitDrag.t0 > 60000) return splitEnd();
@@ -198,9 +220,18 @@ function splitStart(axis, i) {
   }, 16);
 }
 function splitEnd() { if (!splitDrag) return; clearInterval(splitDrag.timer); splitDrag = null; save(); }
-function splitReset(axis) {
+function splitReset(axis, row) {
   const g = lastGeom; if (!g) return; const key = `${g.cols}x${g.rows}`;
+  if (axis === 'c' && !g.sync && Number.isInteger(row) && settings.splits[key]?.rc) {          // unsynced: double-click resets just that row
+    const rc = [...settings.splits[key].rc]; rc[row] = rc[row] ? Array(g.cols).fill(1) : null; settings.splits[key].rc = rc; relayout(true); save(); return;
+  }
   if (settings.splits[key]) { delete settings.splits[key][axis]; if (!Object.keys(settings.splits[key]).length) delete settings.splits[key]; }
+  relayout(true); save();
+}
+// long-press on the sync button: perfectly even columns in every row of the current grid (sync state unchanged)
+function syncReset() {
+  const g = lastGeom; if (!g) return; const key = `${g.cols}x${g.rows}`;
+  if (settings.splits[key]) { delete settings.splits[key].c; delete settings.splits[key].rc; if (!Object.keys(settings.splits[key]).length) delete settings.splits[key]; }
   relayout(true); save();
 }
 const viewRect = c => ({ x: c.x, y: c.y + PHEAD, width: Math.max(0, c.w), height: Math.max(0, c.h - PHEAD) });
@@ -285,7 +316,7 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; const g = grid(panes.length); return `${g.cols}x${g.rows}`; })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    splitters: splitters(), workspaces: Object.keys(workspaces), favorites, windowCount: ctxs.length,
+    syncCols: settings.syncCols !== false, canSync: grid(panes.length || 1).rows >= 2, splitters: splitters(), workspaces: Object.keys(workspaces), favorites, windowCount: ctxs.length,
     panes: panes.map((p, i) => {
       const wc = p.view.webContents;
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -851,9 +882,11 @@ on('usage-pop-keep', () => clearTimeout(popTimer));
 on('usage-pop-leave', () => popLater());
 on('usage-pop-size', h => { if (popOpen && !overlayOpen) overlay.setBounds(popBounds(Number(h))); });
 on('ws-menu', () => wsMenu());
-on('split-start', (axis, i) => splitStart(String(axis), Number(i)));
+on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
+on('sync-cols', v => syncColsApply(!!v));
+on('sync-reset', () => syncReset());
 on('split-end', () => splitEnd());
-on('split-reset', axis => splitReset(String(axis)));
+on('split-reset', (axis, row) => splitReset(String(axis), row == null ? undefined : Number(row)));
 on('palette', () => openOverlay('palette'));
 on('overlay-run', a => runAction(a));
 on('overlay-close', () => closeOverlay());
@@ -912,7 +945,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   loadWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
