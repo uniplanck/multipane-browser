@@ -2,6 +2,18 @@ const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, native
 const path = require('path');
 const fs = require('fs');
 
+// dev/test hook: MPB_SWITCHES="name=value;name2" appends Chromium switches before the app is ready
+for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
+// Memory saver (measured, 8 grok.com panes): std = small V8 young generation + optimize-for-size  (-~730MB / -20%, no behaviour change)
+// max = std + process-per-site (all same-site panes share one renderer: -~1.7GB, but panes then share one JS thread and one crash) .
+// Must be decided before app ready, so settings.memSaver is read synchronously from panes.json here. Values: 'off' | 'std' (default) | 'max'.
+let MEM_MODE = 'std';
+try { const m = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'panes.json'), 'utf8'))?.settings?.memSaver; if (['off', 'std', 'max'].includes(m)) MEM_MODE = m; } catch {}
+if (process.env.MPB_MEMSAVER && ['off', 'std', 'max'].includes(process.env.MPB_MEMSAVER)) MEM_MODE = process.env.MPB_MEMSAVER;
+if (MEM_MODE !== 'off') {
+  app.commandLine.appendSwitch('js-flags', '--max-semi-space-size=1 --min-semi-space-size=1 --optimize-for-size');
+  if (MEM_MODE === 'max') app.commandLine.appendSwitch('process-per-site');
+}
 const isMac = process.platform === 'darwin';
 const MAX = 10;
 const TOPBAR = 76;        // top bar (traffic lights + layout + pane strip) + favorites bar
@@ -189,6 +201,47 @@ ipcMain.on('focus-other', (e, wid, pid) => {
 });
 const APPROVE_URL = 'https://grok.com/bot/5674ea26-494f-49a0-acc1-f55ce2dd9c94';   // 承認Bot popup
 const APPROVE_KEEP_MS = 5 * 60000;                                                   // keep the hidden popup page this long for a fast reopen, then free its memory
+
+// ---- links opened from page content (bot output, citations, attachments, popups) ----
+// Like the native Grok Bot app: ordinary web links open in the default browser; grok.com links stay in the pane; sign-in / OAuth popups get a
+// real child window (window.opener keeps working); blob:/data: previews open in a child window; mailto/tel go to the system handler.
+const AUTH_HOST = /(^|\.)(x\.ai|x\.com|twitter\.com|google\.com|googleusercontent\.com|apple\.com|github\.com|microsoftonline\.com|live\.com|microsoft\.com|stripe\.com|stripe\.network|okta\.com|auth0\.com)$/i;
+const isGrokHost = h => /(^|\.)grok\.com$/i.test(h);
+function openExt(url, why) {
+  dlog('link', why, String(url).slice(0, 160));
+  if (process.env.MPB_LINK_DRYRUN) return;
+  if (/^(https?|mailto|tel|sms|facetime):/i.test(String(url))) shell.openExternal(String(url)).catch(() => {});
+}
+function linkOpen(wc, d) {
+  let u; try { u = new URL(d.url); } catch { return { action: 'deny' }; }
+  const popup = /(^|,)\s*(width|height|popup)\b/i.test(d.features || '');
+  const childWin = () => {
+    const owner = ctxs.find(c => c.panes.some(p => p.view.webContents === wc))?.win || BrowserWindow.getFocusedWindow() || undefined;
+    return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: owner, autoHideMenuBar: true, title: 'MultiPane Browser',
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } } };
+  };
+  if (/^(mailto|tel|sms|facetime):$/.test(u.protocol)) { openExt(d.url, 'system-handler'); return { action: 'deny' }; }
+  if (u.protocol === 'blob:' || u.protocol === 'data:' || d.url === 'about:blank') { dlog('link', 'popup-window', u.protocol); return childWin(); }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') { dlog('link', 'blocked scheme', u.protocol); return { action: 'deny' }; }
+  if (isGrokHost(u.hostname)) { if (popup) return childWin(); dlog('link', 'same-site, stays in pane', d.url.slice(0, 120)); wc.loadURL(d.url).catch(() => {}); return { action: 'deny' }; }
+  if (popup || AUTH_HOST.test(u.hostname)) { dlog('link', 'auth/popup window', u.hostname); return childWin(); }
+  openExt(d.url, 'external-browser');
+  return { action: 'deny' };
+}
+app.on('web-contents-created', (e, c) => {            // child windows (auth popups / previews): their own links go to the default browser
+  c.on('did-create-window', child => { child.webContents.setWindowOpenHandler(d => { if (/^https?:/i.test(d.url)) openExt(d.url, 'child-window link'); return { action: 'deny' }; }); });
+});
+// a plain link inside a bot page that leaves grok.com (no target) must not replace the bot: open it in the browser instead
+function guardNavigation(wc) {
+  wc.on('will-navigate', (e, url0) => {
+    const url = typeof url0 === 'string' ? url0 : e.url; let u; try { u = new URL(url); } catch { return; }
+    if (!/^https:\/\/grok\.com\/bot\//.test(wc.getURL())) return;
+    if (/^(mailto|tel|sms|facetime):$/.test(u.protocol)) { e.preventDefault(); openExt(url, 'system-handler'); return; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return;
+    if (isGrokHost(u.hostname) || AUTH_HOST.test(u.hostname)) return;
+    e.preventDefault(); openExt(url, 'external-browser (same-frame link)');
+  });
+}
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -766,7 +819,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
-  wc.setWindowOpenHandler(({ url }) => { wc.loadURL(url); return { action: 'deny' }; });
+  wc.setWindowOpenHandler(d => linkOpen(wc, d));
+  guardNavigation(wc);
   const upd = () => { sendState(); save(); };
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
@@ -898,7 +952,8 @@ function ensureApprove() {
   approve.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
   const wc = approve.webContents;
   approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now(), cpuRate: 1 };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
-  wc.setWindowOpenHandler(({ url }) => { if (/^https:\/\/grok\.com\//.test(url)) wc.loadURL(url).catch(() => {}); else if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  wc.setWindowOpenHandler(d => linkOpen(wc, d));
+  guardNavigation(wc);
   wc.on('did-finish-load', () => { if (approvePane) { approvePane.loadedAt = Date.now(); onGrokLoad(approvePane); } });
   wc.on('dom-ready', () => normalizeHostZoom(wc));
   wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape' && !input.meta && !input.control && !input.alt && !input.shift) { e.preventDefault(); closeOverlay(); } });
@@ -1332,6 +1387,14 @@ function buildMenu() {
         click: () => { settings.theme = v; nativeTheme.themeSource = v; save(); } })) },
       { type: 'separator' },
       { label: '更新時にmacOS通知を出す', type: 'checkbox', checked: settings.notifications, click: m => { settings.notifications = m.checked; save(); } },
+      { label: 'メモリ節約モード（再起動で反映）', submenu: [
+        ['std', '標準（推奨）— V8を省メモリ設定 ≈-20%・動作は変わらない'], ['max', '最大 — 同一サイトのペインでプロセス共有 ≈-45%（1ペインの重い処理で他ペインも一時的に固まる）'], ['off', 'オフ — Chromium既定']]
+        .map(([v, l]) => ({ label: l, type: 'radio', checked: MEM_MODE === v, click: () => {
+          settings.memSaver = v; save();
+          if (v === MEM_MODE) return;
+          dialog.showMessageBox({ type: 'question', buttons: ['今すぐ再起動', 'あとで'], defaultId: 0, message: 'メモリ節約モードを変更しました', detail: '再起動すると反映されます。ペインの構成と状態は保存されています。' })
+            .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
+        } })) },
       { label: '入力待機中（🟢）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
@@ -1401,6 +1464,18 @@ app.whenReady().then(() => {
   const allowed = new Set(['notifications', 'clipboard-sanitized-write', 'clipboard-read', 'fullscreen', 'media', 'storage-access', 'top-level-storage-access', 'persistent-storage']);
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => { dlog('permission', perm, allowed.has(perm) ? 'allow' : 'deny'); cb(allowed.has(perm)); });
   session.defaultSession.setPermissionCheckHandler((wc, perm) => allowed.has(perm));
+  // downloads (attachments, blob links, generated files): straight into ~/Downloads under a unique name, with a completion notification
+  session.defaultSession.on('will-download', (e, item) => {
+    const dir = app.getPath('downloads'); const name = path.basename(item.getFilename() || 'download') || 'download';
+    const ext = path.extname(name), base = path.basename(name, ext); let dest = path.join(dir, name), n = 1;
+    while (fs.existsSync(dest)) dest = path.join(dir, `${base} (${n++})${ext}`);
+    item.setSavePath(dest);
+    dlog('download', 'start', name, item.getMimeType());
+    item.once('done', (ev, state) => {
+      dlog('download', state, dest);
+      if (state === 'completed' && Notification.isSupported()) { const nt = new Notification({ title: 'ダウンロード完了', body: path.basename(dest) }); nt.on('click', () => shell.showItemInFolder(dest)); nt.show(); }
+    });
+  });
   startup();
 });
 app.on('before-quit', () => { clearTimeout(saveTimer); if (!quitting) saveNow(); quitting = true; });
