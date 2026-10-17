@@ -23,6 +23,28 @@ $('#reload-all').onclick = () => mpb.reloadAll();
 $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
+$('#approve-btn').onclick = () => mpb.approveOpen();
+// memory meter: fixed-width, tabular digits; <1GB -> "333MB", else "1.2GB"
+const memEl = $('#mem');
+const fmtMem = b => { const mb = b / 1048576; return Math.round(mb) < 1024 ? `${Math.round(mb)}MB` : `${(mb / 1024).toFixed(1)}GB`; };
+mpb.onMem(b => { const t = fmtMem(b); if (memEl.textContent !== t) memEl.textContent = t; });
+// notification chips for panes in other windows (hidden when there is only one window)
+const othersEl = $('#others'), othersSep = $('#others-sep');
+mpb.onOthers(list => {
+  const has = Array.isArray(list) && list.length > 0;
+  othersEl.classList.toggle('show', has); othersSep.classList.toggle('show', has);
+  if (!has) { othersEl.innerHTML = ''; return; }
+  othersEl.innerHTML = list.map(w => `<span class="owin" title="ウィンドウ${w.n}">${w.n}</span>` + w.panes.map(p => {
+    const st = p.waiting ? 'waiting' : p.working ? 'working' : p.glow ? 'glow' : '';
+    const ch = (Array.from(String(p.name || '•').trim())[0] || '•').toUpperCase();
+    const lab = p.waiting ? '入力待ち' : p.working ? '作業中' : '新着';
+    return `<button class="ochip ${st}" data-w="${w.wid}" data-p="${p.id}" title="ウィンドウ${w.n}: ${esc(p.name)}（${lab}${p.unread ? ' ' + p.unread : ''}）クリックで移動">` +
+      `<span class="oc">${p.unread ? (p.unread > 99 ? '99' : p.unread) : esc(ch)}</span>${p.waiting ? '<span class="od"></span>' : p.working ? '<span class="od work"></span>' : ''}</button>`;
+  }).join('')).join('');
+});
+othersEl.onclick = e => { const b = e.target.closest('.ochip'); if (b) mpb.focusOther(Number(b.dataset.w), Number(b.dataset.p)); };
+// "saved layout" feedback: the ⧉ button shows a tick for a moment
+mpb.onWsSaved(n => { const b = $('#ws-btn'); b.textContent = '✓'; b.classList.add('saved'); b.title = `「${n}」を保存しました`; setTimeout(() => { b.textContent = '⧉'; b.classList.remove('saved'); b.title = 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; }, 1400); });
 let S = null;
 // ---- short labels: max 6 display columns (half-width 1, full-width 2), hard cut, no ellipsis ----
 const WIDE = /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/;
@@ -48,9 +70,12 @@ function mk(id) {
       <button data-a="reload" title="再読み込み (${MOD}R)">↻</button>
       <button data-a="maximize" title="最大化 / 元に戻す (${MOD}\\・ダブルクリック)">⤢</button>
       <button data-a="paneMenu" title="名前・色・ミュート・自動リロード・ズームなど">⋯</button>
+      <button data-a="sleepToggle" class="slp" title="入力待機中にスリープ: ON">💤</button>
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
-  </div>`;
+  </div>
+  <div class="sleepph"><span>💤 スリープ中 — クリックで復帰</span><small>入力待機中のため休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
+  d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
   head.onmousedown = e => { if (!e.target.closest('button,input')) mpb.focusPane(id); };
@@ -126,6 +151,7 @@ const onS = s => {
   us.innerHTML = glowN || unreadN ? `<span class="dot"></span>${glowN ? `新着 ${glowN}ペイン` : `未返信 ${unreadN}`}<kbd>${MOD}J</kbd>` : '';
   us.classList.toggle('show', !!(glowN || unreadN));
   $('#add').disabled = s.panes.length >= s.max;
+  { const wb = $('#ws-btn'); if (!wb.classList.contains('saved')) wb.title = s.activeWs ? `レイアウト保存・切替（現在: 「${s.activeWs}」— クリックで上書き保存／新規保存／切替）` : 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; wb.classList.toggle('active-ws', !!s.activeWs); }
 
   // strip
   const ids = s.panes.map(p => p.id);
@@ -147,7 +173,7 @@ const onS = s => {
     const lbl = shortLabel(chars.slice(1).join(''));
     const justCopied = (copied.get(p.id) || 0) > Date.now();
     c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
+      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? '<span class="zz" title="スリープ中">💤</span>' : '') + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
   });
 
   syncBtn(s);
@@ -174,6 +200,8 @@ const onS = s => {
     d.classList.toggle('waiting', !!p.waiting);
     d.classList.toggle('working', !!p.working);
     d.classList.toggle('maxed', p.id === s.maximizedId);
+    d.classList.toggle('sleeping', !!p.sleeping);
+    { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `入力待機中にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
     const color = s.colors[p.color];
     d.style.setProperty('--pc', color || 'transparent');
     d.classList.toggle('colored', !!color);
@@ -183,6 +211,7 @@ const onS = s => {
     const inp = d.querySelector('.url'); if (document.activeElement !== inp) inp.value = p.url;
     inp.placeholder = 'URL・検索語を入力（Grok BotのURLを貼り付けてもOK）';
     const meta = [];
+    if (p.sleeping) meta.push('<span title="スリープ中（クリックで復帰）">💤</span>');
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
     if (p.zoomIndiv) meta.push(`<span class="zind" title="ズームは個別設定（全体ズームの影響を受けません）">🔍個別 ${Math.round(p.zoom * 100)}%</span>`);

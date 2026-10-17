@@ -184,3 +184,37 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .pill.usage.needlogin::after{content:"!";position:absolute;right:-3px;top:-4px;width:12px;height:12px;border-radius:50%;background:#ff9f0a;color:#1c1c1e;font-size:9px;font-weight:800;line-height:12px;text-align:center}
 
 .meta .zind{color:#ffb800;font-weight:600}
+
+/* memory meter (top-left, fixed width so it never shifts with the digits) */
+#mem{flex:none;width:50px;text-align:right;font:11px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;color:var(--dim);letter-spacing:0;white-space:nowrap;overflow:hidden;cursor:default}
+/* notification chips of other windows */
+#others-sep,#others{display:none;flex:none}
+#others-sep.show{display:block;width:1px;height:20px;background:var(--line2);margin:0 4px 0 6px}
+#others.show{display:flex;align-items:center;gap:4px;max-width:34%;overflow-x:auto;scrollbar-width:none}
+#others::-webkit-scrollbar{display:none}
+.owin{flex:none;font-size:9.5px;font-weight:700;color:var(--dim);border:1px solid var(--line2);border-radius:5px;min-width:15px;height:15px;line-height:13px;text-align:center;padding:0 3px;margin-left:2px}
+.ochip{position:relative;flex:none;height:24px;min-width:24px;padding:0 3px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--dim);display:flex;align-items:center;justify-content:center;transition:background .15s}
+.ochip:hover{background:var(--ctl);color:var(--text)}
+.ochip .oc{box-sizing:border-box;min-width:16px;height:16px;padding:0 3px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;background:var(--ctl-hi);color:var(--text);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
+.ochip.glow{border-color:color-mix(in srgb,var(--glow) 60%,transparent);background:color-mix(in srgb,var(--glow) 14%,transparent);color:var(--text)}
+.ochip.glow .oc{background:var(--glow);color:#fff}
+.ochip.waiting{border-color:color-mix(in srgb,var(--wait) 65%,transparent);background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--text)}
+.ochip.working{border-color:color-mix(in srgb,var(--work) 65%,transparent);background:color-mix(in srgb,var(--work) 14%,transparent);color:var(--text)}
+.ochip.waiting .oc{background:var(--wait);color:#fff}
+.ochip.working .oc{background:var(--work);color:#fff}
+.ochip .od{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--wait);box-shadow:0 0 4px var(--wait)}
+.ochip .od.work{background:var(--work);box-shadow:0 0 4px var(--work)}
+#approve-btn{display:grid;place-items:center;color:var(--dim)}
+#approve-btn:hover{color:var(--text)}
+#ws-btn.saved{background:var(--wait);color:#fff}
+#ws-btn.active-ws{box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* sleeping panes */
+.tools button.slp{font-size:12px;opacity:.38;filter:grayscale(1)}
+.tools button.slp.on{opacity:1;filter:none;background:color-mix(in srgb,var(--accent) 22%,transparent)}
+.pane .sleepph{display:none;position:absolute;left:0;right:0;top:30px;bottom:0;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dim);cursor:pointer;background:color-mix(in srgb,var(--card) 80%,#000);border-radius:0 0 9px 9px}
+.pane .sleepph span{font-size:15px;font-weight:600}
+.pane .sleepph small{font-size:11px;opacity:.7;max-width:80%;text-align:center}
+.pane.sleeping .sleepph{display:flex}
+.pane.sleeping .sleepph:hover{color:var(--text)}
+.chip .zz{font-size:9px;margin-left:2px;opacity:.8}

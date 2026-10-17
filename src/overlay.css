@@ -52,3 +52,9 @@ body.upop #upop{display:block}
 #upop hr{border:0;border-top:1px solid var(--line);margin:8px 0}
 #upop input{width:46px;background:var(--ctl);border:1px solid var(--line);border-radius:5px;color:var(--text);padding:1px 4px;font:12px var(--font);text-align:right}
 #upop .g{color:#30d158}
+
+/* 承認Bot popup: the page view sits on top of this dim backdrop; this only draws the dim + the drop shadow behind it */
+#apshadow{display:none;position:fixed;border-radius:14px;box-shadow:0 28px 80px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.35);background:#000}
+body.approve #apshadow{display:block}
+body.approve #box,body.approve #upop{display:none}
+body.approve #scrim{background:rgba(0,0,0,.42)}

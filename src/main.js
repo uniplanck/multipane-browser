@@ -44,7 +44,7 @@ function chromeUA() {
 
 // ---- persistence (backward compatible: layout/focused/urls are always written and read) ----
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
-const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv });
+const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
 function saveNow() {
   try {
     const wins = ctxs.map(c => c.snapshot());
@@ -149,9 +149,52 @@ function syncColsApply(on) {
   save(); ctxs.forEach(c => c.relayout(true)); broadcast();
 }
 
+setInterval(() => ctxs.forEach(c => { try { c.sleepTick(); } catch {} }), 30000);
+// ---- app memory meter (top-left) ----
+// Sum of every Electron process. On macOS privateBytes ~ the process "footprint", which is what Activity Monitor's Memory column shows.
+// Sent every 2.5 s to visible windows, and only while the app is focused (zero work in the background).
+function appMemBytes() {
+  let b = 0;
+  for (const m of app.getAppMetrics()) b += (m.memory.privateBytes || m.memory.workingSetSize || 0) * 1024;
+  return b;
+}
+function sendMem() {
+  if (!BrowserWindow.getFocusedWindow()) return;
+  const b = appMemBytes();
+  if (debugOn()) { const t0 = process.hrtime.bigint(); let ws = 0, pb = 0; for (const m of app.getAppMetrics()) { ws += m.memory.workingSetSize * 1024; pb += (m.memory.privateBytes || 0) * 1024; } dlog('mem', 'private', Math.round(pb / 1048576), 'workingSet', Math.round(ws / 1048576), 'MB; metrics call us', Number((process.hrtime.bigint() - t0) / 1000n)); }
+  ctxs.forEach(c => { try { if (c.win.isVisible() && !c.win.isMinimized()) c.win.webContents.send('mem', b); } catch {} });
+}
+setInterval(sendMem, 2500);
+app.on('browser-window-focus', () => setTimeout(sendMem, 50));
+// ---- notification chips for panes in OTHER windows ----
+let othersTimer = null;
+function scheduleOthers() {
+  if (othersTimer) return;
+  othersTimer = setTimeout(() => {
+    othersTimer = null;
+    ctxs.forEach((c, i) => {
+      try {
+        const list = ctxs.length < 2 ? [] : ctxs.map((o, j) => j === i ? null : o.othersInfo(j + 1)).filter(x => x && x.panes.length);
+        const js = JSON.stringify(list);
+        if (c._othersJson === js) return;
+        c._othersJson = js; c.win.webContents.send('others', list);
+      } catch {}
+    });
+  }, 200);
+}
+ipcMain.on('focus-other', (e, wid, pid) => {
+  const c = ctxs.find(k => !k.win.isDestroyed() && k.win.id === wid); if (!c) return;
+  if (c.win.isMinimized()) c.win.restore();
+  c.win.show(); c.win.focus(); c.focusPaneById(Number(pid));
+});
+const APPROVE_URL = 'https://grok.com/bot/5674ea26-494f-49a0-acc1-f55ce2dd9c94';   // 承認Bot popup
+const APPROVE_KEEP_MS = 5 * 60000;                                                   // keep the hidden popup page this long for a fast reopen, then free its memory
+
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
 let win, overlay, overlayOpen = false;
+let activeWs = null;                       // name of the saved layout currently loaded / last saved in this window
+let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null;
 let lastBounds = spec.window?.bounds || null;
 // ---- layout ----
@@ -166,13 +209,29 @@ function grid(n) {
   const cols = Math.ceil(Math.sqrt(n));
   return { rows: Math.ceil(n / cols), cols };
 }
+// ---- row structure: every pane belongs to a row (rowLens[r] = number of panes in row r, panes[] is kept in row-major order) ----
+// Closing a pane only shrinks ITS row (the row re-divides evenly); panes never move between rows. An empty row disappears.
+let rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;
+const sumArr = a => a.reduce((x, y) => x + y, 0);
+function defRows(n) {                                  // rows as the preset / auto-fit would lay n panes out
+  if (n <= 0) return [];
+  const g = grid(n), out = []; let left = n;
+  for (let r = 0; r < g.rows && left > 0; r++) { const k = r === g.rows - 1 ? left : Math.min(g.cols, left); out.push(k); left -= k; }
+  return out;
+}
+function getRows() {                                   // validated; falls back to the default grid
+  if (!rowLens || !rowLens.every(k => Number.isInteger(k) && k > 0) || sumArr(rowLens) !== panes.length) rowLens = defRows(panes.length);
+  return rowLens;
+}
+const sameArr = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const splitKey = () => { const l = getRows(); return `${Math.max(1, ...l)}x${Math.max(1, l.length)}`; };
 function cells() {
   const [w, h] = win.getContentSize();
   const n = panes.length; if (!n) return [];
   const area = { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - 2 * GAP };
   if (maximizedId != null && byId(maximizedId))
     return panes.map(p => p.id === maximizedId ? { x: area.x, y: area.y, w: area.w, h: area.h } : null);
-  const { rows, cols } = grid(n);
+  const lens = getRows(), rows = lens.length, cols = Math.max(...lens);
   const sp = settings.splits?.[`${cols}x${rows}`] || {};
   const wts = (arr, k) => Array.isArray(arr) && arr.length === k && arr.every(v => v > 0.05) ? arr : Array(k).fill(1);
   const edges = (start, len, k, w) => { const tot = w.reduce((a, b) => a + b, 0); let acc = 0; const e = [start]; for (let j = 0; j < k; j++) { acc += w[j]; e.push(start + (len + GAP) * acc / tot); } return e; };
@@ -181,24 +240,30 @@ function cells() {
   const rowW = r => wts((!sync && sp.rc && sp.rc[r]) || sp.c, cols);
   const evenEdges = () => { const tot = area.w - GAP * (cols - 1), base = Math.floor(tot / cols), rem = tot - base * cols; const e = []; for (let j = 0; j <= cols; j++) e.push(area.x + j * (base + GAP) + Math.min(j, rem)); return e; };   // integer-exact equal columns
   const cEs = Array.from({ length: rows }, (_, r) => { const w = rowW(r); return w.every(v => v === w[0]) ? evenEdges() : edges(area.x, area.w, cols, w); });
-  const cE = cEs[0], rE = edges(area.y, area.h, rows, wts(sp.r, rows));
-  lastGeom = { area, cols, rows, cE, cEs, rE, n, sync };
-  return panes.map((p, i) => {
-    const r = Math.floor(i / cols), c = i % cols;
-    const inRow = r === rows - 1 ? n - cols * (rows - 1) : cols;   // last row may have fewer panes: stretch them evenly
-    let x0, x1;
-    if (inRow === cols) { x0 = cEs[r][c]; x1 = cEs[r][c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }
-    const x = Math.round(x0), y = Math.round(rE[r]);
-    return { x, y, w: Math.round(x1 - GAP) - x, h: Math.round(rE[r + 1] - GAP) - y };
+  const fr = Math.max(0, lens.findIndex(k => k === cols)), cE = cEs[fr], rE = edges(area.y, area.h, rows, wts(sp.r, rows));
+  lastGeom = { area, cols, rows, cE, cEs, rE, n, sync, lens };
+  const out = []; let idx = 0;
+  lens.forEach((inRow, r) => {
+    for (let c = 0; c < inRow; c++, idx++) {
+      let x0, x1;
+      if (inRow === cols) { x0 = cEs[r][c]; x1 = cEs[r][c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }   // shorter row: its panes share the width evenly
+      const x = Math.round(x0), y = Math.round(rE[r]);
+      out.push({ x, y, w: Math.round(x1 - GAP) - x, h: Math.round(rE[r + 1] - GAP) - y });
+    }
   });
+  return out;
 }
 let lastGeom = null, splitDrag = null;
 function splitters() {
   const g = lastGeom; if (!g || maximizedId != null || g.n < 2) return [];
-  const out = [];
-  const fullRows = g.n - g.cols * (g.rows - 1) === g.cols ? g.rows : g.rows - 1;
-  if (fullRows > 0 && g.sync) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cE[i] - GAP), y: g.area.y, w: GAP, h: Math.round(g.rE[fullRows] - GAP - g.area.y) });
-  else if (fullRows > 0) for (let r = 0; r < fullRows; r++) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, row: r, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[r + 1] - GAP - g.rE[r]) });
+  const out = [], full = g.lens.map(k => k === g.cols);   // only rows that use the shared / per-row column weights get column splitters
+  if (g.sync) {
+    for (let r = 0; r < g.rows; r++) {                      // one bar per run of consecutive full rows
+      if (!full[r]) continue; let e = r; while (e + 1 < g.rows && full[e + 1]) e++;
+      for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[e + 1] - GAP - g.rE[r]) });
+      r = e;
+    }
+  } else for (let r = 0; r < g.rows; r++) if (full[r]) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, row: r, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[r + 1] - GAP - g.rE[r]) });
   for (let i = 1; i < g.rows; i++) out.push({ axis: 'r', i, x: g.area.x, y: Math.round(g.rE[i] - GAP), w: g.area.w, h: GAP });
   return out;
 }
@@ -253,7 +318,7 @@ function relayout(animate = false) {
   const targets = cs.map(c => c && viewRect(c));
   panes.forEach((p, i) => {
     const t = targets[i];
-    p.view.setVisible(!!t);
+    p.view.setVisible(!!t && !p.sleeping);
     if (!t) return;
     if (!animate || !p.bounds) { p.view.setBounds(t); p.bounds = t; }
   });
@@ -273,6 +338,7 @@ function relayout(animate = false) {
     }, 18);
   }
   if (overlayOpen) overlay.setBounds({ x: 0, y: 0, width: win.getContentSize()[0], height: win.getContentSize()[1] });
+  if (approveOpen && approve) { const r = approveRect(); approve.setBounds(r); overlay.webContents.send('approve-rect', r); }
   sendState(cs);
 }
 function applyPreset(key) {
@@ -281,6 +347,7 @@ function applyPreset(key) {
   const want = PRESETS[key][0] * PRESETS[key][1];
   while (panes.length > want) closePane(panes[panes.length - 1].id, true);
   while (panes.length < want) addPane({ url: '' }, { focus: false });
+  rowLens = null;                                       // a preset re-initialises the rows
   setFocused(Math.min(focused, panes.length - 1));
   relayout(true); save();
 }
@@ -314,7 +381,7 @@ function swapPanes(a, b) {
 
 function displayTitle(p) {
   const wc = p.view.webContents;
-  let t = wc.getTitle() || '';
+  let t = (p.sleeping && p.sleepSnap ? p.sleepSnap.title : wc.getTitle()) || '';
   const u = paneUrl(p);
   if (!u) return '新しいペイン';
   t = t.replace(/\s*[-|–—]\s*Grok\s*$/i, '').trim();
@@ -324,18 +391,19 @@ function displayTitle(p) {
 function sendState(cs = cells()) {
   if (!win || win.isDestroyed()) return;
   const state = {
-    layout, effLayout: (() => { if (!panes.length) return layout; const g = grid(panes.length); return `${g.cols}x${g.rows}`; })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
+    layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: grid(panes.length || 1).rows >= 2, splitters: splitters(), workspaces: Object.keys(workspaces), favorites, windowCount: ctxs.length,
+    globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length,
     panes: panes.map((p, i) => {
       const wc = p.view.webContents;
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
+  scheduleOthers();
   if (overlayOpen) overlay.webContents.send('state', state);
 }
 
@@ -343,6 +411,7 @@ function sendState(cs = cells()) {
 function setFocused(i) {
   if (i < 0 || i >= panes.length) return;
   focused = i;
+  if (panes[i].sleeping) reloadPane(panes[i]);                      // focusing a sleeping pane wakes it
   applyThrottling();
   sendState(); save();
 }
@@ -383,7 +452,7 @@ function lightUp(p, reason, always = false) {
   }
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
-function resetCounts(p) { const had = p.unread || p.glow || p.waiting || p.working || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; if (had) { updateBadge(); sendState(); } }
+function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
   return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
 
@@ -392,6 +461,7 @@ function markActivity(p, reason) {
   lightUp(p, reason);
 }
 function onMsgCount(p, c) {
+  if (p.sleeping) return;                                   // a sleeping pane keeps its remembered state
   if (!isBotUrl(p.view.webContents.getURL())) { resetCounts(p); return; }
   const prev = p.msgMode ? p.unread : null;
   p.msgMode = true;
@@ -402,6 +472,7 @@ function onMsgCount(p, c) {
   p.lastUserCount = c.user;
   p.unread = c.botSince;
   const wasW = p.waiting; p.waiting = !!c.waiting;
+  if (!wasW && p.waiting) p.waitSince = Date.now();
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
   const wasK = p.working; p.working = !!c.working && !p.waiting && !userSent && c.botSince > 0;   // red: latest marker says '作業中' (UI only; no notification / badge)
   if (wasK !== p.working) dlog(`pane${p.id}`, 'working', p.working);
@@ -421,10 +492,12 @@ function nextUnread() {
   }
 }
 function moveFocus(dir) {
-  const { cols } = grid(panes.length), n = panes.length;
-  let i = focused;
+  const lens = getRows(), n = panes.length;
+  let i = focused, r = 0, st = 0; while (r < lens.length - 1 && focused >= st + lens[r]) { st += lens[r]; r++; }
+  const c = focused - st, startOf = k => sumArr(lens.slice(0, k));
   if (dir === 'left') i = i - 1; else if (dir === 'right') i = i + 1;
-  else if (dir === 'up') i = i - cols; else if (dir === 'down') i = i + cols;
+  else if (dir === 'up') { if (r === 0) return; i = startOf(r - 1) + Math.min(c, lens[r - 1] - 1); }
+  else if (dir === 'down') { if (r >= lens.length - 1) return; i = startOf(r + 1) + Math.min(c, lens[r + 1] - 1); }
   if (i < 0 || i >= n) return;
   focusPane(i, { clear: false });
 }
@@ -543,7 +616,7 @@ setInterval(async () => {
   for (const c of ctxs) for (const p of c.panes) {
     try {
       const wc = p.view.webContents;
-      if (wc.isDestroyed() || p.grokToken || p.grokPending || wc.isLoading() || (p.loadStartedAt && !p.loadDone) || !settings.grokFix) continue;
+      if (wc.isDestroyed() || p.sleeping || p.grokToken || p.grokPending || wc.isLoading() || (p.loadStartedAt && !p.loadDone) || !settings.grokFix) continue;
       if (loadQ.includes(p)) continue;                                  // still queued at startup: about:blank is expected
       const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
       const own = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);   // the pane's own bot link
@@ -576,6 +649,7 @@ function onGrokLoad(p) {
 // (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
 async function reloadPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
+  if (p.sleeping) { p.sleeping = false; p.sleepSnap = null; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
   const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
@@ -589,6 +663,7 @@ async function reloadPane(p) {
     if (isBlankUrl(cu) && !isBlankUrl(p.url) && p.url !== NEWTAB) wc.loadURL(p.url).catch(() => {}); else wc.reload();   // blank pane: reload its own URL, not about:blank
     return;
   }
+  if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); wc.loadURL(target).catch(() => {}); return; }   // nothing to hop from (woken / blank pane)
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
   if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
@@ -615,6 +690,29 @@ async function reloadPane(p) {
   wc.loadURL(target).catch(() => {});        // did-finish-load -> onGrokLoad -> grokFix
 }
 
+// ---- sleep for 🟢 waiting panes (frees the page's memory; header / tab / green status / counts stay) ----
+// A pane sleeps when its last output is the 🟢 marker and nobody touched it for N minutes. It never sleeps while 🔴 working, unmarked, focused,
+// maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
+const sleepMs = () => (Number(process.env.MPB_SLEEP_SEC) > 0 ? Number(process.env.MPB_SLEEP_SEC) * 1000 : (settings.sleepMinutes > 0 ? settings.sleepMinutes : 10) * 60000);
+function canSleep(p, i, force) {
+  const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return false;
+  if (!force && (settings.sleepWaiting === false || p.sleepOn === false)) return false;
+  if (!p.waiting || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
+  if (wc.isLoading() || p.grokToken || p.grokPending) return false;
+  if (!force && Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < sleepMs()) return false;
+  return true;
+}
+function sleepPane(p) {
+  const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
+  p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
+  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null;
+  dlog(`pane${p.id}`, 'sleep', paneUrl(p));
+  p.view.setVisible(false);
+  wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
+  applyThrottling(); sendState(); save();
+}
+function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) sleepPane(p); }); }
+
 // ---- panes ----
 // Startup / workspace loads are staggered: focused pane first, then the rest with at most LOAD_CONC loading at a time
 // (8 heavy grok.com pages at once starve each other, the router hop is missed and panes stay blank).
@@ -639,6 +737,18 @@ function pumpLoads() {
   if (!loadTimer) loadTimer = setInterval(step, 300);
   step();
 }
+// New pane: while the rows are still the default grid it behaves as before (appended, grid re-fits); once the user has closed panes
+// (rows differ from the default) the new pane goes to the first row that has room (typically the row it was closed from), or opens a new row.
+function insertPane(p) {
+  const n = panes.length, lens = getRows(), pr = PRESETS[layout] || [2, 2];
+  if (n === 0 || sameArr(lens, defRows(n))) { panes.push(p); rowLens = null; return; }
+  let r = lens.findIndex(k => k < pr[0]);
+  if (r < 0 && lens.length < pr[1]) { lens.push(0); r = lens.length - 1; }
+  if (r < 0) { panes.push(p); rowLens = null; return; }
+  const idx = sumArr(lens.slice(0, r + 1));
+  panes.splice(idx, 0, p); lens[r]++;
+  if (idx <= focused) focused++;
+}
 function addPane(spec = {}, { focus = true, defer = false } = {}) {
   if (panes.length >= MAX) return null;
   const view = new WebContentsView({ webPreferences: {
@@ -651,7 +761,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, zoomIndiv: spec.zoomIndiv === undefined ? clampZ(spec.zoom) !== 1 : !!spec.zoomIndiv,   // older saves had per-pane zoom only: keep those panes individual
     zoom: 1,
-    lastReload: Date.now(), lastTyping: 0, editing: false, cpuRate: 1 };
+    lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1 };
   p.zoom = p.zoomIndiv ? clampZ(spec.zoom) : gZoom();
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
@@ -662,10 +772,10 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
-  wc.on('did-navigate-in-page', () => { p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
-  wc.on('page-title-updated', () => { sendState(); markActivity(p, 'title'); });
+  wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
   wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); });
   wc.on('console-message', e => {
@@ -692,14 +802,16 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
       { label: '再読み込み', click: () => reloadPane(p) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window: win });
   });
-  panes.push(p);
+  insertPane(p);
   if (defer && p.url && p.url !== NEWTAB) loadQ.push(p); else loadInto(wc, p.url);
-  if (focus) setFocused(panes.length - 1);
+  if (focus) setFocused(panes.indexOf(p));
   relayout();
   return p;
 }
 function closePane(id, keepEmpty) {
   const i = panes.findIndex(p => p.id === id); if (i < 0) return;
+  { const lens = getRows(); let r = 0, st = 0; while (r < lens.length - 1 && i >= st + lens[r]) { st += lens[r]; r++; }
+    lens[r]--; if (lens[r] <= 0) lens.splice(r, 1); }          // only this pane's row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
   p.grokToken = null;
   win.contentView.removeChildView(p.view);
@@ -769,7 +881,60 @@ function handleKey(input, pane) {
 }
 
 // ---- overlay (command palette / prompts) ----
-function bringOverlayToFront() { win.contentView.removeChildView(overlay); win.contentView.addChildView(overlay); }
+function bringOverlayToFront() {
+  win.contentView.removeChildView(overlay); win.contentView.addChildView(overlay);
+  if (approveOpen && approve) { win.contentView.removeChildView(approve); win.contentView.addChildView(approve); }
+}
+// ---- 承認Bot popup: a dedicated view (default session = same login as the panes), centred, ~60% of the window, over a dim backdrop (the overlay) ----
+function approveRect() {
+  const [w, h] = win.getContentSize();
+  const W = Math.max(420, Math.min(w - 24, Math.round(w * 0.6))), H = Math.max(320, Math.min(h - 24, Math.round(h * 0.6)));
+  return { x: Math.round((w - W) / 2), y: Math.round((h - H) / 2), width: W, height: H };
+}
+function ensureApprove() {
+  if (approve && !approve.webContents.isDestroyed()) return approve;
+  approve = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
+  approve.setBorderRadius?.(14);
+  approve.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
+  const wc = approve.webContents;
+  approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now(), cpuRate: 1 };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
+  wc.setWindowOpenHandler(({ url }) => { if (/^https:\/\/grok\.com\//.test(url)) wc.loadURL(url).catch(() => {}); else if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  wc.on('did-finish-load', () => { if (approvePane) { approvePane.loadedAt = Date.now(); onGrokLoad(approvePane); } });
+  wc.on('dom-ready', () => normalizeHostZoom(wc));
+  wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape' && !input.meta && !input.control && !input.alt && !input.shift) { e.preventDefault(); closeOverlay(); } });
+  loadInto(wc, APPROVE_URL);
+  win.contentView.addChildView(approve); approve.setVisible(false);
+  return approve;
+}
+function destroyApprove() {
+  clearTimeout(approveTimer); approveTimer = null;
+  if (!approve || approveOpen) return;
+  try { win.contentView.removeChildView(approve); } catch {}
+  try { if (!approve.webContents.isDestroyed()) approve.webContents.close(); } catch {}
+  approve = null; approvePane = null;
+}
+function openApprove() {
+  dlog('approve', 'open requested', approveOpen);
+  if (approveOpen) { closeOverlay(); return; }
+  if (overlayOpen) closeOverlay();
+  clearTimeout(approveTimer); approveTimer = null;
+  const had = !!(approve && !approve.webContents.isDestroyed());
+  ensureApprove();
+  approveOpen = true;
+  const r = approveRect(); dlog('approve', 'rect', JSON.stringify(r), 'reused', had);
+  openOverlay('approve', { rect: r });                       // dim backdrop (click = close) + shadow
+  win.contentView.removeChildView(approve); win.contentView.addChildView(approve);
+  approve.setBounds(r); approve.setVisible(true); approve.webContents.focus();
+  if (had) {                                                 // reopened from the hidden copy: make sure the chat is actually showing
+    const wc = approve.webContents, id = APPROVE_URL.match(GROK_BOT_RE)[1];
+    wc.executeJavaScript(GROK_RENDERED(id)).then(ok => { if (!ok && approveOpen && !wc.isLoading() && !approvePane?.grokToken) reloadPane(approvePane); }).catch(() => {});
+  }
+}
+function hideApprove() {
+  approveOpen = false;
+  try { approve?.setVisible(false); } catch {}
+  clearTimeout(approveTimer); approveTimer = setTimeout(destroyApprove, APPROVE_KEEP_MS);
+}
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
   popOpen = false; clearTimeout(popTimer);
@@ -789,6 +954,7 @@ function openOverlay(mode, extra = {}) {
 function closeOverlay() {
   if (!overlayOpen) return;
   overlayOpen = false;
+  if (approveOpen) hideApprove();
   overlay.setVisible(false);
   panes[focused]?.view.webContents.focus();
 }
@@ -798,6 +964,7 @@ function paneMenu(id) {
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || '' }) },
     { label: '色', submenu: Object.keys(COLORS).map(c => ({ label: COLOR_JA[c], type: 'radio', checked: (p.color || 'none') === c, click: () => { p.color = c; sendState(); save(); } })) },
     { label: 'このペインの通知をミュート', type: 'checkbox', checked: !!p.muted, click: m => { p.muted = m.checked; updateBadge(); sendState(); save(); } },
+    { label: '入力待機中にスリープ（メモリ節約）', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
     { label: '自動リロード', submenu: RELOAD_CHOICES.map(m => ({ label: m ? `${m}分ごと` : 'オフ', type: 'radio', checked: p.reloadMinutes === m,
       click: () => { p.reloadMinutes = m; p.lastReload = Date.now(); sendState(); save(); } })) },
     { label: `ズーム（${Math.round((p.zoom || 1) * 100)}%${p.zoomIndiv ? '・個別' : ''}）`, submenu: [
@@ -820,16 +987,33 @@ function paneMenu(id) {
 }
 function saveWorkspace(name) {
   name = String(name || '').trim().slice(0, 60); if (!name) return;
-  workspaces[name] = { layout, panes: panes.map(paneSpec), savedAt: new Date().toISOString() };
+  const key = splitKey(), sp = settings.splits?.[key];
+  workspaces[name] = { layout, panes: panes.map(paneSpec), rows: [...getRows()], savedAt: new Date().toISOString(),
+    ...(sp ? { splitsKey: key, splits: JSON.parse(JSON.stringify(sp)) } : {}) };
+  activeWs = name;
   save(); buildMenu(); broadcast();
+  try { win.webContents.send('ws-saved', name); } catch {}
+}
+// 上書き保存: replace a saved layout with the current state (pane URLs, preset, split sizes, zoom, names, colours ...)
+async function overwriteWorkspace(name, confirm) {
+  if (!workspaces[name]) return;
+  if (confirm) {
+    const { response } = await dialog.showMessageBox(win, { type: 'question', message: `「${name}」を現在の構成で上書き保存しますか？`,
+      detail: '保存済みの内容（ペインのURL・レイアウト・分割サイズ・ズームなど）が現在の状態に置き換わります。', buttons: ['上書き保存', 'キャンセル'], defaultId: 1, cancelId: 1, noLink: true });
+    if (response !== 0 || !workspaces[name]) return;
+  }
+  saveWorkspace(name);
 }
 function loadWorkspace(name) {
   const ws = workspaces[name]; if (!ws) return;
   maximizedId = null;
   [...panes].forEach(p => closePane(p.id, true));
   if (PRESETS[ws.layout]) layout = ws.layout;
+  if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
   (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
   if (!panes.length) addPane({ url: '' });
+  rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
+  activeWs = name;
   setFocused(0); pumpLoads(); relayout(); save();
 }
 function runAction(a) {
@@ -847,9 +1031,11 @@ function runAction(a) {
     case 'rename-prompt': openOverlay('rename', { id: panes[focused]?.id, value: panes[focused]?.name || '' }); break;
     case 'ws-save-prompt': openOverlay('ws-save'); break;
     case 'ws-save': saveWorkspace(a.value); closeOverlay(); break;
+    case 'approve-open': closeOverlay(); openApprove(); break;
+    case 'ws-overwrite': closeOverlay(); overwriteWorkspace(String(a.name || ''), !!a.confirm); break;
     case 'ws-load': closeOverlay(); loadWorkspace(a.name); break;
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
-    case 'ws-rename': { const nn = String(a.value || '').trim().slice(0, 60); if (nn && workspaces[a.name] && nn !== a.name) { workspaces[nn] = workspaces[a.name]; delete workspaces[a.name]; save(); buildMenu(); broadcast(); } closeOverlay(); break; }
+    case 'ws-rename': { const nn = String(a.value || '').trim().slice(0, 60); if (nn && workspaces[a.name] && nn !== a.name) { workspaces[nn] = workspaces[a.name]; delete workspaces[a.name]; ctxs.forEach(c => c.wsRenamed(a.name, nn)); save(); buildMenu(); broadcast(); } closeOverlay(); break; }
     case 'ws-rename-prompt': openOverlay('ws-rename', { name: a.name, value: a.name }); break;
     case 'broadcast-prompt': openOverlay('broadcast'); break;
     case 'broadcast': { closeOverlay(); const text = String(a.text || '').slice(0, 20000); const ids = Array.isArray(a.ids) ? a.ids.map(Number) : []; if (text.trim() && ids.length) broadcastSend(text, ids); break; }
@@ -887,11 +1073,14 @@ async function broadcastSend(text, ids) {
   }
 }
 function wsMenu() {
-  const names = Object.keys(workspaces);
+  const names = Object.keys(workspaces), act = workspaces[activeWs] ? activeWs : null;
   Menu.buildFromTemplate([
-    ...(names.length ? names.map(n => ({ label: n, click: () => loadWorkspace(n) })) : [{ label: '（保存したレイアウトはまだありません）', enabled: false }]),
+    ...(act ? [{ label: `「${act}」を上書き保存`, click: () => overwriteWorkspace(act, false) }] : []),
+    { label: '新規として保存…', click: () => openOverlay('ws-save') },
+    { label: '別のレイアウトを上書き保存', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => overwriteWorkspace(n, true) })) : [{ label: '-', enabled: false }] },
     { type: 'separator' },
-    { label: '現在の構成を保存…', click: () => openOverlay('ws-save') },
+    ...(names.length ? names.map(n => ({ label: n, type: 'checkbox', checked: n === act, click: () => loadWorkspace(n) })) : [{ label: '（保存したレイアウトはまだありません）', enabled: false }]),
+    { type: 'separator' },
     { label: '名前を変更', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => openOverlay('ws-rename', { name: n, value: n }) })) : [{ label: '-', enabled: false }] },
     { label: '削除', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => { delete workspaces[n]; save(); buildMenu(); broadcast(); } })) : [{ label: '-', enabled: false }] },
   ]).popup({ window: win });
@@ -936,6 +1125,8 @@ function chipMenu(id) {
   Menu.buildFromTemplate([
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || chipDefault(p) }) },
     { label: '再読み込み', click: () => reloadPane(p) },
+    { label: '入力待機中にスリープ', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
+    { label: '今すぐスリープ（入力待機中のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepPane(p) },
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
@@ -962,6 +1153,9 @@ on('activate-pane', id => focusPane(panes.findIndex(p => p.id === id)));
 on('set-reload', (id, m) => { const p = byId(id); if (p && RELOAD_CHOICES.includes(m)) { p.reloadMinutes = m; p.lastReload = Date.now(); sendState(); save(); } });
 on('swap', (a, b) => swapPanes(a, b));
 on('maximize', id => toggleMaximize(id));
+on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
+on('wake-pane', id => { const p = byId(id); if (p?.sleeping) { reloadPane(p); setFocused(panes.indexOf(p)); } });
+on('sleep-now', id => { const p = byId(id); if (p && canSleep(p, panes.indexOf(p), true)) sleepPane(p); });
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
 on('reload-all', () => reloadAll());
@@ -971,6 +1165,7 @@ on('usage-pop-keep', () => clearTimeout(popTimer));
 on('usage-pop-leave', () => popLater());
 on('usage-pop-size', h => { if (popOpen && !overlayOpen) overlay.setBounds(popBounds(Number(h))); });
 on('ws-menu', () => wsMenu());
+on('approve-open', () => openApprove());
 on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
 on('sync-cols', v => syncColsApply(!!v));
 on('sync-reset', () => syncReset());
@@ -979,7 +1174,7 @@ on('split-reset', (axis, row) => splitReset(String(axis), row == null ? undefine
 on('palette', () => openOverlay('palette'));
 on('overlay-run', a => runAction(a));
 on('overlay-close', () => closeOverlay());
-on('ready', () => sendState());
+on('ready', () => { sendState(); sendMem(); });
 on('fav-open', (id, where) => openFavorite(id, where));
 on('fav-menu', id => favMenu(id));
 on('fav-move', (a, b) => moveFavorite(a, b));
@@ -993,9 +1188,9 @@ paneOn('pane:msgcount', (e, c) => {
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
 paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
-paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
+paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
 paneOn('pane:mouseup', e => { if (byWc(e.sender)) splitEnd(); });
-paneOn('pane:typing', e => { const p = byWc(e.sender); if (p) p.lastTyping = Date.now(); });
+paneOn('pane:typing', e => { const p = byWc(e.sender); if (p) { p.lastTyping = Date.now(); p.lastInteract = Date.now(); } });
 paneOn('pane:editing', (e, v) => { const p = byWc(e.sender); if (p) p.editing = !!v; });
 // ---- favorites (global list, opened in this window) ----
 function openFavorite(id, where = 'here') {
@@ -1029,13 +1224,19 @@ function snapshot() {
   let bounds = lastBounds;
   try { if (!win.isDestroyed() && !win.isMaximized() && !win.isFullScreen()) bounds = win.getNormalBounds(); } catch {}
   lastBounds = bounds;
-  return (snapCache = { layout, focused, panes: panes.map(paneSpec), window: { bounds, maximized: win.isMaximized() } });
+  return (snapCache = { layout, focused, panes: panes.map(paneSpec), rows: [...getRows()], window: { bounds, maximized: win.isMaximized() } });
 }
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
-  loadWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; } };
+  sleepTick, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
+  focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
+  othersInfo(n) {
+    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.glow || p.unread).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
+      waiting: !!p.waiting, working: !!p.working, glow: !!p.glow, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
+  } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
   : restore ? restoreBounds(spec.window) : { width: 1400, height: 900 };
@@ -1053,6 +1254,7 @@ win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });
 win.on('close', () => {
   snapshot();
+  try { approveOpen = false; destroyApprove(); } catch {}
   if (quitting) return;
   if (ctxs.length === 1) { if (!quitting) saveNow(); return; }            // last window: remember it
   const i = ctxs.indexOf(ctx); if (i >= 0) ctxs.splice(i, 1);  // other windows are forgotten when closed
@@ -1069,6 +1271,7 @@ overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input
 
 const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ url: '' }];
 specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
+rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
 setFocused(Math.min(spec.focused || 0, panes.length - 1));
 pumpLoads();
 relayout();
@@ -1089,7 +1292,8 @@ function buildMenu() {
       acc('CmdOrCtrl+L', () => cur()?.focusUrlBar(), 'アドレスを編集'),
       acc('CmdOrCtrl+K', () => cur()?.openOverlay('palette'), 'コマンドパレット…'),
       { type: 'separator' },
-      { label: 'ワークスペースを保存…', click: () => cur()?.openOverlay('ws-save') },
+      { label: 'ワークスペースを上書き保存', enabled: !!cur()?.activeWs, click: () => cur()?.overwriteWorkspace(cur().activeWs, false) },
+      { label: 'ワークスペースを新規保存…', click: () => cur()?.openOverlay('ws-save') },
       { label: 'ワークスペースを開く', enabled: Object.keys(workspaces).length > 0,
         submenu: Object.keys(workspaces).length ? Object.keys(workspaces).map(n => ({ label: n, click: () => cur()?.loadWorkspace(n) })) : [{ label: '（なし）', enabled: false }] },
       { type: 'separator' },
@@ -1128,6 +1332,7 @@ function buildMenu() {
         click: () => { settings.theme = v; nativeTheme.themeSource = v; save(); } })) },
       { type: 'separator' },
       { label: '更新時にmacOS通知を出す', type: 'checkbox', checked: settings.notifications, click: m => { settings.notifications = m.checked; save(); } },
+      { label: '入力待機中（🟢）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: 'grok.com/bot を開き直す補正（直接読み込みで真っ黒になる対策）', type: 'checkbox', checked: settings.grokFix, click: m => { settings.grokFix = m.checked; save(); } },

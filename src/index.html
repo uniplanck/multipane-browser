@@ -3,8 +3,10 @@
 <link rel="stylesheet" href="style.css"></head><body>
 <header id="top">
   <div id="tl-space"></div>
+  <div id="mem" title="このアプリ全体のメモリ使用量（全プロセスの合計）">--</div>
   <div class="seg" id="presets" role="tablist" aria-label="レイアウト"></div>
   <div id="strip" aria-label="ペイン一覧"></div>
+  <div id="others-sep"></div><div id="others" aria-label="他のウィンドウのペイン"></div>
   <div id="unread-sum" title="次の未読ペインへ (⌘J)"></div>
   <button class="icon-btn" id="ws-btn" title="レイアウト保存・切替（保存したペイン構成をワンクリックで開く）">⧉</button>
   <button class="icon-btn" id="sync-cols" title="上下の幅を同期: ON"></button>
@@ -14,6 +16,7 @@
   <button class="pill usage" id="u-codex" data-kind="codex"><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="u-claude" data-kind="claude"><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="usage" data-kind="grok"><span class="uico"></span><span class="uval">--</span></button>
+  <button class="icon-btn" id="approve-btn" title="承認Bot"><svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.8 15 4v4.6c0 3.6-2.5 6.2-6 7.6-3.5-1.4-6-4-6-7.6V4z"/><path d="M6 9.2l2.1 2.1L12.2 7"/></svg></button>
 </header>
 <nav id="favbar" aria-label="お気に入り"><span id="fav-star" title="お気に入り：クリックで選択中のペイン、⌘クリックで新しいペイン、⇧クリックで別ウィンドウ、右クリックでメニュー。URLやリンクをここにドロップで追加">★</span><div id="favs"></div><span id="fav-hint">⋯メニュー・⌘K・URLのドロップでお気に入りに追加</span></nav>
 <div id="panes"></div>

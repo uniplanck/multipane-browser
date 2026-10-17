@@ -40,7 +40,9 @@ function build() {
     ['次の未読ペインへ', '●', { type: 'next-unread' }, `${MOD}J`],
     ['フォーカス中のペインを最大化 / 元に戻す', '⤢', { type: 'maximize' }, `${MOD}\\`],
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
-    ['ワークスペースとして保存…', '⧉', { type: 'ws-save-prompt' }],
+    ...(S?.activeWs ? [[`ワークスペース「${S.activeWs}」を上書き保存`, '⧉', { type: 'ws-overwrite', name: S.activeWs }]] : []),
+    ['ワークスペースとして新規保存…', '⧉', { type: 'ws-save-prompt' }],
+    ['承認Botを開く', '✓', { type: 'approve-open' }],
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
     ['フォーカス中のペインをお気に入りに追加', '★', { type: 'fav-add-current' }],
     ['新しいウィンドウ', '⧉', { type: 'new-window', url: '' }, `${MOD}N`],
@@ -50,7 +52,7 @@ function build() {
     ['Grok を新しいペインで開く', '✦', { type: 'open-new', url: 'https://grok.com/' }],
   ];
   LAYOUTS.forEach((k, i) => cmds.push([`レイアウト: ${k.replace('x', '×')}`, '▦', { type: 'layout', layout: k }, `${MOD}${i + 1}`]));
-  (S?.workspaces || []).forEach(n => { cmds.push([`ワークスペースを開く: ${n}`, '⧉', { type: 'ws-load', name: n }]); cmds.push([`ワークスペースの名前を変更: ${n}`, '✎', { type: 'ws-rename-prompt', name: n }]); cmds.push([`ワークスペースを削除: ${n}`, '🗑', { type: 'ws-delete', name: n }]); });
+  (S?.workspaces || []).forEach(n => { cmds.push([`ワークスペースを開く: ${n}`, '⧉', { type: 'ws-load', name: n }]); if (n !== S.activeWs) cmds.push([`ワークスペースを上書き保存: ${n}`, '⧉', { type: 'ws-overwrite', name: n, confirm: true }]); cmds.push([`ワークスペースの名前を変更: ${n}`, '✎', { type: 'ws-rename-prompt', name: n }]); cmds.push([`ワークスペースを削除: ${n}`, '🗑', { type: 'ws-delete', name: n }]); });
   cmds.forEach(([label, icon, act, key]) => { if (fuzzy(label, v) > 0) out.push({ sec: 'コマンド', label, icon, act, key }); });
   if (v && !looksUrl(v)) out.push({ sec: '検索', label: `「${v}」をGoogleで検索（新しいペイン）`, icon: '⌕', act: { type: 'open-new', url: v } });
   return out;
@@ -88,10 +90,15 @@ q.onkeydown = e => {
 list.onmousemove = e => { if (mode === 'broadcast') return; const el = e.target.closest('.it'); if (el && Number(el.dataset.i) !== sel) { sel = Number(el.dataset.i); render(); } };
 list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.dataset.i), e.metaKey || e.ctrlKey); };
 $('#scrim').onclick = () => mpb.closeOverlay();
+function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
+mpb.onApproveRect(apRect);
+addEventListener('keydown', e => { if (mode === 'approve' && e.key === 'Escape') mpb.closeOverlay(); });
 mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette') render(); else if (mode === 'broadcast') renderBc(true); });
 mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
+  document.body.classList.toggle('approve', mode === 'approve');
+  if (mode === 'approve') { apRect(o.rect); return; }
   document.body.classList.toggle('bc', mode === 'broadcast');
   if (mode === 'broadcast') { bcSel.clear(); bcText.value = ''; $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
@@ -180,7 +187,7 @@ function aiRender(d) {
     `<hr><div class="sm" style="margin:0 0 2px">右クリックで表示する枠を選べます。表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
   upSize();
 }
-mpb.onUsagePop(d => { if (document.activeElement && document.activeElement.id === 'up-margin') return; upKind = d.kind || 'grok'; if (upKind === 'grok') upRender(d); else aiRender(d); });
+mpb.onUsagePop(d => { document.body.classList.remove('approve'); if (document.activeElement && document.activeElement.id === 'up-margin') return; upKind = d.kind || 'grok'; if (upKind === 'grok') upRender(d); else aiRender(d); });
 up.addEventListener('mouseenter', () => mpb.usagePopKeep());
 document.documentElement.addEventListener('mouseleave', () => { if (document.activeElement && document.activeElement.id === 'up-margin') return; mpb.usagePopLeave(); });
 mpb.onUsageUpdated(() => { if (document.body.classList.contains('upop') && upKind === 'grok') mpb.usage(false).then(() => mpb.usageMargin(Number.NaN)).then(upRender).catch(() => {}); });
