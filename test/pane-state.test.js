@@ -113,6 +113,8 @@ const deepFreeze = x => { if (x && typeof x === 'object' && !Object.isFrozen(x))
   t('a new bot turn while asleep: CHANGED, unopened, it becomes the baseline', nw.verdict === 'CHANGED' && nw.fresh && nw.o.unopened && nw.o.sleep.base.fp === NEWBOT.fp);
   const us = PS.reduce(o, { type: 'probe-result', sleep: 3, c: USER });
   t('changed but the user spoke last: not unopened', us.verdict === 'CHANGED' && !us.fresh && !us.o.unopened);
+  const more = PS.reduce(o, { type: 'probe-result', sleep: 3, c: { ...WAIT, user: WAIT.user + 1, bot: WAIT.bot + 2 } });
+  t('only the history totals differ (a page that rendered more of it): SAME, not unopened', more.verdict === 'SAME' && !more.fresh && !more.o.unopened);
   const stop = PS.reduce(nw.o, { type: 'probe-stop', run });
   t('a stopped run takes nothing more', stop.code === '' && stop.o.sleep.run === null && PS.reduce(stop.o, { type: 'probe-scan', run, gen: tok, seq: 9 }).code === 'STALE_RUN');
   // unread / unopened is its own axis: unknown reports and new generations do not clear it, only waking does

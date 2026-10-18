@@ -96,7 +96,7 @@ function reduce(o, a) {
     case 'probe-result': {                                     // only the sleep the check was started for: never after a wake / another sleep
       if (!o.sleep || o.sleep.id !== a.sleep || !a.c) return no('STALE_RUN');
       const nf = fpOf(a.c), old = o.sleep.base;
-      const verdict = !old ? 'BASELINE' : old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot ? 'CHANGED' : 'SAME';
+      const verdict = !old ? 'BASELINE' : old.fp !== nf.fp || old.botSince !== nf.botSince ? 'CHANGED' : 'SAME';   // the user / bot totals are not compared: how much history a page has rendered differs between the awake page and the check window (observed: user 1->2 with nothing new)
       const fresh = verdict === 'CHANGED' && nf.botSince > 0;   // something new from the bot (the user speaking last is not 'new')
       return ok({ ...o, sleep: { ...o.sleep, base: nf }, unopened: o.unopened || fresh }, { verdict, fresh });
     }
