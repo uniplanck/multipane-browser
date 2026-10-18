@@ -1,12 +1,14 @@
-// node test/quote.test.js — request-quote extraction (above the 🟢 marker) + draft-check code kept identical in preload and main
-const fs = require('fs'), path = require('path');
-const pre = fs.readFileSync(path.join(__dirname, '..', 'src', 'pane-preload.js'), 'utf8');
+// node test/quote.test.js — request-quote extraction (above the 🟢 marker) + the draft check, on the shared source (src/pane-rules.js)
+// and on the copy built into the sandboxed preload (src/pane-preload.js); main must use the shared draft check, not a copy of its own
+const fs = require('fs'), path = require('path'), vm = require('vm');
+const { loadPreload } = require('./preload-sandbox');
 const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
-const blk = (t, a, b) => t.slice(t.indexOf(a) + a.length, t.indexOf(b));
-const body = blk(pre, '// MARK-BEGIN', '// MARK-END') + blk(pre, '// QUOTE-BEGIN', '// QUOTE-END');
-const { requestQuote, clipQuote } = new Function(body + ';return { requestQuote, clipQuote };')();
+const rules = require('../src/pane-rules'), pre = loadPreload();
+const impls = [['rules', rules], ['preload', pre]];
 const M = '🟢 ━━ 《 待機中 》 ━━ 🟢', D = '◆ 2026-10-18 17:00 ◆';
-let bad = 0; const eq = (n, got, exp) => { const ok = got === exp; if (!ok) { bad++; console.log('FAIL', n, JSON.stringify(got), '!=', JSON.stringify(exp)); } else console.log('ok  ', n); };
+let bad = 0; const check = (n, got, exp) => { const ok = got === exp; if (!ok) { bad++; console.log('FAIL', n, JSON.stringify(got), '!=', JSON.stringify(exp)); } else console.log('ok  ', n); };
+for (const [impl, { requestQuote, clipQuote }] of impls) {   // the same expected values for both
+const eq = (n, got, exp) => check(`${impl} ${n}`, got, exp);
 eq('blockquote directly above marker', requestQuote(`本文です\n---\n\n> 次の作業を指示してください\n\n${M}\n${D}`, ['次の作業を指示してください']), '次の作業を指示してください');
 eq('blockquote with > markers kept clean', requestQuote(`本文\n> A案かB案か選んでください\n${M}`, ['> A案かB案か選んでください']), 'A案かB案か選んでください');
 eq('rule between quote and marker', requestQuote(`本文\n\n> どうしますか\n\n---\n${M}`, ['どうしますか']), 'どうしますか');
@@ -30,8 +32,31 @@ eq('clip to 300', clipQuote(long).length, 300);
 eq('clip adds ellipsis', clipQuote(long).endsWith('…'), true);
 eq('long quote clipped via requestQuote', requestQuote(`> ${long}\n${M}`, [long]).length, 300);
 eq('short not clipped', clipQuote('短い'), '短い');
-// the live draft check in main (executeJavaScript) must be the same code as the one in the preload
-const preFn = blk(pre, '// DRAFT-BEGIN', '// DRAFT-END').trim();
-const mainFn = blk(main, '// DRAFT-BEGIN', '// DRAFT-END').trim().replace(/^const DRAFT_FN = `/, '').replace(/`;$/, '');
-eq('draft code identical in preload and main', mainFn, preFn);
+}
+// composerDraft has one copy (src/pane-rules.js): the preload has it built in, main runs its source (DRAFT_JS) in the live page before a pane sleeps
+check('preload has the shared composerDraft', pre.composerDraft.toString(), rules.composerDraft.toString());
+check('DRAFT_JS is the shared composerDraft', rules.DRAFT_JS, `(${rules.composerDraft})()`);
+check('main has no draft check of its own', /function composerDraft|DRAFT_FN/.test(main), false);
+check('main takes DRAFT_JS from the shared rules', /const \{ DRAFT_JS \} = require\('\.\/pane-rules'\)/.test(main), true);
+// the draft protection itself, on both: main's DRAFT_JS (run in a fresh context, like executeJavaScript) and the preload's function
+const field = ({ tag = 'TEXTAREA', value = '', text = '', hidden = false, tabIndex = 0, attachment = false } = {}) => {
+  const box = { querySelector: s => (attachment && s.includes('img[src^="blob:"]') ? {} : null) };
+  return { tagName: tag, value, innerText: text, textContent: text, tabIndex, getAttribute: a => (a === 'aria-hidden' && hidden ? 'true' : null), closest: s => (s === 'form' ? box : null), parentElement: { parentElement: box } };
+};
+const drafts = [
+  ['no composer', [], false],
+  ['empty textarea', [field()], false],
+  ['whitespace only', [field({ value: '  \n ' })], false],
+  ['typed text', [field({ value: 'こんにちは' })], true],
+  ['contenteditable text', [field({ tag: 'DIV', text: '下書き' })], true],
+  ['autosize mirror textarea (tabIndex -1, value x) ignored', [field({ value: 'x', tabIndex: -1 })], false],
+  ['aria-hidden field ignored', [field({ tag: 'DIV', text: 'x', hidden: true })], false],
+  ['mirror + composer with text', [field({ value: 'x', tabIndex: -1 }), field({ value: '本文' })], true],
+  ['empty composer + pending attachment', [field({ attachment: true })], true],
+];
+for (const [n, els, exp] of drafts) {
+  const doc = { querySelectorAll: () => els };
+  check('main draft: ' + n, vm.runInNewContext(rules.DRAFT_JS, { document: doc }), exp);
+  pre.ctx.document = doc; check('preload draft: ' + n, pre.composerDraft(), exp);
+}
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

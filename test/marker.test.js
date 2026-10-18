@@ -1,8 +1,7 @@
-// node test/marker.test.js  — tests the waiting/working marker matcher extracted from src/pane-preload.js
-const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'pane-preload.js'), 'utf8');
-const body = src.slice(src.indexOf('// MARK-BEGIN'), src.indexOf('// MARK-END')) + src.slice(src.indexOf('// ASK-BEGIN'), src.indexOf('// ASK-END'));
-const { markerOf, looksAsking } = new Function(body + ';return { markerOf, looksAsking };')();
+// node test/marker.test.js  — tests the waiting/working/done marker matcher: the shared source (src/pane-rules.js, what main / Node use)
+// and the copy built into the sandboxed preload (src/pane-preload.js) are both checked against the same expected values
+const { loadPreload } = require('./preload-sandbox');
+const impls = [['rules', require('../src/pane-rules')], ['preload', loadPreload()]];
 const D = '`◆ 2026-10-15 16:33 ◆`';
 const cases = [
   // [name, text, expected marker]
@@ -71,6 +70,14 @@ const cases = [
   ['old 入力待機中 still wait (fullwidth form)', '🟢　━━　【　入力待機中　】　━━　🟢', 'wait'],
   ['old 入力待機中60 still wait', '🟢 ━━ 入力待機中60 ━━ 🟢', 'wait'],
   ['work stays work (new look)', '🔴 ━━ 【 作業中 】 ━━ 🔴\n' + D, 'work'],
+  // a marker inside a code span / code block / blockquote of the entry: current behaviour pinned (the entry's text includes it, so it counts at the very end)
+  ['pinned: inline code at the end', '本文\n`🟢 ━━ 《 待機中 》 ━━ 🟢`', 'wait'],
+  ['pinned: fenced code block at the end', '本文\n```\n🟢 ━━ 《 待機中 》 ━━ 🟢\n```', 'wait'],
+  ['pinned: code block textContent (no newlines)', '本文const x = 1;🟢 ━━ 《 待機中 》 ━━ 🟢', 'wait'],
+  ['pinned: work in fenced code block at the end', '本文\n```\n🔴 ━━ 【 作業中 】 ━━ 🔴\n```', 'work'],
+  ['pinned: > blockquote marker at the end', '本文\n> 🟢 ━━ 《 待機中 》 ━━ 🟢', 'wait'],
+  ['pinned: marker in code, more code after', '本文\n🟢 ━━ 《 待機中 》 ━━ 🟢\nconst x = 1;', null],
+  ['pinned: done in blockquote, text after', '本文\n> 🟣 ━━ ［終了］ ━━ 🟣\n追記', null],
   // negatives
   ['neg: done marker followed by body', '🟣 ━━ ［ 終　了 ］ ━━ 🟣\n追記です', null],
   ['neg: new wait followed by body', '🟢 ━━ 《 待機中 》 ━━ 🟢\n追記です', null],
@@ -89,9 +96,9 @@ const cases = [
   ['neg: mismatched emoji', '本文\n🟢 ━━ 作業中 ━━ 🔴', null],
 ];
 let bad = 0;
-for (const [name, text, exp] of cases) { const r = markerOf(text); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
+for (const [impl, { markerOf }] of impls) for (const [name, text, exp] of cases) { const r = markerOf(text); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', impl, name, '->', r); }
 // looksAsking: working marker must never ask; waiting marker must
 const asks = [['asks: wait', '本文\n🟢 ━━ 入力待機中 ━━ 🟢 ' + D, false, true], ['asks: work with question mark before', 'どちらにしますか？\n🔴 ━━ 【 作業中 】 ━━ 🔴', false, false], ['asks: plain', '進捗です', false, false], ['asks: new wait', '本文\n🟢 ━━ 《 待機中 》 ━━ 🟢\n' + D, false, true], ['asks: done never asks', 'どうしますか？\n🟣 ━━ ［ 終　了 ］ ━━ 🟣\n' + D, false, false], ['asks: done with widget never asks', '本文\n🟣 ━━ ［ 終　了 ］ ━━ 🟣', true, false]];
-for (const [name, text, w, exp] of asks) { const r = looksAsking(text, w); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
-console.log(`${cases.length + asks.length} cases, ${bad} failed`);
+for (const [impl, { looksAsking }] of impls) for (const [name, text, w, exp] of asks) { const r = looksAsking(text, w); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', impl, name, '->', r); }
+console.log(`${(cases.length + asks.length) * impls.length} cases (${cases.length + asks.length} x ${impls.map(i => i[0]).join(' + ')}), ${bad} failed`);
 process.exit(bad ? 1 : 0);

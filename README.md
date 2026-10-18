@@ -35,7 +35,11 @@ npm install
 npm start                # 開発起動
 npm run dist:mac         # .dmg / .zip をビルド
 npm run install:mac      # arm64 の .app をビルドして /Applications にインストール（ad-hoc署名）
+npm run build:preload    # src/pane-preload.js を生成（下記）
+npm run check:preload    # 生成物が最新か確認（変更しない。古い/無いと exit 1）
 ```
+- `src/pane-preload.js` は**生成物なので直接編集しない**。ペインの preload は sandbox で動きローカルファイルを `require` できないため、マーカー判定・引用抽出・下書き判定（`src/pane-rules.js`、main とテストも同じものを `require`）を `scripts/build-pane-preload.js` が `src/pane-preload.template.js` に組み込んで作る。どちらかを編集したら `npm run build:preload`。`npm start` とパッケージング（electron-builder の `beforePack`）の前に自動で確認し、古ければ止まる
+- テスト: `for f in test/*.test.js; do node "$f"; done`
 デバッグログ: `MPB_DEBUG=1 npm start` → `~/Library/Application Support/MultiPane Browser/pane-debug.log`
 
 ## English

@@ -795,20 +795,7 @@ function sleepPane(p) {
   applyThrottling(); sendState(); save();
 }
 // Final live check right before discarding the page: a draft (or a failed check) means: do not sleep.
-// DRAFT-BEGIN
-const DRAFT_FN = `function composerDraft() {
-  const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
-  for (const e of els) {
-    if (e.getAttribute('aria-hidden') === 'true' || e.tabIndex < 0 && e.tagName === 'TEXTAREA') continue;   // autosize mirror textarea (value 'x')
-    const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
-    if (String(txt).trim().length > 0) return true;
-    const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
-    if (box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')) return true;
-  }
-  return false;
-}`;
-// DRAFT-END
-const DRAFT_JS = `(${DRAFT_FN})()`;
+const { DRAFT_JS } = require('./pane-rules');                // composerDraft() from the shared rules: the same code the pane preload has built in
 async function liveDraft(p) { try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); return d === false ? false : true; } catch { return true; } }
 async function trySleep(p) {
   if (p.sleepChecking) return; p.sleepChecking = true;

@@ -5,6 +5,9 @@
   "description": "1ウィンドウに最大10ペインを並べられるChromiumベースのブラウザ",
   "main": "src/main.js",
   "scripts": {
+    "build:preload": "node scripts/build-pane-preload.js",
+    "check:preload": "node scripts/build-pane-preload.js --check",
+    "prestart": "node scripts/build-pane-preload.js --check",
     "start": "electron .",
     "dist:mac": "electron-builder --mac --universal",
     "dist:mac-split": "electron-builder --mac --arm64 --x64",
@@ -13,6 +16,7 @@
   "build": {
     "appId": "com.multipanebrowser.app",
     "productName": "MultiPane Browser",
+    "beforePack": "./scripts/build-pane-preload.js",
     "files": [
       "src/**/*",
       "package.json"
