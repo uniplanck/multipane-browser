@@ -138,7 +138,7 @@ const RUNS = [
   { type: 'focus', id: 3 }, { type: 'next-unread' }, { type: 'maximize' }, { type: 'rename-prompt' }, { type: 'ws-overwrite', name: 'A' }, { type: 'ws-overwrite', name: 'A', confirm: true },
   { type: 'ws-save-prompt' }, { type: 'approve-open' }, { type: 'broadcast-prompt' }, { type: 'fav-add-current' }, { type: 'reload-all' }, { type: 'reopen-closed' }, { type: 'clear-unread' },
   { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
-  { type: 'broadcast', text: 'こんにちは', ids: [1, 3] }, { type: 'toggle-notifications' },
+  { type: 'bc-preview', text: 'こんにちは', ids: [1, 3] }, { type: 'bc-send', pid: 5 }, { type: 'bc-cancel', bid: 6 }, { type: 'bc-reset' }, { type: 'toggle-notifications' },
   { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },
 ];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
@@ -146,12 +146,16 @@ t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(
 t('chrome bar: next-unread only', run('chrome', { type: 'next-unread' }) === null && RUNS.filter(a => a.type !== 'next-unread').every(a => run('chrome', a) === 'E_ROLE'));
 t('unknown / inherited / missing type -> E_PAYLOAD', [{ type: 'eval' }, { type: '__proto__' }, { type: 'toString' }, { type: 'constructor' }, {}, { type: 5 }, null, 'focus', ['focus']].every(a => run('overlay', a) === 'E_PAYLOAD'));
 t('focus / rename: pane of this window', run('overlay', { type: 'focus', id: 7 }) === 'E_TARGET' && run('overlay', { type: 'rename', id: 9, value: 'x' }) === 'E_TARGET' && run('overlay', { type: 'focus', id: '3' }) === 'E_PAYLOAD');
-t('broadcast: 1..MAX distinct pane ids of this window, text up to BROADCAST_MAX', run('overlay', { type: 'broadcast', text: 'x'.repeat(P.BROADCAST_MAX), ids: [1, 2, 3] }) === null
-  && run('overlay', { type: 'broadcast', text: 'x'.repeat(P.BROADCAST_MAX + 1), ids: [1] }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: [] }) === 'E_PAYLOAD'
-  && run('overlay', { type: 'broadcast', text: 'x', ids: Array.from({ length: P.MAX_PANES + 1 }, (_, i) => i + 1) }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: [1, 1] }) === 'E_PAYLOAD'
-  && run('overlay', { type: 'broadcast', text: 'x', ids: [1, '2'] }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: 1 }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', ids: [1] }) === 'E_PAYLOAD'
-  && run('overlay', { type: 'broadcast', text: 'x', ids: [1, 7] }) === 'E_TARGET'
-  && run('overlay', { type: 'broadcast', text: 'x', ids: Array.from({ length: P.MAX_PANES }, (_, i) => i + 1) }, world({ pane: () => true })) === null);
+t('broadcast preview (#12): 1..MAX distinct pane ids of this window, text up to BROADCAST_MAX', run('overlay', { type: 'bc-preview', text: 'x'.repeat(P.BROADCAST_MAX), ids: [1, 2, 3] }) === null
+  && run('overlay', { type: 'bc-preview', text: 'x'.repeat(P.BROADCAST_MAX + 1), ids: [1] }) === 'E_PAYLOAD' && run('overlay', { type: 'bc-preview', text: 'x', ids: [] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'bc-preview', text: 'x', ids: Array.from({ length: P.MAX_PANES + 1 }, (_, i) => i + 1) }) === 'E_PAYLOAD' && run('overlay', { type: 'bc-preview', text: 'x', ids: [1, 1] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'bc-preview', text: 'x', ids: [1, '2'] }) === 'E_PAYLOAD' && run('overlay', { type: 'bc-preview', text: 'x', ids: 1 }) === 'E_PAYLOAD' && run('overlay', { type: 'bc-preview', ids: [1] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'bc-preview', text: 'x', ids: [1, 7] }) === 'E_TARGET'
+  && run('overlay', { type: 'bc-preview', text: 'x', ids: Array.from({ length: P.MAX_PANES }, (_, i) => i + 1) }, world({ pane: () => true })) === null);
+t('broadcast send / cancel (#12): only the numbers main gave (no text, no pane ids); the old one-step send is gone', !Object.hasOwn(P.ACTIONS, 'broadcast')
+  && run('overlay', { type: 'broadcast', text: 'x', ids: [1] }) === 'E_PAYLOAD'
+  && [0, -1, 1.5, '5', null, undefined, Number.MAX_SAFE_INTEGER + 1].every(v => run('overlay', { type: 'bc-send', pid: v }) === 'E_PAYLOAD' && run('overlay', { type: 'bc-cancel', bid: v }) === 'E_PAYLOAD')
+  && run('overlay', { type: 'bc-send', pid: 1, text: 'ignored' }) === null && ['bc-preview', 'bc-send', 'bc-cancel', 'bc-reset'].every(k => run('chrome', { type: k, pid: 1, bid: 1, text: 'x', ids: [1] }) === 'E_ROLE'));
 t('workspaces: existing names only (own keys), no "__proto__" as a new name', run('overlay', { type: 'ws-load', name: 'B' }) === 'E_TARGET' && run('overlay', { type: 'ws-load', name: '__proto__' }) === 'E_TARGET' && run('overlay', { type: 'ws-delete', name: 'toString' }) === 'E_TARGET'
   && run('overlay', { type: 'ws-save', value: '__proto__' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: ' __proto__ ' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-rename', name: 'A', value: '__proto__' }) === 'E_PAYLOAD'
   && run('overlay', { type: 'ws-overwrite', name: 'A', confirm: 'yes' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: 'x'.repeat(P.TEXT_MAX + 1) }) === 'E_PAYLOAD');
@@ -169,7 +173,7 @@ t('focus-other: an existing window + its pane', chk('focus-other', 'chrome', [3,
 // ---- order and side effects: nothing about the world is looked at before the sender / frame / page / payload pass ----
 { let looked = 0; const spy = world({ pane: () => { looked++; return true; }, fav: () => { looked++; return true; }, ws: () => { looked++; return true; }, winPane: () => { looked++; return true; } });
   chk('reload', { role: null, frame: SND.chrome.frame }, [1], spy); chk('reload', 'pane', [1], spy); chk('reload', as('chrome', { top: false }), [1], spy); chk('reload', as('chrome', { url: 'https://e.com/' }), [1], spy);
-  chk('reload', 'chrome', ['1'], spy); chk('overlay-run', 'chrome', [{ type: 'broadcast', text: 'x', ids: [1] }], spy); chk('reload', 'chrome', [1], world({ owned: false, pane: spy.pane }));
+  chk('reload', 'chrome', ['1'], spy); chk('overlay-run', 'chrome', [{ type: 'bc-preview', text: 'x', ids: [1] }], spy); chk('reload', 'chrome', [1], world({ owned: false, pane: spy.pane }));
   t('rejected before the target check: the world is never consulted', looked === 0);
   t('allowed: the target is checked once', chk('reload', 'chrome', [1], spy) === null && looked === 1); }
 t('order: sender before role before frame before page before owner before payload', chk('reload', { role: null, frame: null }, ['x'], world({ owned: false })) === 'E_SENDER' && chk('reload', { role: 'pane', frame: null }, ['x']) === 'E_ROLE'

@@ -57,6 +57,10 @@ const NOTIFY_CODES = ['SENT', 'MERGED', 'DUP', 'MUTED', 'QUIET', 'GONE', 'SEEN',
 // (#23, closed-panes.js CODES; checked by test/closed-panes.test.js) 閉じたペインを開き直す: reopened / nothing closed / MAX panes open / one
 // already running / the pane could not be made (n = entries left in the history; never its URL or name)
 const REOPEN_CODES = ['OK', 'EMPTY', 'FULL', 'BUSY', 'FAIL'];
+// (#12, broadcast-state.js CODES; checked by test/broadcast-state.test.js) 一斉送信: a preview (n = panes), a batch started (n = targets) / in the
+// dry-run mode, a send refused (the same preview again / a batch still running / not the preview on screen), per target (p): send started,
+// confirmed, result unknown, skipped / moved since the preview / did not wake, cancelled (n), finished (n = confirmed). Never the text / a name / a URL
+const BCAST_CODES = ['PREVIEW', 'START', 'DRYRUN', 'DUP', 'STALE', 'BUSY', 'SENT', 'OK', 'UNSURE', 'SKIP', 'CHANGED', 'NO_WAKE', 'CANCEL', 'DONE'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -96,6 +100,7 @@ const EVENTS = {
   zoom: { ja: 'ペインのズーム方式', r: ZOOM_CODES },
   notify: { ja: '通知の配送', r: NOTIFY_CODES },
   reopen: { ja: '閉じたペインを開き直す', r: REOPEN_CODES },
+  bcast: { ja: '一斉送信', r: BCAST_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -353,5 +358,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

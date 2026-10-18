@@ -38,4 +38,5 @@ contextBridge.exposeInMainWorld('mpb', {
   onState: cb => listen('state', (_, s) => cb(s)),
   onFocusUrl: cb => listen('focus-url', (_, id) => cb(id)),
   onOverlayOpen: cb => listen('overlay-open', (_, o) => cb(o)),
+  onBroadcast: cb => listen('bc-state', (_, v) => cb(v)),      // (#12) main's view of the broadcast preview / batch
 });

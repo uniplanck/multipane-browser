@@ -120,7 +120,7 @@ mpb.onOverlayOpen(o => {
   document.body.classList.toggle('diag', mode === 'diag');
   if (mode === 'approve') { apRect(o.rect); return; }
   document.body.classList.toggle('bc', mode === 'broadcast');
-  if (mode === 'broadcast') { bcSel.clear(); bcText.value = ''; $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
+  if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
   q.value = o.value || ''; q.readOnly = mode === 'recovery' || mode === 'diag';
   q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
@@ -134,34 +134,68 @@ mpb.onOverlayOpen(o => {
   q.focus(); q.select();
 });
 
-// ---- broadcast composer ----
+// ---- broadcast composer (#12): compose -> プレビュー (main reads every chosen pane, nothing is sent) -> 「このN件に送信」 -> progress per target ----
+// main builds the preview / progress (bc-state: phase + Japanese labels); this page shows it and sends back only the numbers main gave it.
 const bcSel = new Set();
+let bcV = null, bcWait = false, bcSentPid = 0, bcClear = false;   // main's view (null: composing), a preview being read, the preview confirmed here, 新しい一斉送信 asked
 const bcText = document.createElement('textarea');
-bcText.id = 'bc-text'; bcText.placeholder = '送信するメッセージ（⌘↵ でチェックしたペインに送信／esc で閉じる）';
+bcText.id = 'bc-text'; bcText.placeholder = '送信するメッセージ（⌘↵ で送信先をプレビュー／esc で閉じる）';
 $('#inwrap').after(bcText);
 const bcFoot = document.createElement('div'); bcFoot.id = 'bc-foot'; $('#box').appendChild(bcFoot);
 function grokPanes() { return (S?.panes || []).filter(p => /^https:\/\/grok\.com\//.test(p.url || '')); }
+const bcPhase = () => (bcV && bcV.phase) || '';
 function renderBc(soft) {
   if (mode !== 'broadcast') return;
+  const ph = bcPhase();
+  bcText.readOnly = !!ph; document.body.classList.toggle('bcv', !!ph);
+  if (ph) { if (!soft) renderBcView(); return; }             // the preview / progress changes only with main's bc-state
   const ps = grokPanes();
   [...bcSel].forEach(id => { if (!ps.some(p => p.id === id)) bcSel.delete(id); });
-  list.innerHTML = '<div class="sec">送信先（Grokのペイン）</div>' + (ps.length ? ps.map(p => `<label class="it bci"><input type="checkbox" data-id="${p.id}" ${bcSel.has(p.id) ? 'checked' : ''}><span class="lb">${esc(p.name || p.title)}<small>${esc(p.url)}</small></span><span class="rt">${p.waiting ? '<span style="color:#30d158">● 待機中</span>' : p.working ? '<span style="color:#ff453a">● 作業中</span>' : ''}<kbd>${p.index + 1}</kbd></span></label>`).join('') : '<div class="empty">Grokのペインがありません</div>');
+  list.innerHTML = '<div class="sec">送信先（Grokのペイン）</div>' + (ps.length ? ps.map(p => `<label class="it bci"><input type="checkbox" data-id="${p.id}" ${bcSel.has(p.id) ? 'checked' : ''}><span class="lb">${esc(p.name || p.title)}<small>${esc(p.url)}</small></span><span class="rt">${p.sleeping ? '<span style="color:#64d2ff">💤 スリープ中</span>' : ''}${p.waiting ? '<span style="color:#30d158">● 待機中</span>' : p.working ? '<span style="color:#ff453a">● 作業中</span>' : ''}<kbd>${p.index + 1}</kbd></span></label>`).join('') : '<div class="empty">Grokのペインがありません</div>');
   list.querySelectorAll('input[type=checkbox]').forEach(cb => cb.onchange = () => { const id = Number(cb.dataset.id); cb.checked ? bcSel.add(id) : bcSel.delete(id); bcFootR(); });
   bcFootR();
 }
-function bcFootR() {
-  const ps = grokPanes();
-  bcFoot.innerHTML = `<button id="bc-all">全選択</button><button id="bc-none">選択解除</button><span class="sp"></span><span>${bcSel.size}件に送信</span><button id="bc-go" ${bcSel.size && bcText.value.trim() ? '' : 'disabled'}>送信 <kbd>⌘↵</kbd></button>`;
-  $('#bc-all').onclick = () => { ps.forEach(p => bcSel.add(p.id)); renderBc(); };
-  $('#bc-none').onclick = () => { bcSel.clear(); renderBc(); };
-  $('#bc-go').onclick = bcGo;
+function renderBcView() {
+  const v = bcV;
+  if (bcText.value !== v.text) bcText.value = v.text;        // exactly the text main holds for this preview / batch
+  list.innerHTML = (v.dry ? '<div class="sec bcdry">試験モード（MPB_BROADCAST_DRYRUN）: 実際には入力・送信しません</div>' : '') + `<div class="sec">${esc(v.head)}</div>`
+    + (v.err ? `<div class="empty">${esc(v.err)}</div>` : '')
+    + v.items.map(it => `<div class="it bcr"><span class="lb">${esc(it.label || '（名前なし）')}<small>${esc(it.conv)}</small>${it.whyJa ? `<small class="why">${esc(it.whyJa)}</small>` : ''}</span><span class="rt"><span class="bst s-${esc(String(it.st).toLowerCase())}">${esc(it.stJa)}</span></span></div>`).join('');
+  bcFootR();
 }
-function bcGo() { const t = bcText.value; if (!t.trim() || !bcSel.size) return; mpb.run({ type: 'broadcast', text: t, ids: [...bcSel] }); }
-bcText.oninput = bcFootR;
-bcText.onkeydown = e => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); bcGo(); }
-  else if (e.key === 'Escape') { e.preventDefault(); mpb.closeOverlay(); }
-};
+function bcFootR() {
+  const ph = bcPhase(), v = bcV, on = (s, f) => { const e = $(s); if (e) e.onclick = f; };
+  if (ph === 'preview') bcFoot.innerHTML = `<button id="bc-back">戻る</button><span class="sp"></span><span>${esc(v.foot)}</span><button id="bc-go" ${v.canSend && bcSentPid !== v.pid ? '' : 'disabled'}>${v.n ? `この${v.n}件に送信` : '送信できる対象がありません'} <kbd>⌘↵</kbd></button>`;
+  else if (ph) bcFoot.innerHTML = `${ph === 'run' ? `<button id="bc-cancel" ${v.canCancel ? '' : 'disabled'}>未送信分を取消</button>` : '<button id="bc-new">新しい一斉送信</button>'}<span class="sp"></span><span>${esc(v.foot)}</span><button id="bc-close">閉じる</button>`;
+  else {
+    const ps = grokPanes();
+    bcFoot.innerHTML = `<button id="bc-all">全選択</button><button id="bc-none">選択解除</button><span class="sp"></span><span>${bcSel.size}件を選択</span><button id="bc-go" ${bcSel.size && bcText.value.trim() && !bcWait ? '' : 'disabled'}>${bcWait ? '確認中…' : 'プレビュー'} <kbd>⌘↵</kbd></button>`;
+    on('#bc-all', () => { ps.forEach(p => bcSel.add(p.id)); renderBc(); });
+    on('#bc-none', () => { bcSel.clear(); renderBc(); });
+  }
+  on('#bc-go', bcGo);
+  on('#bc-back', () => { bcClear = false; mpb.run({ type: 'bc-reset' }); });   // back to the text and the selection
+  on('#bc-new', () => { bcClear = true; mpb.run({ type: 'bc-reset' }); });
+  on('#bc-cancel', () => mpb.run({ type: 'bc-cancel', bid: v.bid }));
+  on('#bc-close', () => mpb.closeOverlay());
+}
+function bcGo() {
+  const ph = bcPhase();
+  if (ph === 'preview') { if (!bcV.canSend || bcSentPid === bcV.pid) return; bcSentPid = bcV.pid; bcFootR(); mpb.run({ type: 'bc-send', pid: bcV.pid }); return; }   // once per preview (main also takes it once)
+  if (ph) return;
+  const t = bcText.value; if (!t.trim() || !bcSel.size || bcWait) return;
+  bcWait = true; bcFootR(); mpb.run({ type: 'bc-preview', text: t, ids: [...bcSel] });
+}
+bcText.oninput = () => { if (!bcPhase()) bcFootR(); };
+addEventListener('keydown', e => {                           // ⌘↵ anywhere in the composer: プレビュー / このN件に送信 (a held key repeats: ignored)
+  if (mode !== 'broadcast' || e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+  e.preventDefault(); if (!e.repeat) bcGo();
+});
+mpb.onBroadcast(v => {
+  bcWait = false; bcV = v && v.phase ? v : null;
+  if (!bcV && bcClear) { bcSel.clear(); bcText.value = ''; bcClear = false; }
+  if (mode === 'broadcast') { renderBc(); if (!bcV) bcText.focus(); }
+});
 
 // ---- usage hover popover ----
 const up = $('#upop');

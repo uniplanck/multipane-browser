@@ -7,6 +7,7 @@ const IPC = require('../src/ipc-policy');
 const NAV = require('../src/navigation-policy'), PERM = require('../src/permission-policy');
 const NP = require('../src/notification-policy');
 const CP = require('../src/closed-panes');
+const BS = require('../src/broadcast-state');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mpb-diag-'));
 let dirs = 0; const box = () => path.join(root, String(++dirs), 'diagnostics');
@@ -52,6 +53,7 @@ const onlyKeys = e => Object.keys(e).every(k => KEYS.includes(k));
       && D.NAV_CODES.every(c => D.EVENTS['nav.block'].r.includes(c)) && D.PERM_CODES.every(c => D.EVENTS['perm.deny'].r.includes(c)));
     t('notification codes = notification-policy.js CODES (#61)', J([...D.NOTIFY_CODES].sort()) === J([...NP.CODES].sort()) && D.NOTIFY_CODES.every(c => D.EVENTS.notify.r.includes(c)));
     t('reopen codes = closed-panes.js CODES (#23)', J([...D.REOPEN_CODES].sort()) === J([...CP.CODES].sort()) && D.REOPEN_CODES.every(c => D.EVENTS.reopen.r.includes(c)));
+    t('broadcast codes = broadcast-state.js CODES (#12; no UNKNOWN among them)', J([...D.BCAST_CODES].sort()) === J([...BS.CODES].sort()) && D.BCAST_CODES.every(c => D.EVENTS.bcast.r.includes(c)) && !D.BCAST_CODES.includes('UNKNOWN'));
   }
 
   // ---- ring ----

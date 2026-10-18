@@ -14,7 +14,7 @@ const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
 const URL_MAX = 65536;                    // address bar / palette input (main normalises it)
 const TEXT_MAX = 10000;                   // names / labels / ids from the UI (main cuts names to 60)
-const BROADCAST_MAX = 200000;             // broadcast text (main cuts it to 20000)
+const BROADCAST_MAX = 200000;             // broadcast text (main previews up to 20000 and refuses longer: broadcast-state.js TEXT_MAX)
 const COUNT_MAX = 100000;                 // message counts from a scan (exclusive)
 const GROK = 'https://grok.com';
 const PRESETS = ['2x1', '3x1', '4x1', '2x2', '3x2', '4x2', '3x3', '5x2'];   // = PRESETS in main.js
@@ -89,8 +89,10 @@ const ACTIONS = {
   'ws-delete': { shape: x => text(x.name), target: inWs },
   'ws-rename': { shape: x => text(x.name) && newName(x.value), target: inWs },
   'ws-rename-prompt': { shape: x => text(x.name), target: inWs },
-  broadcast: { shape: x => str(x.text, BROADCAST_MAX) && Array.isArray(x.ids) && x.ids.length >= 1 && x.ids.length <= MAX_PANES && x.ids.every(id) && new Set(x.ids).size === x.ids.length,
+  // 一斉送信 (#12): a preview of the chosen panes (main reads them; nothing is sent), then the preview / batch numbers main gave it
+  'bc-preview': { shape: x => str(x.text, BROADCAST_MAX) && Array.isArray(x.ids) && x.ids.length >= 1 && x.ids.length <= MAX_PANES && x.ids.every(id) && new Set(x.ids).size === x.ids.length,
     target: (x, w) => x.ids.every(i => w.pane(i)) },
+  'bc-send': { shape: x => id(x.pid) }, 'bc-cancel': { shape: x => id(x.bid) }, 'bc-reset': {},
   'fav-open': { shape: x => id(x.id) && where(x.where), target: inFav },
   'fav-add': { shape: x => str(x.url, URL_MAX) && opt(x.label, text) },
   'fav-rename': { shape: x => id(x.id) && text(x.value), target: inFav },

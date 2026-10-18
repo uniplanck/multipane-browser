@@ -42,8 +42,19 @@ body.bc #bc-foot{display:flex;align-items:center;gap:8px;padding:8px 14px;border
 #bc-foot .sp{flex:1}
 #bc-foot button{border:1px solid var(--line);background:var(--ctl);color:var(--text);border-radius:6px;padding:3px 10px;font:12px var(--font)}
 #bc-foot #bc-go{background:var(--sel);color:#fff;border-color:transparent}
-#bc-foot #bc-go:disabled{opacity:.4}
+#bc-foot button:disabled{opacity:.4}
 .bci input{margin:0 4px 0 2px}
+/* 一斉送信 (#12): preview / progress rows - the state on the right, the reason under the name; the text is read-only meanwhile */
+body.bc.bcv #bc-text{opacity:.75}
+.bcr .lb{white-space:normal}
+.bcr .lb small.why{display:block;margin-left:0}
+.bst{font-weight:600;font-size:11px;padding:1px 7px;border-radius:9px;background:var(--ctl);color:var(--text)}
+.bst.s-ready,.bst.s-ok{background:rgba(48,209,88,.18);color:#30d158}
+.bst.s-wake,.bst.s-wait,.bst.s-prep{background:rgba(100,210,255,.16);color:#64d2ff}
+.bst.s-sent{background:rgba(10,132,255,.2);color:#0a84ff}
+.bst.s-unsure{background:rgba(255,159,10,.2);color:#ff9f0a}
+.bst.s-skip{color:var(--dim)}
+.bcdry{color:#ff9f0a}
 
 #upop{display:none;position:fixed;left:0;top:0;width:100%;background:var(--panel);backdrop-filter:blur(30px) saturate(180%);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.4);padding:12px 14px;font-size:12.5px;line-height:1.5}
 body.upop #scrim,body.upop #box{display:none}

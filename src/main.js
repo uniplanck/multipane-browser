@@ -419,6 +419,33 @@ const { COMPOSER_JS } = require('./pane-rules');             // composerState() 
 // ---- 閉じたペインを開き直す (#23, closed-panes.js): what a closed pane leaves in its window's history, when an entry is taken, the focus after
 // (makeWindow: closePane / reopenClosed). Memory only: never in panes.json, gone after a restart; a draft / attachment never comes back.
 const CP = require('./closed-panes');
+// ---- 一斉送信 (#12, broadcast-state.js): a preview of every chosen pane (read live), then one confirmed batch: per target the same pane /
+// generation / conversation / keys typed as previewed and an empty composer right before it, input, a check, the send, then page evidence
+// (makeWindow: bc*). Memory only (never in panes.json, never resumed after a restart); the text is never logged.
+// Dev: MPB_BROADCAST_DRYRUN=1 never types into or sends from a page (previews, wakes and the live checks run as usual; every send ends 結果不明).
+const BS = require('./broadcast-state');
+const BC_DRY = !!process.env.MPB_BROADCAST_DRYRUN;
+// the page side (main world, the same DOM input / send as before, now two steps). The composer is the last visible textarea / contenteditable.
+// BC_INPUT_JS: types only into an empty composer (no text, no attachment) -> { r: 'typed', h: a short hash of what it holds then } | notempty |
+// nocomposer | failed. BC_SEND_JS: only while the composer still holds exactly that -> clicks the form's send button -> clicked | enter (no button,
+// the composer has the focus: main sends Enter) | mismatch | nocomposer | nobutton. The hash is not the text and is never logged.
+const BC_PICK = `const vis=e=>e.offsetParent!==null&&!e.closest('[aria-hidden="true"]')&&!(e.tagName==='TEXTAREA'&&e.tabIndex<0);
+  const c=[...document.querySelectorAll('form textarea, textarea, .ProseMirror[contenteditable="true"], [contenteditable="true"]')].filter(vis);const el=c[c.length-1];
+  const val=e=>String((e.tagName==='TEXTAREA'?e.value:(e.innerText||e.textContent||''))||'');
+  const hash=s=>{s=s.replace(/\\s+/g,'');let h=5381;for(let i=0;i<s.length;i++)h=((h*33)^s.charCodeAt(i))>>>0;return h.toString(36)+'.'+s.length;};`;
+const BC_INPUT_JS = body => `(()=>{/*mpb:bc-input*/${BC_PICK}
+  if(!el)return{r:'nocomposer'};const box=el.closest('form')||(el.parentElement&&el.parentElement.parentElement);
+  if(val(el).trim()||(box&&box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')))return{r:'notempty'};
+  const T=${JSON.stringify(String(body))};el.focus();
+  if(el.tagName==='TEXTAREA'){Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,T);el.dispatchEvent(new Event('input',{bubbles:true}));}
+  else{getSelection().selectAllChildren(el);document.execCommand('insertText',false,T);}
+  const now=val(el);return now.trim()?{r:'typed',h:hash(now)}:{r:'failed'};})()`;
+const BC_SEND_JS = h => `(()=>{/*mpb:bc-send*/${BC_PICK}
+  if(!el)return{r:'nocomposer'};if(hash(val(el))!==${JSON.stringify(String(h))})return{r:'mismatch'};
+  const root=el.closest('form')||document;
+  const b=[...root.querySelectorAll('button[type="submit"], button[aria-label]')].filter(b=>!b.disabled&&b.offsetParent!==null&&(b.type==='submit'||/送信|submit|send/i.test(b.getAttribute('aria-label')||'')));
+  if(b.length){b[b.length-1].click();return{r:'clicked'};}
+  el.focus();return{r:document.activeElement===el?'enter':'nobutton'};})()`;
 // ---- shared load queue (#31, load-queue.js): every load main starts - startup / workspace, a new pane, reload / reload-all / automatic reloads,
 // wake, another URL / back / forward / a grok link in the pane, the bot-page fixes and the background check - waits for one of LQ.LIMIT slots in
 // all windows (a background check takes at most one). The user's own wake / reload / URL first, then startup / reload-all / automatic reloads,
@@ -759,6 +786,7 @@ function onMsgCount(p, c) {
     sendState();                                             // the marker on screen is now only the last confirmed one
     return;
   }
+  p.userSeen = { gen: c.gen, n: c.user };                    // (#12) user turns of this generation's confirmed conversation, a reply being written too (a broadcast's evidence)
   if (issue) diag.rec('dom', issue, { p: p.id }, 600000);
   if (!snapOk(s, 'stable')) { sendState(); return; }        // the page moved after its last stable report (a reply being written): no counts from it, no sleep on the old marker
   if (!snapOk(s, 'name')) diag.rec('dom', 'NAME_UNSURE', { p: p.id }, 600000);
@@ -1513,7 +1541,7 @@ function handleKey(input, pane) {
   if (input.alt && !input.shift && ['Equal', 'Minus', 'Digit0'].includes(input.code)) { setGlobalZoom(input.code === 'Digit0' ? 1 : gZoom() + (input.code === 'Equal' ? 0.1 : -0.1)); return true; }   // ⌘⌥= / ⌘⌥- / ⌘⌥0: global zoom
   if (input.alt) return false;
   const fp = panes[focused];
-  if (k === 'b' && input.shift) { openOverlay('broadcast'); return true; }
+  if (k === 'b' && input.shift) { openOverlay('broadcast', { bc: bcView() }); return true; }   // (#12) a batch running / finished: its progress
   if (k === 'p' && input.shift) { togglePc(); return true; }
   if (k === 'k') { overlayOpen ? closeOverlay() : openOverlay('palette'); return true; }
   if (k === 't' && input.shift) { closeOverlay(); reopenClosed(); return true; }
@@ -1611,6 +1639,7 @@ function openOverlay(mode, extra = {}) {
 function closeOverlay() {
   if (!overlayOpen) return;
   overlayOpen = false;
+  bcPv = null; bcPvNo = 0;                                   // (#12) a preview holds only while it is on screen (a batch goes on)
   if (approveOpen) hideApprove();
   overlay.setVisible(false);
   panes[focused]?.view.webContents.focus();
@@ -1701,8 +1730,11 @@ function runAction(a) {
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
     case 'ws-rename': { const nn = String(a.value || '').trim().slice(0, 60); if (nn && workspaces[a.name] && nn !== a.name) { workspaces[nn] = workspaces[a.name]; delete workspaces[a.name]; ctxs.forEach(c => c.wsRenamed(a.name, nn)); save(); buildMenu(); broadcast(); } closeOverlay(); break; }
     case 'ws-rename-prompt': openOverlay('ws-rename', { name: a.name, value: a.name }); break;
-    case 'broadcast-prompt': openOverlay('broadcast'); break;
-    case 'broadcast': { closeOverlay(); const text = String(a.text || '').slice(0, 20000); const ids = Array.isArray(a.ids) ? a.ids.map(Number) : []; if (text.trim() && ids.length) broadcastSend(text, ids); break; }
+    case 'broadcast-prompt': openOverlay('broadcast', { bc: bcView() }); break;
+    case 'bc-preview': bcPreview(String(a.text), a.ids.map(Number)).catch(() => { dlog('broadcast', 'preview failed'); bcPush(); }); break;   // (#12) nothing is sent from here
+    case 'bc-send': bcStart(a.pid); break;
+    case 'bc-cancel': bcCancel(a.bid); break;
+    case 'bc-reset': bcReset(); break;
     case 'toggle-notifications': settings.notifications = !settings.notifications; save(); buildMenu(); closeOverlay(); break;
     case 'close': closeOverlay(); break;
     case 'fav-open': closeOverlay(); openFavorite(a.id, a.where); break;
@@ -1719,30 +1751,178 @@ function runAction(a) {
 }
 function clearAll() { panes.forEach(p => { p.glow = false; if (!p.msgMode) p.unread = 0; }); updateBadge(); sendState(); }
 
-// ---- IPC from app UI (renderer + overlay; both local files) ----
-async function injectSend(p, text) {
-  const wc = p.view.webContents;
-  const T = JSON.stringify(text);
-  const r1 = await wc.executeJavaScript(`(()=>{const c=[...document.querySelectorAll('form textarea, textarea, .ProseMirror[contenteditable="true"], [contenteditable="true"]')].filter(e=>e.offsetParent!==null&&!e.closest('[aria-hidden="true"]'));const el=c[c.length-1];if(!el)return 'nocomposer';el.focus();
-    if(el.tagName==='TEXTAREA'){const set=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;set.call(el,${T});el.dispatchEvent(new Event('input',{bubbles:true}));}
-    else{const sel=getSelection();sel.selectAllChildren(el);document.execCommand('insertText',false,${T});}
-    return el.tagName;})()`);
-  if (r1 === 'nocomposer') return r1;
-  await sleep(400);
-  const r2 = await wc.executeJavaScript(`(()=>{const c=[...document.querySelectorAll('form textarea, textarea, [contenteditable="true"]')].filter(e=>e.offsetParent!==null);const el=c[c.length-1];const root=(el&&el.closest('form'))||document;
-    const b=[...root.querySelectorAll('button[type="submit"], button[aria-label]')].filter(b=>!b.disabled&&b.offsetParent!==null&&(b.type==='submit'||/送信|submit|send/i.test(b.getAttribute('aria-label')||'')));
-    if(b.length){b[b.length-1].click();return 'clicked';}return 'nobutton';})()`);
-  if (r2 === 'nobutton') { wc.focus(); wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' }); wc.sendInputEvent({ type: 'char', keyCode: '\r' }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' }); return 'enter'; }
-  return r2;
+// ---- 一斉送信 (#12, broadcast-state.js): this window's preview and batch (memory only; the text is never logged) ----
+// preview: every chosen pane read now (asleep: not read, woken at the send). 「このN件に送信」: the preview on screen becomes one batch, once.
+// Targets in pane order, asleep ones as soon as they woke into their conversation; each through broadcastSend. A target is busy
+// (p.broadcasting: #11 holds auto sleep / reload / a queued replacing load and asks before a manual one) from the start until its result
+// (an asleep one from its turn, so the bot-page fix loads of its wake are not held).
+let bcPv = null, bcB = null, bcPvNo = 0;                     // the preview on screen, the batch (running / last finished), the preview being read
+const bcNow = p => { const wc = p.view.webContents, gone = !panes.includes(p) || wc.isDestroyed();
+  return { open: !gone, closed: !!p.obs.closed, ent: p.obs.ent, gen: p.obs.gen, rev: p.inputRev || 0, sleeping: !!p.sleeping, crashed: !gone && wc.isCrashed(),
+    cid: gone ? '' : botIdOf(p.sleeping ? paneUrl(p) : wc.getURL()) }; };
+const bcCur = p => PS.current(p.obs) && !!p.snap && p.snap.cid === botIdOf(p.view.webContents.getURL());   // this generation confirmed this very conversation
+const bcLoading = p => p.view.webContents.isLoading() || !!p.grokToken || !!p.grokPending || !!lqView(p);
+const bcUsers = p => p.userSeen && p.userSeen.gen === p.obs.gen ? p.userSeen.n : null;
+const bcView = () => BS.view({ preview: bcPv, batch: bcB, dry: BC_DRY });
+function bcPush() { try { if (overlay && !overlay.webContents.isDestroyed()) overlay.webContents.send('bc-state', bcView()); } catch {} }
+function bcDo(a) { const r = BS.step(bcB, a); bcB = r.b; if (!r.code) bcPush(); return r; }
+function bcSkip(id, why) {
+  if (bcDo({ type: 'skip', id, why }).code) return null;
+  diag.rec('bcast', why === 'CHANGED' || why === 'NO_WAKE' ? why : 'SKIP', { p: id });
+  if (debugOn()) dlog(`pane${id}`, 'broadcast skipped', why);
+  return null;
 }
-async function broadcastSend(text, ids) {
-  for (const id of ids) {
-    const p = byId(id); if (!p) continue;
-    p.broadcasting = true;                                     // #11: no automatic operation throws the page away while text goes in / is sent
-    try { const r = await injectSend(p, text); dlog(`pane${p.id}`, 'broadcast', r); } catch (e) { dlog(`pane${p.id}`, 'broadcast err', String(e)); }
-    finally { p.broadcasting = false; }
+// the page adapter: input and send are two steps; with MPB_BROADCAST_DRYRUN neither runs in the page (the answer is 'dry')
+const bcJs = (p, code) => Promise.race([p.view.webContents.executeJavaScript(code), sleep(BS.TIMING.STEP_MS).then(() => { throw new Error('timeout'); })]);
+const bcPage = {
+  async input(p, body) {
+    if (BC_DRY) return { r: 'dry', h: '' };
+    const x = await bcJs(p, BC_INPUT_JS(body));
+    return x && typeof x === 'object' && typeof x.r === 'string' ? { r: x.r, h: typeof x.h === 'string' ? x.h.slice(0, 40) : '' } : { r: 'failed', h: '' };
+  },
+  async send(p, h) {
+    if (BC_DRY) return 'dry';
+    const x = await bcJs(p, BC_SEND_JS(h)), r = x && typeof x === 'object' && typeof x.r === 'string' ? x.r : 'error';
+    if (r !== 'enter') return r;
+    const wc = p.view.webContents; wc.focus();                // no send button: Enter into the composer (it has the page's focus), as before
+    for (const ev of [{ type: 'keyDown', keyCode: 'Enter' }, { type: 'char', keyCode: '\r' }, { type: 'keyUp', keyCode: 'Enter' }]) wc.sendInputEvent(ev);
+    if (overlayOpen) overlay.webContents.focus();
+    return r;
+  } };
+async function bcPreview(body, ids) {
+  const no = bcPvNo = nextNo();
+  if (bcB && !BS.done(bcB)) { bcPush(); return; }            // one batch at a time per window: its progress stays on screen
+  const err = BS.textError(body), list = err ? [] : panes.filter(p => ids.includes(p.id));
+  const items = await Promise.all(list.map(async p => {
+    const r = p.sleeping ? null : await liveInput(p), n = bcNow(p);
+    const same = !r || !r.stamp || (r.stamp.gen === n.gen && r.stamp.rev === n.rev && !!r.stamp.sleeping === n.sleeping);   // read of the page it shows now
+    const c = BS.classify({ open: n.open, bot: n.cid, sleeping: n.sleeping, r: same ? r : null, cur: n.open && !n.sleeping && bcCur(p), loading: n.open && !n.sleeping && bcLoading(p) });
+    return { id: p.id, ent: n.ent, gen: n.gen, rev: n.rev, cid: n.cid, sleeping: n.sleeping, label: (n.open ? paneLabel(p) : p.name || '').slice(0, 40), conv: BS.shortConv(n.cid), st: c.st, why: c.why };
+  }));
+  if (bcPvNo !== no || (bcB && !BS.done(bcB))) return;      // a newer preview / the overlay closed meanwhile
+  bcB = null;                                                // a finished batch's result gives way to the new preview
+  bcPv = BS.preview(no, body, items, err);
+  diag.rec('bcast', 'PREVIEW', { n: items.length });
+  bcPush();
+}
+function bcStart(pid) {                                      // 「このN件に送信」: the preview on screen, once (a second press / key repeat: DUP)
+  const code = BS.admit({ preview: bcPv, batch: bcB }, pid);
+  if (code) { diag.rec('bcast', code); if (debugOn()) dlog('broadcast', 'send refused', code); bcPush(); return; }
+  bcB = BS.batch(bcPv, nextNo(), Date.now()); bcPv = null; bcPvNo = 0;
+  for (const it of bcB.items) {                              // the set as confirmed: a target that moved since the preview is skipped, never replaced
+    if (it.st !== 'WAIT') continue;
+    const p = byId(it.id), why = p ? BS.moved(it, bcNow(p)) : 'GONE';
+    if (why) bcSkip(it.id, why);
   }
+  const n = BS.counts(bcB).wait;
+  diag.rec('bcast', 'START', { n });
+  if (BC_DRY) diag.rec('bcast', 'DRYRUN', { n });
+  dlog('broadcast', 'batch', bcB.bid, 'targets', n, BC_DRY ? '(dry run)' : '');
+  bcPush();
+  bcRun(bcB.bid, bcB.text).catch(() => dlog('broadcast', 'runner failed'));
 }
+async function bcRun(bid, body) {
+  const mine = () => !!bcB && bcB.bid === bid, its = () => mine() ? bcB.items : [], watch = [], t0 = Date.now();
+  for (const it of its()) {                                  // awake targets: busy until their result; asleep ones: woken now through the queue (#31)
+    const p = it.st === 'WAIT' && byId(it.id); if (!p) continue;
+    if (!it.sleeping) p.broadcasting = true; else if (p.sleeping) reloadPane(p);
+  }
+  try {
+    for (;;) {
+      if (!mine()) return;
+      const wait = its().filter(x => x.st === 'WAIT'); if (!wait.length) break;
+      if (win.isDestroyed()) { wait.forEach(x => bcSkip(x.id, 'GONE')); break; }
+      let it = wait.find(x => !x.sleeping), wake = null;
+      if (!it) for (const x of wait) {                         // asleep at the preview: the first one that woke into its conversation
+        const w = bcWoken(x, t0);
+        if (w === 'WAIT') continue;
+        if (w.why) { bcSkip(x.id, w.why); continue; }
+        it = x; wake = w; break;
+      }
+      if (!it) { await sleep(BS.TIMING.POLL_MS); continue; }
+      const w = await broadcastSend(it.id, body, wake);
+      if (w) watch.push(w);
+    }
+  } finally { for (const it of its()) { const p = byId(it.id); if (p && it.st !== 'SENT') p.broadcasting = false; } }   // only a target waiting for its evidence stays busy
+  await Promise.all(watch);
+  if (!mine()) return;
+  const c = BS.counts(bcB);
+  diag.rec('bcast', 'DONE', { n: c.ok });
+  dlog('broadcast', 'batch', bid, 'done: ok', c.ok, 'unsure', c.unsure, 'skipped', c.skip);
+  bcPush();
+}
+// a target asleep at the preview: 'WAIT' (not yet) | { why } (skipped) | { gen, rev } (woke into its conversation, confirmed in that generation)
+function bcWoken(it, t0) {
+  const p = byId(it.id);
+  if (!p || p.obs.closed || p.obs.ent !== it.ent || p.view.webContents.isDestroyed()) return { why: 'GONE' };
+  if (!p.sleeping) {
+    const cid = botIdOf(p.view.webContents.getURL());
+    if (cid && cid !== it.cid) return { why: 'CHANGED' };     // woke into another conversation: never sent there
+    if (cid && hasPage(p) && bcCur(p) && !bcLoading(p)) return { gen: p.obs.gen, rev: p.inputRev || 0 };
+  } else if (!lqView(p, false) && Date.now() - t0 > 2000) return { why: 'NO_WAKE' };   // its wake was cancelled (取消) / it went asleep again
+  return Date.now() - t0 > BS.TIMING.WAKE_MS ? { why: 'NO_WAKE' } : 'WAIT';
+}
+// one target: begin -> live read (still the confirmed pane / conversation / keys typed, the composer empty) -> input -> settle, re-checked ->
+// send -> its page evidence (a promise; null when it ended here). Typed but not sent (moved / the page did not click): left in the composer.
+async function broadcastSend(id, body, wake) {
+  if (bcDo({ type: 'begin', id, ...(wake ? { wake } : {}) }).code) return null;   // cancelled meanwhile
+  const p = byId(id); if (!p) return bcSkip(id, 'GONE');
+  let watching = null;
+  const moved = () => BS.moved(BS.item(bcB, id), bcNow(p));
+  p.broadcasting = true;                                     // #11: no automatic operation throws the page away while text goes in / is sent
+  try {
+    let why = moved(); if (why) return bcSkip(id, why);
+    const r = await liveInput(p);
+    why = moved(); if (why) return bcSkip(id, why);
+    const c = BS.classify({ open: true, bot: BS.item(bcB, id).cid, sleeping: false, r, cur: bcCur(p), loading: bcLoading(p), own: true });
+    if (c.st !== 'READY') return bcSkip(id, c.why);
+    if (bcDo({ type: 'input', id }).code) return null;       // cancelled while it was read: nothing typed
+    let x = null; try { x = await bcPage.input(p, body); } catch {}
+    const got = x && x.r;
+    if (got === 'notempty') return bcSkip(id, 'PRESENT');
+    if (got === 'nocomposer') return bcSkip(id, 'UNAVAILABLE');
+    if (got !== 'typed' && got !== 'dry') return bcSkip(id, 'FAILED');
+    await sleep(BS.TIMING.SETTLE_MS);
+    why = moved(); if (why) return bcSkip(id, why);          // typed, then the pane / its input moved: not sent
+    const base = { ent: p.obs.ent, gen: p.obs.gen, cid: BS.item(bcB, id).cid, user: bcUsers(p) };   // user turns before the send
+    bcDo({ type: 'send', id });
+    let s = 'error'; try { s = await bcPage.send(p, x.h); } catch {}
+    if (s === 'mismatch' || s === 'nocomposer' || s === 'nobutton') { bcDo({ type: 'notsent', id }); diag.rec('bcast', 'SKIP', { p: id }); return null; }   // the page did not click
+    if (s === 'dry') { bcDo({ type: 'unsure', id, why: 'DRYRUN' }); diag.rec('bcast', 'UNSURE', { p: id }); return null; }
+    diag.rec('bcast', 'SENT', { p: id });
+    watching = bcWatch(p, id, { ...base, rev: p.inputRev || 0 }, s === 'clicked' || s === 'enter' ? 'TIMEOUT' : 'ERROR');
+    return watching;
+  } finally { if (!watching) p.broadcasting = false; }
+}
+// after the send: 確認済み only on the page's evidence in the same generation (a new user turn / the composer emptied, no key typed since);
+// otherwise 結果不明 once it cannot come any more or CONFIRM_MS passed. Never sent again.
+async function bcWatch(p, id, base, fail) {
+  const t0 = Date.now(); let readAt = t0;
+  try {
+    for (;;) {
+      await sleep(BS.TIMING.POLL_MS);
+      let v = BS.evidence(base, { ...bcNow(p), user: bcUsers(p), composer: '' });
+      if (!v && Date.now() - readAt >= BS.TIMING.READ_MS) {
+        readAt = Date.now();
+        const r = await liveInput(p);
+        v = BS.evidence(base, { ...bcNow(p), user: bcUsers(p), composer: r.moved ? '' : r.st });
+      }
+      if (v === 'OK') { bcDo({ type: 'confirm', id }); diag.rec('bcast', 'OK', { p: id }); return; }
+      if (!v && Date.now() - t0 < BS.TIMING.CONFIRM_MS) continue;
+      bcDo({ type: 'unsure', id, why: v || fail }); diag.rec('bcast', 'UNSURE', { p: id }); return;
+    }
+  } catch { if (!bcDo({ type: 'unsure', id, why: 'ERROR' }).code) diag.rec('bcast', 'UNSURE', { p: id }); } finally { p.broadcasting = false; }
+}
+function bcCancel(bid) {                                     // 取消: only what has not been typed yet; a started send cannot be stopped
+  if (!bcB || bcB.bid !== bid || BS.done(bcB)) { bcPush(); return; }
+  const r = bcDo({ type: 'cancel' });
+  for (const it of bcB.items) if (it.st === 'SKIP' && it.why === 'CANCEL') { const p = byId(it.id); if (p) p.broadcasting = false; }
+  diag.rec('bcast', 'CANCEL', { n: r.n || 0 });
+  dlog('broadcast', 'cancel', r.n || 0);
+}
+function bcReset() { if (!bcB || BS.done(bcB)) { bcB = null; bcPv = null; bcPvNo = 0; } bcPush(); }   // 戻る / 新しい一斉送信 (a running batch stays)
+
+// ---- IPC from app UI (renderer + overlay; both local files) ----
 function wsMenu() {
   const names = Object.keys(workspaces), act = workspaces[activeWs] ? activeWs : null;
   Menu.buildFromTemplate([
