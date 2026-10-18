@@ -106,8 +106,10 @@ function normalize(u) {
 }
 function loadInto(wc, url) {
   const u = url === NEWTAB ? NEWTAB : normalize(url);
-  (u === NEWTAB ? wc.loadFile(NEWTAB_FILE) : wc.loadURL(u)).catch(() => {});
+  if (u === NEWTAB) wc.loadFile(NEWTAB_FILE).catch(() => {}); else appLoad(wc, u);   // (#72) a web page / about:blank only
 }
+// (#72) a URL a new / restored pane may start with; anything else (javascript: / file: / chrome: / a user name ...) opens the new-tab page
+const paneStart = u => u === NEWTAB || !NAV.appLoad(u) ? u : NEWTAB;
 
 
 // ======================= global (all windows) =======================
@@ -257,48 +259,87 @@ const APPROVE_KEEP_MS = 5 * 60000;                                              
 // ---- links opened from page content (bot output, citations, attachments, popups) ----
 // Like the native Grok Bot app: ordinary web links open in the default browser; grok.com links stay in the pane; sign-in / OAuth popups get a
 // real child window (window.opener keeps working); blob:/data: previews open in a child window; mailto/tel go to the system handler.
-const AUTH_HOST = /(^|\.)(x\.ai|x\.com|twitter\.com|google\.com|googleusercontent\.com|apple\.com|github\.com|microsoftonline\.com|live\.com|microsoft\.com|stripe\.com|stripe\.network|okta\.com|auth0\.com)$/i;
-const isGrokHost = h => /(^|\.)grok\.com$/i.test(h);
-function openExt(url, why) {
-  dlog('link', why, String(url).slice(0, 160));
+// (#72) navigation-policy.js decides from the parsed URL (scheme + exact host / sub-domain, never a prefix of the text; no user name / password;
+// javascript: / file: / chrome: ... refused) and main acts on it - the same policy for window.open (linkOpen), same-frame moves and redirects
+// (guardNavigation; the UI never moves: guardUi), every loadURL main starts (appLoad) and shell.openExternal (openExt: http(s), or mailto / tel /
+// sms / facetime right after the user's click / key in that page or from main's own menu). A refused one does nothing (diagnostics: nav.block).
+const NAV = require('./navigation-policy');
+const PERM = require('./permission-policy');                 // site permissions / downloads (app.whenReady)
+const gestureAt = new Map();                                 // webContents id -> the user's last click / key in it ('input-event': from the browser, not the page)
+const recentGesture = wc => !!wc && NAV.gestureOk(gestureAt.get(wc.id), Date.now());
+function trackGesture(wc) {
+  const id = wc.id;
+  wc.on('input-event', (e, i) => { if (NAV.isGesture(i && i.type)) gestureAt.set(id, Date.now()); });
+  wc.once('destroyed', () => gestureAt.delete(id));
+}
+function navBlocked(code, why, wc) {                         // fixed code + the pane's number; the debug log gets why, never the URL
+  const p = wc && !wc.isDestroyed() ? wcReg.get(wc.id)?.pane : null;
+  diag.rec('nav.block', code, { p: p && p.id }, 60000);
+  dlog('link', 'blocked', code, why);
+}
+function openExt(url, why, gesture = false) {
+  const r = NAV.external(url, { gesture });
+  if (r.code) { navBlocked(r.code, why); return; }
+  dlog('link', why, r.href.slice(0, 160));
   if (process.env.MPB_LINK_DRYRUN) return;
-  if (/^(https?|mailto|tel|sms|facetime):/i.test(String(url))) shell.openExternal(String(url)).catch(() => {});
+  shell.openExternal(r.href).catch(() => {});
+}
+function appLoad(wc, url) {                                  // every loadURL main starts (#72): web pages and about:blank only
+  const code = NAV.appLoad(url);
+  if (code) { navBlocked(code, 'app load', wc); return; }
+  wc.loadURL(url).catch(() => {});
 }
 function linkOpen(wc, d) {
-  let u; try { u = new URL(d.url); } catch { return { action: 'deny' }; }
-  const popup = /(^|,)\s*(width|height|popup)\b/i.test(d.features || '');
+  const r = NAV.windowOpen(d.url, { popup: NAV.popupFeatures(d.features) });
   const childWin = () => {
     const owner = ctxs.find(c => c.panes.some(p => p.view.webContents === wc))?.win || BrowserWindow.getFocusedWindow() || undefined;
     return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: owner, autoHideMenuBar: true, title: 'MultiPane Browser',
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } } };
   };
-  if (/^(mailto|tel|sms|facetime):$/.test(u.protocol)) { openExt(d.url, 'system-handler'); return { action: 'deny' }; }
-  if (u.protocol === 'blob:' || u.protocol === 'data:' || d.url === 'about:blank') { dlog('link', 'popup-window', u.protocol); return childWin(); }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') { dlog('link', 'blocked scheme', u.protocol); return { action: 'deny' }; }
-  if (isGrokHost(u.hostname)) {
-    if (popup) return childWin();
+  if (r.action === 'system') { openExt(d.url, 'system-handler', recentGesture(wc)); return { action: 'deny' }; }
+  if (r.action === 'child') { dlog('link', 'popup / auth window'); return childWin(); }
+  if (r.action === 'pane') {
     dlog('link', 'same-site, stays in pane', d.url.slice(0, 120));
     const c = ctxs.find(k => k.panes.some(p => p.view.webContents === wc));   // a pane: through its input guard (#11); the 承認Bot popup: as before
-    if (c) c.openLink(wc, d.url); else wc.loadURL(d.url).catch(() => {});
+    if (c) c.openLink(wc, d.url); else appLoad(wc, d.url);
     return { action: 'deny' };
   }
-  if (popup || AUTH_HOST.test(u.hostname)) { dlog('link', 'auth/popup window', u.hostname); return childWin(); }
-  openExt(d.url, 'external-browser');
+  if (r.action === 'browser') openExt(d.url, 'external-browser');
+  else navBlocked(r.code, 'window.open', wc);
   return { action: 'deny' };
 }
 app.on('web-contents-created', (e, c) => {            // child windows (auth popups / previews): their own links go to the default browser
-  c.on('did-create-window', child => { child.webContents.setWindowOpenHandler(d => { if (/^https?:/i.test(d.url)) openExt(d.url, 'child-window link'); return { action: 'deny' }; }); });
-});
-// a plain link inside a bot page that leaves grok.com (no target) must not replace the bot: open it in the browser instead
-function guardNavigation(wc) {
-  wc.on('will-navigate', (e, url0) => {
-    const url = typeof url0 === 'string' ? url0 : e.url; let u; try { u = new URL(url); } catch { return; }
-    if (!/^https:\/\/grok\.com\/bot\//.test(wc.getURL())) return;
-    if (/^(mailto|tel|sms|facetime):$/.test(u.protocol)) { e.preventDefault(); openExt(url, 'system-handler'); return; }
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return;
-    if (isGrokHost(u.hostname) || AUTH_HOST.test(u.hostname)) return;
-    e.preventDefault(); openExt(url, 'external-browser (same-frame link)');
+  c.on('did-create-window', child => {
+    const cw = child.webContents;
+    cw.setWindowOpenHandler(d => { const r = NAV.windowOpen(d.url, { child: true }); if (r.action === 'browser') openExt(d.url, 'child-window link'); else navBlocked(r.code, 'child window.open'); return { action: 'deny' }; });
+    guardNavigation(cw, 'popup');
   });
+});
+// (#72) where a page may take itself: will-navigate (a link without target / a script, main frame) and will-redirect (a server redirect of the
+// main frame); child frames and resources are not limited (CDNs, sign-in frames). kind: pane / approve / probe (the hidden check: no browser,
+// no system app) / popup (a window a page opened). A plain link inside a bot page that leaves grok.com must not replace the bot: the browser
+function guardNavigation(wc, kind = 'pane') {
+  const own = kind === 'pane' || kind === 'approve';
+  if (own) trackGesture(wc);
+  wc.on('will-navigate', (e, url0) => {
+    if (e.isMainFrame === false) return;
+    const url = typeof url0 === 'string' ? url0 : e.url;
+    const r = NAV.navigate(url, { bot: own && /^https:\/\/grok\.com\/bot\//.test(wc.getURL()) });
+    if (r.action === 'allow') return;
+    e.preventDefault();
+    if (r.action === 'system') openExt(url, 'system-handler', recentGesture(wc));
+    else if (r.action === 'browser') openExt(url, 'external-browser (same-frame link)');
+    else navBlocked(r.code, 'navigate', wc);
+  });
+  wc.on('will-redirect', (e, url0, inPlace, isMain0) => {
+    if ((typeof e.isMainFrame === 'boolean' ? e.isMainFrame : isMain0) !== true) return;
+    const code = NAV.redirect(typeof url0 === 'string' ? url0 : e.url);
+    if (code) { e.preventDefault(); navBlocked(code, 'redirect', wc); }
+  });
+}
+function guardUi(wc) {                                       // the window's own UI / overlay: a dropped link / file must not replace the app's screen
+  wc.on('will-navigate', e => { e.preventDefault(); navBlocked(NAV.navigate(e.url, { ui: true }).code, 'ui navigate'); });
+  wc.setWindowOpenHandler(() => { navBlocked('E_UI', 'ui window.open'); return { action: 'deny' }; });
 }
 
 // ---- background check of sleeping panes (new bot message while asleep => "unopened") ----
@@ -869,10 +910,10 @@ async function reloadPane(p, cls = 'USER', task = null) {
   const id = target && target.match(GROK_BOT_RE)?.[1];
   if (!id || !settings.grokFix) {
     p.grokToken = null; diag.rec('reload', 'PLAIN', { p: p.id });
-    if (isBlankUrl(cu) && !isBlankUrl(p.url) && p.url !== NEWTAB) wc.loadURL(p.url).catch(() => {}); else wc.reload();   // blank pane: reload its own URL, not about:blank
+    if (isBlankUrl(cu) && !isBlankUrl(p.url) && p.url !== NEWTAB) appLoad(wc, p.url); else wc.reload();   // blank pane: reload its own URL, not about:blank
     return;
   }
-  if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); diag.rec('reload', 'BLANK_LOAD', { p: p.id }); wc.loadURL(target).catch(() => {}); return; }   // nothing to hop from (woken / blank pane)
+  if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); diag.rec('reload', 'BLANK_LOAD', { p: p.id }); appLoad(wc, target); return; }   // nothing to hop from (woken / blank pane)
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
   if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
@@ -897,7 +938,7 @@ async function reloadPane(p, cls = 'USER', task = null) {
   if (wc.isDestroyed() || p.grokToken !== token) return;
   p.grokToken = null;
   dlog(`pane${p.id}`, 'reload: router not ready, hard load', target); diag.rec('reload', 'HARD_LOAD', { p: p.id, ms: Date.now() - t0 });
-  wc.loadURL(target).catch(() => {});        // did-finish-load -> onGrokLoad -> grokFix
+  appLoad(wc, target);                       // did-finish-load -> onGrokLoad -> grokFix
 }
 
 // ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
@@ -927,7 +968,7 @@ function sleepPane(p) {
   obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
-  wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget); an unload: no queue slot (#31)
+  appLoad(wc, 'about:blank');                                // drops the page (its URL stays in p.url / p.botTarget); an unload: no queue slot (#31)
   applyThrottling(); sendState(); save();
 }
 // ---- input guard (#11, draft-guard.js) ----
@@ -1018,6 +1059,8 @@ function askReload(id) {                                       // ↻ / ⌘R / m
   guardRun('RELOAD', () => { const p = id == null ? panes[focused] : byId(id); return p ? [p] : []; }, l => l.forEach(p => reloadPane(p)));
 }
 function openIn(p, url, op = 'NAVIGATE', then) {               // another URL in this pane (address bar, palette, favorite, ⌘T at the pane limit)
+  const u = url === NEWTAB ? NEWTAB : normalize(url);
+  if (paneStart(u) !== u) { navBlocked(NAV.appLoad(u), 'address', p && p.view.webContents); return; }   // (#72) refused (javascript: / file: ...): the page stays, nothing asked
   guardRun(op, onlyPane(p), l => l.forEach(q => { navTo(q, url); then?.(q); }));
 }
 function navTo(p, url) {                                       // (#31) a user's own load through the queue; the local new-tab page at once (its waiting / running load ends)
@@ -1031,7 +1074,7 @@ function goHist(p, dir) {                                      // back / forward
 }
 function openLink(wc, url) {                                   // a grok.com link opened from the page into its own pane (linkOpen)
   const p = panes.find(q => q.view.webContents === wc); if (!p) return;
-  guardRun('LINK', onlyPane(p), l => l.forEach(q => viewLoad(q, 'NAV', 'USER', url, () => q.view.webContents.loadURL(url).catch(() => {}))));
+  guardRun('LINK', onlyPane(p), l => l.forEach(q => viewLoad(q, 'NAV', 'USER', url, () => appLoad(q.view.webContents, url))));
 }
 function sleepNowAsk(p) {                                      // manual 今すぐスリープ: asks when the page holds input (or cannot tell)
   if (!canSleep(p, panes.indexOf(p), true)) return;
@@ -1097,7 +1140,7 @@ function endView(t, p, code) {
 // a bot-page fix's own load: part of the pane's running load when it has one, else a load of its own in the queue (the class of the pane's last
 // load). pending: the hop through the home page (grokPending) is set only when that load really starts
 function fixLoad(p, url, pending = null) {
-  const go = () => { if (pending) p.grokPending = pending; p.view.webContents.loadURL(url).catch(() => {}); };
+  const go = () => { if (pending) p.grokPending = pending; appLoad(p.view.webContents, url); };
   if (!p.obs || lqView(p)?.state === 'run') { go(); return; }
   viewLoad(p, 'FIX', p.loadCls || 'BULK', pending ? pending.target : url, go);
 }
@@ -1165,8 +1208,8 @@ async function probePane(p) {
     if (snapOk(c.snap, 'conv') && snapOk(c.snap, 'roles')) { last = c; lastAt = Date.now(); } else { last = null; unsure = snapIssue(c.snap); }   // a page without a confirmed conversation is no count: keep waiting
   } });
   try {
-    wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-    wc.loadURL(target).catch(() => {});
+    wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' })); guardNavigation(wc, 'probe');
+    appLoad(wc, target);
     while (Date.now() - t0 < PROBE_MAX_MS) {
       await sleep(400);
       if (pr.abort || wc.isDestroyed() || !p.sleeping || quitting) { why = 'abort'; last = null; break; }
@@ -1179,7 +1222,7 @@ async function probePane(p) {
       if (r === 'rendered') continue;                                                  // chat is up: wait for the preload's stable scan
       if (r === 'clicked') { lastPush = Date.now(); continue; }                          // clicked the sidebar link: give it a moment
       // recovery like a live pane (direct loads of /bot/<id> often stay black): in-site router hops (patient: one every 4 s), one hard reload late
-      if (pushes >= 3 && hard < 1 && Date.now() - lastPush > 4000 && Date.now() - t0 > 14000) { hard++; pushes = 0; lastPush = Date.now(); wc.loadURL(target).catch(() => {}); continue; }
+      if (pushes >= 3 && hard < 1 && Date.now() - lastPush > 4000 && Date.now() - t0 > 14000) { hard++; pushes = 0; lastPush = Date.now(); appLoad(wc, target); continue; }
       if (pushes < 3 && Date.now() - lastPush > 4000 && Date.now() - t0 > 1500) {
         const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
           if (r && typeof r.push === 'function') { r.push('/'); setTimeout(() => r.push(${JSON.stringify('/bot/' + id)}), 350); return 'ok'; } return 'no'; })()`).catch(() => 'no');
@@ -1239,7 +1282,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: true, spellcheck: false } });
   view.setBorderRadius?.(RADIUS);
   view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
-  const p = { id: nextPaneId++, view, url: normalize(spec.url), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
+  const p = { id: nextPaneId++, view, url: paneStart(normalize(spec.url)), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, zoomIndiv: spec.zoomIndiv === undefined ? clampZ(spec.zoom) !== 1 : !!spec.zoomIndiv,   // older saves had per-pane zoom only: keep those panes individual
@@ -1289,8 +1332,9 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault(); });   // a key typed: the input revision moves (#11)
   wc.on('context-menu', (e, params) => {
     const items = [];
-    if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX, click: () => addPane({ url: params.linkURL }) },
-      { label: 'リンクをコピー', click: () => clipboard.writeText(params.linkURL) }, { label: 'ブラウザで開く', click: () => shell.openExternal(params.linkURL) }, { type: 'separator' });
+    if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX && !NAV.appLoad(params.linkURL), click: () => addPane({ url: params.linkURL }) },   // (#72) web links only
+      { label: 'リンクをコピー', click: () => clipboard.writeText(params.linkURL) },
+      { label: 'ブラウザで開く', enabled: !NAV.external(params.linkURL, { gesture: true }).code, click: () => openExt(params.linkURL, 'link menu', true) }, { type: 'separator' });   // http(s) / mailto ... (the user's own choice)
     if (params.selectionText) items.push({ role: 'copy', label: 'コピー' });
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
     if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
@@ -1412,7 +1456,7 @@ function ensureApprove() {
   regWc(wc, 'approve', { ctx });                             // no preload: registered so that nothing from it is ever accepted
   approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now(), cpuRate: 1 };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
-  guardNavigation(wc);
+  guardNavigation(wc, 'approve');
   wc.on('did-finish-load', () => { if (approvePane) { approvePane.loadedAt = Date.now(); onGrokLoad(approvePane); } });
   wc.on('dom-ready', () => normalizeHostZoom(wc));
   wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape' && !input.meta && !input.control && !input.alt && !input.shift) { e.preventDefault(); closeOverlay(); } });
@@ -1493,7 +1537,7 @@ function paneMenu(id) {
     pcItem(p),
     { label: '複製', enabled: panes.length < MAX, click: () => { const q = addPane({ ...paneSpec(p), name: p.name ? p.name + ' (2)' : '' }); relayout(true); } },
     { label: 'URLをコピー', click: () => clipboard.writeText(paneUrl(p)) },
-    { label: 'ブラウザで開く', enabled: !!paneUrl(p), click: () => shell.openExternal(paneUrl(p)) },
+    { label: 'ブラウザで開く', enabled: !!paneUrl(p) && !NAV.external(paneUrl(p)).code, click: () => openExt(paneUrl(p), 'pane menu') },   // (#72) http(s) only
     { label: '開発者ツール', click: () => p.view.webContents.openDevTools({ mode: 'detach' }) },
     { type: 'separator' },
     { label: 'ペインを閉じる', click: () => askClose(id) },
@@ -1781,6 +1825,7 @@ win = new BrowserWindow({ ...bounds, minWidth: 600, minHeight: 400, title: 'Mult
   ...(isMac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, vibrancy: 'under-window', visualEffectState: 'followWindow' } : {}),
   webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
 regWc(win.webContents, 'chrome', { ctx });
+guardUi(win.webContents);                                    // (#72) never moves / opens windows
 ctxs.push(ctx);
 if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximize();
 win.loadFile(path.join(__dirname, 'index.html'));
@@ -1803,6 +1848,7 @@ win.on('closed', () => unregWc(r => r.ctx === ctx));        // this window's UI,
 
 overlay = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
 regWc(overlay.webContents, 'overlay', { ctx });
+guardUi(overlay.webContents);
 overlay.setBackgroundColor('#00000000');
 overlay.setVisible(false);
 win.contentView.addChildView(overlay);
@@ -2007,12 +2053,33 @@ app.whenReady().then(() => {
   powerMonitor.on('suspend', () => { sysBlocked = true; }); powerMonitor.on('lock-screen', () => { sysBlocked = true; });
   powerMonitor.on('resume', () => { sysBlocked = false; resumeAt = Date.now(); }); powerMonitor.on('unlock-screen', () => { sysBlocked = false; resumeAt = Date.now(); });
   session.defaultSession.setUserAgent(chromeUA());
-  const allowed = new Set(['notifications', 'clipboard-sanitized-write', 'clipboard-read', 'fullscreen', 'media', 'storage-access', 'top-level-storage-access', 'persistent-storage']);
-  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => { dlog('permission', perm, allowed.has(perm) ? 'allow' : 'deny'); cb(allowed.has(perm)); });
-  session.defaultSession.setPermissionCheckHandler((wc, perm) => allowed.has(perm));
+  // (#72) site permissions: permission-policy.js decides from the permission, the asking page's role (main's registry; not registered = a window
+  // a page opened, no page = a worker), the asking frame's origin and the page's top-level URL. Only the permissions allowed before, for any
+  // site the panes show, from a sound origin (https / loopback http) asking for its own page (top frame = top-level origin; a child frame of
+  // that origin, or grok.com in grok.com; no cross-origin child frame), never for the hidden background check (storage aside) or the app's
+  // own UI. The check and the request ask the same.
+  const permRole = wc => { if (!wc) return 'worker'; try { const r = wcReg.get(wc.id); return r && r.wc === wc ? r.role : 'popup'; } catch { return 'popup'; } };
+  const topUrl = wc => { try { return wc && !wc.isDestroyed() ? wc.getURL() : ''; } catch { return ''; } };
+  const permDenied = (perm, code, wc) => {
+    if (!code) return false;
+    const p = wc && !wc.isDestroyed() ? wcReg.get(wc.id)?.pane : null;
+    diag.rec('perm.deny', code, { p: p && p.id }, 600000);
+    if (debugOn()) dlog('permission', perm, 'deny', code, permRole(wc));
+    return true;
+  };
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d = {}) => {
+    const code = PERM.decide(perm, { role: permRole(wc), origin: d.requestingUrl, origin2: d.securityOrigin, main: d.isMainFrame, top: topUrl(wc), media: d.mediaTypes });
+    if (!permDenied(perm, code, wc)) dlog('permission', perm, 'allow');
+    cb(!code);
+  });
+  session.defaultSession.setPermissionCheckHandler((wc, perm, origin, d = {}) =>
+    !permDenied(perm, PERM.decide(perm, { role: permRole(wc), origin, main: d.isMainFrame, top: wc ? topUrl(wc) : '', embedding: d.embeddingOrigin, media: d.mediaType }), wc));
   // downloads (attachments, blob links, generated files): straight into ~/Downloads under a unique name, with a completion notification
-  session.defaultSession.on('will-download', (e, item) => {
-    const dir = app.getPath('downloads'); const name = path.basename(item.getFilename() || 'download') || 'download';
+  // (#72) from a page the user sees only (not the background check / the app's UI); the page's name made plain (no folder part, no hidden or
+  // disguised name); never opened by itself (the notification only shows it in Finder)
+  session.defaultSession.on('will-download', (e, item, wc) => {
+    if (permDenied('download', PERM.download(permRole(wc)), wc)) { e.preventDefault(); return; }
+    const dir = app.getPath('downloads'); const name = PERM.downloadName(item.getFilename());
     const ext = path.extname(name), base = path.basename(name, ext); let dest = path.join(dir, name), n = 1;
     while (fs.existsSync(dest)) dest = path.join(dir, `${base} (${n++})${ext}`);
     item.setSavePath(dest);

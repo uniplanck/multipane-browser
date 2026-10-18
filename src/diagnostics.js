@@ -45,6 +45,10 @@ const GUARD_EXPIRE_CODES = ['GONE', 'NEW', 'CHANGED', 'STALE', 'PANE', 'INPUT'];
 // shared load queue (#31, load-queue.js CODES; checked by test/load-queue.test.js): queued / merged / replaced / a check stopped for the user's load,
 // how a load ended (settled / released at the cap / stopped after a cancel / view gone / input check refused / error) and why it was cancelled
 const LOAD_CODES = ['WAIT', 'MERGED', 'SUPERSEDED', 'PREEMPT', 'DONE', 'CAP', 'STOPPED', 'GONE', 'GUARD', 'ERROR', 'USER', 'CLOSED', 'URL', 'WINDOW', 'ABORT'];
+// (#72) a move / link / load / external open refused (= navigation-policy.js REJECT) and a site permission / download refused (= permission-policy.js
+// REJECT; both checked by the test)
+const NAV_CODES = ['E_URL', 'E_USERINFO', 'E_SCHEME', 'E_GESTURE', 'E_UI'];
+const PERM_CODES = ['E_PERM', 'E_ROLE', 'E_ORIGIN', 'E_FRAME', 'E_MEDIA', 'E_DOWNLOAD'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -79,6 +83,8 @@ const EVENTS = {
   'count.drop': { ja: '採用しなかった件数の報告', r: ['SLEEPING', 'NOT_BOT', ...GEN_CODES] },
   dom: { ja: '会話を確定できなかった読み取り', r: DOM_CODES },
   'ipc.reject': { ja: '拒否したIPC', r: IPC_CODES },
+  'nav.block': { ja: '止めた遷移・リンク・外部起動', r: NAV_CODES },
+  'perm.deny': { ja: '拒否したサイト権限・ダウンロード', r: PERM_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -336,5 +342,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

@@ -164,9 +164,10 @@ const rankOf = tk => tk.data.rank;
   // every load main starts is inside a queue task (or one of the named exceptions)
   const spans = [...main.matchAll(/function (\w+)\(/g)].map(m => ({ name: m[1], a: m.index, b: m.index + fn(m[1]).length }));
   const enclosing = i => (spans.filter(s => s.a < i && i < s.b).sort((x, y) => (x.b - x.a) - (y.b - y.a))[0] || {}).name || '';   // the innermost named function
-  const calls = [...main.matchAll(/\.loadURL\(|\.reload\(\)|loadInto\(|\.goBack\(\)|\.goForward\(\)|\.loadFile\(/g)].filter(m => main.slice(m.index - 9, m.index) !== 'function ')
+  // (#72) main's own loadURL calls all go through appLoad(wc, url) (navigation-policy.js; NAV.appLoad(...) is only its check, not a load)
+  const calls = [...main.matchAll(/\.loadURL\(|\.reload\(\)|loadInto\(|(?<![\w.])appLoad\(|\.goBack\(\)|\.goForward\(\)|\.loadFile\(/g)].filter(m => main.slice(m.index - 9, m.index) !== 'function ')
     .map(m => [m[0], enclosing(m.index), main.slice(m.index - 60, m.index + 60).replace(/\s+/g, ' ')]);
-  const ALLOWED = { loadInto: 'its definition', reloadPane: 'the reload / wake task body', fixLoad: 'part of a running load, else its own task', navTo: 'another URL: a task (new tab: local)', goHist: 'inside its task',
+  const ALLOWED = { loadInto: 'its definition', appLoad: 'its definition (#72)', reloadPane: 'the reload / wake task body', fixLoad: 'part of a running load, else its own task', navTo: 'another URL: a task (new tab: local)', goHist: 'inside its task',
     openLink: 'inside its task', addPane: 'a task (new tab: local)', probePane: 'the background check task (own window)', sleepPane: 'about:blank: an unload', ensureApprove: '承認Bot popup (not a pane)',
     linkOpen: '承認Bot popup link (not a pane)', makeWindow: 'the window UI / overlay files' };
   const stray = calls.filter(([, f]) => !Object.hasOwn(ALLOWED, f));
@@ -176,7 +177,7 @@ const rankOf = tk => tk.data.rank;
   t('main: the about:blank of a sleep is the only load in sleepPane', calls.filter(([, f]) => f === 'sleepPane').length === 1 && /canSleep[\s\S]*lqView\(p, false\)\) return false;/.test(fn('canSleep')));
   t('main: reload / wake / startup / new pane / URL / back-forward / link / fix all request a task', /viewLoad\(p, p\.sleeping \? 'WAKE' : 'RELOAD', cls,/.test(fn('reloadPane')) && /viewLoad\(p, defer \? 'START' : 'OPEN', defer \? 'BULK' : 'USER',/.test(fn('addPane'))
     && /viewLoad\(p, 'NAV', 'USER',/.test(fn('navTo')) && /viewLoad\(q, 'NAV', 'USER',/.test(fn('goHist')) && /viewLoad\(q, 'NAV', 'USER', url,/.test(fn('openLink')) && /viewLoad\(p, 'FIX',/.test(fn('fixLoad')));
-  t('main: grokFix loads only through fixLoad', !/\.loadURL\(/.test(fn('grokFix')) && (fn('grokFix').match(/fixLoad\(p, /g) || []).length === 2);
+  t('main: grokFix loads only through fixLoad', !/\.loadURL\(|(?<![\w.])appLoad\(/.test(fn('grokFix')) && (fn('grokFix').match(/fixLoad\(p, /g) || []).length === 2);
   t('main: the background check is a task of its own (BG, probe), one at a time', /purpose: 'PROBE', cls: 'BG', probe: true/.test(fn('probeNext')) && /onStart: t => probePane\(q, t\)/.test(fn('probeNext')));
   t('main: reload-all / automatic reloads / watchdog are BULK; the user\'s are USER (default)', /async function reloadPane\(p, cls = 'USER', task = null\)/.test(main) && /reloadPane\(p, 'BULK'\)/.test(fn('reloadAll')) && /reloadPane\(p, 'BULK'\)/.test(fn('autoReload'))
     && /'watchdog: blank bot pane -> reload'[^\n]*\n\s*reloadPane\(p, 'BULK'\);/.test(main));

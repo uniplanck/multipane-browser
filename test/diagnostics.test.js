@@ -4,6 +4,7 @@
 const fs = require('fs'), os = require('os'), path = require('path');
 const D = require('../src/diagnostics');
 const IPC = require('../src/ipc-policy');
+const NAV = require('../src/navigation-policy'), PERM = require('../src/permission-policy');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mpb-diag-'));
 let dirs = 0; const box = () => path.join(root, String(++dirs), 'diagnostics');
@@ -45,6 +46,8 @@ const onlyKeys = e => Object.keys(e).every(k => KEYS.includes(k));
     t('every mapped code is a result the event accepts', D.NET_CODES.every(c => D.EVENTS['pane.load'].r.includes(c)) && D.GONE_CODES.every(c => D.EVENTS['pane.gone'].r.includes(c))
       && D.FS_CODES.every(c => D.EVENTS['state.save'].r.includes(c) && D.EVENTS['diag.disk'].r.includes(c)));
     t('IPC reject codes = ipc-policy.js REJECT', J([...D.IPC_CODES].sort()) === J(Object.keys(IPC.REJECT).sort()) && D.IPC_CODES.every(c => D.EVENTS['ipc.reject'].r.includes(c)));
+    t('navigation / permission reject codes = navigation-policy.js / permission-policy.js REJECT (#72)', J([...D.NAV_CODES].sort()) === J(Object.keys(NAV.REJECT).sort()) && J([...D.PERM_CODES].sort()) === J(Object.keys(PERM.REJECT).sort())
+      && D.NAV_CODES.every(c => D.EVENTS['nav.block'].r.includes(c)) && D.PERM_CODES.every(c => D.EVENTS['perm.deny'].r.includes(c)));
   }
 
   // ---- ring ----
