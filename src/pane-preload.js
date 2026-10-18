@@ -132,6 +132,10 @@ function looksAsking(text, hasWidget) {
   return /教えてください|どちら|確認してください|よろしいですか/.test(tail);
 }
 // ASK-END
+function pageHead() {   // page heading (bot name / group room name) + header text (participants in a group room) for the sleeping placeholder
+  const f = e => e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  try { return [f(document.querySelector('h1')), f(document.querySelector('header'))]; } catch { return ['', '']; }
+}
 function scanMessages() {
   // grok.com/bot: each turn is a ".group/bot-entry" block; user turns contain [data-testid="user-message"]
   let ents = [...document.querySelectorAll('[class*="group/bot-entry"]')];
@@ -147,7 +151,7 @@ function scanMessages() {
     // fingerprint of the latest entry (tail of its text) so the app can tell whether a sleeping pane got something new
     let h = 5381; const tail = t.slice(-400); for (let i = 0; i < tail.length; i++) h = ((h * 33) ^ tail.charCodeAt(i)) >>> 0;
     let q = ''; if (mk === 'wait') { try { q = requestQuote(le.innerText || le.textContent, [...le.querySelectorAll('blockquote')].map(b => b.innerText || b.textContent)); } catch {} }
-    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', q, asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
+    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', q, hn: pageHead()[0], hh: pageHead()[1], asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -223,6 +227,7 @@ function reportEditing() {
 function composerDraft() {
   const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
   for (const e of els) {
+    if (e.getAttribute('aria-hidden') === 'true' || e.tabIndex < 0 && e.tagName === 'TEXTAREA') continue;   // autosize mirror textarea (value 'x')
     const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
     if (String(txt).trim().length > 0) return true;
     const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);

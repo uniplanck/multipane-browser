@@ -1,5 +1,5 @@
 // node test/sleep.test.js — auto-sleep delay rules
-const { SLEEP_DONE_MS, SLEEP_WAIT_MS, sleepDelayFor, sleepDue } = require('../src/sleep-rules');
+const { SLEEP_DONE_MS, SLEEP_WAIT_MS, sleepDelayFor, sleepDue, sleepIdentity } = require('../src/sleep-rules');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 t('constants', SLEEP_DONE_MS === 60000 && SLEEP_WAIT_MS === 1800000);
 t('done -> 1 min', sleepDelayFor({ done: true }) === 60000);
@@ -18,4 +18,14 @@ t('waiting not due at 29 min', !sleepDue({ waiting: true }, 0, 29 * 60000));
 t('waiting due at 30 min', sleepDue({ waiting: true }, 0, 1800000));
 t('done timer restarts on later interaction', !sleepDue({ done: true }, 50000, 100000));
 t('unmarked never due', !sleepDue({}, 0, 1e9));
+const eqi = (n, got, name, group) => t(n, got.name === name && got.group === group);
+eqi('1:1 bot: heading = header', sleepIdentity({ h1: 'Tibo', hdr: 'Tibo', title: 'Tibo - Grok' }), 'Tibo', '');
+eqi('group room: heading is the group, user pane name is the bot', sleepIdentity({ h1: 'Nao-OS with Tibo', hdr: 'Nao-OS Tibo Tibo Jr.', userName: 'Tibo', title: 'Nao-OS with Tibo - Grok' }), 'Tibo', 'Nao-OS with Tibo');
+eqi('group room without pane name: participants as name', sleepIdentity({ h1: 'Nao-OS with Tibo', hdr: 'Nao-OS Tibo Tibo Jr.' }), 'Nao-OS Tibo Tibo Jr.', 'Nao-OS with Tibo');
+eqi('pane name equal to group name: no duplicate', sleepIdentity({ h1: 'Room', hdr: 'A B', userName: 'Room' }), 'Room', '');
+eqi('page not parseable: tab title fallback (suffix stripped)', sleepIdentity({ title: 'Nao-Actions - Grok' }), 'Nao-Actions', '');
+eqi('pane name wins for 1:1 bot', sleepIdentity({ h1: 'Tibo', hdr: 'Tibo', userName: 'わたしのTibo' }), 'わたしのTibo', '');
+eqi('whitespace / case-insensitive equality', sleepIdentity({ h1: ' Tibo ', hdr: 'tibo' }), 'Tibo', '');
+eqi('empty input', sleepIdentity({}), '', '');
+eqi('no argument', sleepIdentity(), '', '');
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

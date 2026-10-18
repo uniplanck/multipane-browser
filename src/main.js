@@ -254,7 +254,7 @@ const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.en
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
 const probeCbs = new Map();                                  // probe webContents id -> callback(msgcount)
-ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
+ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', hn: typeof c.hn === 'string' ? c.hn.slice(0, 80) : '', hh: typeof c.hh === 'string' ? c.hh.slice(0, 80) : '', fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -465,7 +465,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -542,6 +542,7 @@ function onMsgCount(p, c) {
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (!wasW && p.waiting) p.waitSince = Date.now();
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
+  if (c.hn) { p.pageH1 = c.hn; p.pageHdr = c.hh || ''; }      // heading / header captured from the page (name + group for the sleeping placeholder)
   p.reqQuote = p.waiting ? (c.q || '') : '';                 // the request quoted above the 🟢 marker (shown in the sleeping placeholder)
   const wasD = p.done; p.done = !!c.done && !p.waiting && !c.working && c.botSince > 0;   // purple: latest marker says '終了' (no glow / notification / badge)
   if (!wasD && p.done) p.waitSince = Date.now();
@@ -765,7 +766,7 @@ async function reloadPane(p) {
 // ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
 // A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 30 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
-const { sleepDelayFor } = require('./sleep-rules');
+const { sleepDelayFor, sleepIdentity } = require('./sleep-rules');
 const sleepDelay = p => Number(process.env.MPB_SLEEP_SEC) > 0 ? ((p.waiting || p.done) && !p.working ? Number(process.env.MPB_SLEEP_SEC) * 1000 : null)   // dev override: same delay for both
   : sleepDelayFor(p, settings.sleepMinutes > 0 ? settings.sleepMinutes * 60000 : undefined);
 function canSleep(p, i, force) {
@@ -780,6 +781,7 @@ function canSleep(p, i, force) {
 function sleepPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
+  Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title }));   // bot name + group name shown in the placeholder (falls back to the tab title)
   p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
   const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
   p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, done: !!lm.done, asks: !!lm.asks } : null;
@@ -793,6 +795,7 @@ function sleepPane(p) {
 const DRAFT_FN = `function composerDraft() {
   const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
   for (const e of els) {
+    if (e.getAttribute('aria-hidden') === 'true' || e.tabIndex < 0 && e.tagName === 'TEXTAREA') continue;   // autosize mirror textarea (value 'x')
     const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
     if (String(txt).trim().length > 0) return true;
     const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
@@ -882,6 +885,7 @@ async function probePane(p) {
   const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   p.sleepFp = nf;
+  if (last.hn) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
   if (nf.waiting && last.q) p.reqQuote = last.q;                                           // refresh the quote shown while asleep
   if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
   p.unopened = true; p.msgMode = true; p.glow = false;
@@ -951,7 +955,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1363,7 +1367,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', hn: typeof c.hn === 'string' ? c.hn.slice(0, 80) : '', hh: typeof c.hh === 'string' ? c.hh.slice(0, 80) : '', method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
 });
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
