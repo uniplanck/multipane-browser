@@ -48,7 +48,8 @@ const kind = v => v === 'codex' || v === 'claude';
 const where = v => v === 'here' || v === 'new' || v === 'window';
 
 // pane:msgcount (pane-preload scanMessages -> readConversation): three counts; flags / quote / heading / fingerprint / method when the scan has them;
-// snap = the scan's snapshot (pane-rules SNAP): every item exactly one of its fixed codes + the bot id of the scanned path
+// snap = the scan's snapshot (pane-rules SNAP): every item exactly one of its fixed codes + the bot id of the scanned path;
+// gen / seq (#02) = the generation number main gave the page (0 = none yet) and the scan's sequence number (main's pane-state.js compares them)
 const SNAP_KEYS = Object.keys(SNAP);
 const snapShape = s => obj(s) && Object.keys(s).length === SNAP_KEYS.length + 1 && text(s.cid) && /^[A-Za-z0-9_-]*$/.test(s.cid)
   && SNAP_KEYS.every(k => typeof s[k] === 'string' && Object.hasOwn(SNAP[k], s[k]));
@@ -56,12 +57,15 @@ function countOk(c) {
   return obj(c) && ['user', 'bot', 'botSince'].every(k => int(c[k], 0, COUNT_MAX - 1))
     && ['waiting', 'working', 'done', 'asks'].every(k => opt(c[k], bool))
     && ['q', 'hn', 'hh', 'fp', 'method'].every(k => opt(c[k], text))
+    && ['gen', 'seq'].every(k => opt(c[k], v => int(v, 0, Number.MAX_SAFE_INTEGER)))
     && opt(c.snap, snapShape);
 }
-// -> exactly the fields main uses, strings cut as before (quote 320, heading / header 80, fingerprint 24, method 40); no snapshot -> snap null (all unknown)
+// -> exactly the fields main uses, strings cut as before (quote 320, heading / header 80, fingerprint 24, method 40); no snapshot -> snap null (all unknown);
+// no generation / sequence number -> 0 (main drops the report)
 const cut = (s, n) => typeof s === 'string' ? s.slice(0, n) : '';
 const msgCount = c => ({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true,
   q: cut(c.q, 320), hn: cut(c.hn, 80), hh: cut(c.hh, 80), fp: cut(c.fp, 24), method: cut(c.method, 40),
+  gen: id(c.gen) ? c.gen : 0, seq: id(c.seq) ? c.seq : 0,
   snap: obj(c.snap) ? Object.fromEntries([['cid', c.snap.cid], ...SNAP_KEYS.map(k => [k, c.snap[k]])]) : null });
 
 // overlay-run actions (overlay.js; the chrome bar only sends next-unread). roles default: overlay only

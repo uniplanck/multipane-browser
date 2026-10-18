@@ -134,12 +134,21 @@ function guessMessages() {
   const mk = lastEl && botSince > 0 ? markerOf(lastEl.textContent) : null, waiting = mk === 'wait';
   return { user, bot, botSince, waiting, working: mk === 'work', done: mk === 'done', asks: waiting, method };
 }
-let lastSent = null, pendingKey = null;
+// Generation (#02): main numbers the page's world (load / URL / SPA move / reload / wake ...) and sends it here (mpb:gen). Every report carries the
+// number its scans ran under plus the scan's sequence number; main compares a report only within that generation, so a report of an older
+// generation, a duplicate or an out-of-order one changes nothing. 0 = no number yet (main drops such a report; it is sent again once one arrives).
+let lastSent = null, pendingKey = null, gen = 0, seq = 0, moving = true;
+function setGen(g) {
+  if (!Number.isSafeInteger(g) || g <= 0 || g === gen) return;
+  gen = g; lastSent = null; pendingKey = null; moving = true;   // scans of the old generation never confirm a report of the new one
+  if (grokChat() && !timer) timer = setTimeout(check, 300);
+}
+ipcRenderer.on('mpb:gen', (_e, g) => setGen(g));
 function sendCount(c) {
-  const key = msgKey(c);
+  const key = gen + '/' + c.snap.stable + '/' + msgKey(c);
   if (key === lastSent) return;
   lastSent = key;
-  ipcRenderer.send('pane:msgcount', c);
+  ipcRenderer.send('pane:msgcount', { ...c, gen, seq });
 }
 
 function check() {
@@ -149,8 +158,12 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     // A report goes out only when two scans >= 1.2 s apart agree (snap.stable QUIET; a reply can still be in progress - the DOM cannot prove it ended).
     // A page without a conversation is reported too (snap.conv LOADING / AUTH_REQUIRED / DOM_UNKNOWN), so main knows the state is unknown.
-    const f = scanMessages(), k = msgKey(readConversation(f));
-    if (k === pendingKey) sendCount(readConversation({ ...f, quiet: true })); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
+    // When the page changes after a stable report (a reply being written), one CHANGING report says so: main applies no counts from it and no
+    // longer acts on the earlier stable one (no auto-sleep on an old 🟢 / 🟣) until the next stable report.
+    seq++;
+    const f = scanMessages(), c = readConversation(f), k = gen + '|' + msgKey(c);
+    if (k === pendingKey) { moving = false; sendCount(readConversation({ ...f, quiet: true })); }
+    else { if (!moving) { moving = true; sendCount(c); } pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     return;
   }
   if (lastSent !== 'off') { lastSent = 'off'; ipcRenderer.send('pane:msgmode-off'); }

@@ -300,6 +300,11 @@ function guardNavigation(wc) {
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
+// ---- generations (#02, pane-state.js): one per-launch counter (all windows) numbers every pane entity, world generation and background-check
+// run, so a number is never reused. Kept in memory only (never in panes.json): after a restart everything starts with new numbers.
+const PS = require('./pane-state');
+let worldNo = 0;
+const nextNo = () => ++worldNo;
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -511,7 +516,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -578,20 +583,31 @@ function markActivity(p, reason) {
 // and never grounds an automatic action; name / quote / draft are judged on their own and do not affect the other items.
 const { snapOk, snapUsable, snapIssue } = require('./pane-rules');
 const botIdOf = u => (String(u || '').match(/^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)/) || [])[1] || '';   // = the preload's snap.cid for the same path
+// ---- generations (#02, pane-state.js): main owns the pane entity (p.obs.ent), its world generation and the background-check run ----
+// A load / reload / URL change / SPA move / sleep / wake / renderer gone starts a new generation and the page gets its number (mpb:gen, again on
+// dom-ready); a report counts only within the generation it was stamped with. p.obs is never saved.
+function obsDo(p, a) { const r = PS.reduce(p.obs, a); p.obs = r.o; return r; }
+function sendGen(p) { const wc = p.view.webContents; try { if (p.obs && !wc.isDestroyed()) wc.send('mpb:gen', p.obs.gen); } catch {} }   // no page right now (renderer gone): dom-ready sends it again
+function newGen(p, why) { if (!p.obs) return; obsDo(p, { type: 'bump', gen: nextNo(), why }); sendGen(p); }
 function onMsgCount(p, c) {
   if (p.sleeping) { diag.rec('count.drop', 'SLEEPING', { p: p.id }, 600000); return; }   // a sleeping pane keeps its remembered state
+  const drop = PS.admit(p.obs, p.obs.ent, c.gen, c.seq);     // an older page / URL / reload, no number yet, a duplicate or out-of-order scan: nothing changes
+  if (drop) { diag.rec('count.drop', drop, { p: p.id }, 600000); return; }
   const wc = p.view.webContents;
   if (!isBotUrl(wc.getURL())) { diag.rec('count.drop', 'NOT_BOT', { p: p.id }, 600000); resetCounts(p); return; }
   const s = c.snap;
   if (s && s.cid && s.cid !== botIdOf(wc.getURL())) { diag.rec('dom', 'OTHER_CONV', { p: p.id }, 600000); return; }   // scanned before the pane moved to another bot
+  obsDo(p, { type: 'scan', ent: p.obs.ent, gen: c.gen, seq: c.seq, c });   // this generation's health / latest turn / confirmed marker / last stable fingerprint
   p.snap = s;                                                // what auto-sleep may rely on now (canSleep)
   const issue = snapIssue(s);
   if (!snapOk(s, 'conv') || !snapOk(s, 'roles')) {          // no confirmed conversation on the page (loading / login / sidebar only / generic guesses): keep what was known, act on none of it
     const code = issue === 'DOM_UNKNOWN' && (wc.isLoading() || p.grokToken || p.grokPending) ? 'LOADING' : issue;
     diag.rec('dom', code, { p: p.id }, 600000);
+    sendState();                                             // the marker on screen is now only the last confirmed one
     return;
   }
   if (issue) diag.rec('dom', issue, { p: p.id }, 600000);
+  if (!snapOk(s, 'stable')) { sendState(); return; }        // the page moved after its last stable report (a reply being written): no counts from it, no sleep on the old marker
   if (!snapOk(s, 'name')) diag.rec('dom', 'NAME_UNSURE', { p: p.id }, 600000);
   const prev = p.msgMode ? p.unread : null;
   p.msgMode = true;
@@ -615,7 +631,7 @@ function onMsgCount(p, c) {
   if (wasAsk !== p.needsReply) dlog(`pane${p.id}`, 'needsReply', p.needsReply);
   if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; p.needsReply = false; }
   else if (!p.needsReply) { p.glow = false; }                      // plain progress report: grey number only
-  else if (prev != null && (!wasAsk || c.botSince > prev) && canAlert(p)) { lightUp(p, `bot asks (${c.botSince})`, true); return; }   // glow + notification only when waiting for the user
+  else if (prev != null && (!wasAsk || c.botSince > prev) && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(c) }).code) { lightUp(p, `bot asks (${c.botSince})`, true); return; }   // glow + notification only when waiting for the user, once per report
   updateBadge(); sendState();
 }
 function updateBadge() { updateDockBadge(); }
@@ -784,7 +800,8 @@ function onGrokLoad(p) {
 // (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
 async function reloadPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
-  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; p.sleepFp = undefined; p.unopened = false; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep (clears 'unopened')
+  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; if (p.obs) obsDo(p, { type: 'wake', gen: nextNo() }); p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep: a new generation, ends the sleep's check / baseline, clears 'unopened'
+  else newGen(p, 'RELOAD');                                  // reports scanned before this reload no longer count
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
   const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
@@ -840,6 +857,7 @@ function canSleep(p, i, force) {
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
   if (!force && p.hasDraft) return false;                    // typed text / pending attachment in the composer
   if (!force && !(snapUsable(p.snap) && p.snap.cid === botIdOf(wc.getURL()))) return false;   // the latest scan of this very conversation must be sure: unknown / stale never puts a pane to sleep
+  if (!force && !PS.sleepOk(p.obs)) return false;            // ...and of this very generation (#02): after a reload / URL or SPA move, a new turn, a reply being written or loading, an old 🟢 / 🟣 does not count
   if (!force) { const d = sleepDelay(p); if (d == null || Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < d) return false; }   // waitSince = when 待機中 / 終了 was first detected
   return true;
 }
@@ -847,9 +865,8 @@ function sleepPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
   Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title }));   // bot name + group name shown in the placeholder (falls back to the tab title)
-  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
-  const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
-  p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, done: !!lm.done, asks: !!lm.asks } : null;
+  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.lastCheck = 0;
+  obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
@@ -858,7 +875,8 @@ function sleepPane(p) {
 // Final live check right before discarding the page: a draft (or a failed check) means: do not sleep.
 const { DRAFT_JS } = require('./pane-rules');                // composerDraft() from the shared rules: the same code the pane preload has built in
 async function liveDraft(p) {
-  try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); diag.rec('draft', d === false ? 'EMPTY' : d === true ? 'PRESENT' : 'UNKNOWN', { p: p.id }, 600000); return d === false ? false : true; }
+  const g = p.obs.gen;                                       // an answer about an older page (navigated / reloaded meanwhile) is unknown (#02)
+  try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); const v = p.obs.gen === g ? d : null; diag.rec('draft', v === false ? 'EMPTY' : v === true ? 'PRESENT' : 'UNKNOWN', { p: p.id }, 600000); return v === false ? false : true; }
   catch { diag.rec('draft', 'UNKNOWN', { p: p.id }, 600000); return true; }
 }
 async function trySleep(p) {
@@ -901,12 +919,24 @@ async function probePane(p) {
   const id = target && target.match(GROK_BOT_RE)?.[1];
   p.lastCheck = Date.now();
   if (!id) return;
+  const run = nextNo();                                      // this check's run (#02): bound to the sleep generation it starts in
+  if (obsDo(p, { type: 'probe-start', run }).code) return;
+  const sid = p.obs.sleep.id;
   const t0 = Date.now(), m0 = debugOn() ? appMemBytes() : 0; let peak = m0;
   const bw = new BrowserWindow({ show: false, width: 1000, height: 720, skipTaskbar: true, focusable: false, webPreferences: {      // hidden window: same session, same preload, own 1000x720 viewport
     preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
   const wc = bw.webContents, pr = probe = { p, abort: false };
   let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false, unsure = '';
+  // the check's page is numbered like a live pane's: a new number per page / SPA move of this window, sent again on dom-ready
+  const runTok = () => p.obs.sleep && p.obs.sleep.run && p.obs.sleep.run.id === run ? p.obs.sleep.run.tok : 0;
+  const sendTok = () => { try { if (runTok() && !wc.isDestroyed()) wc.send('mpb:gen', runTok()); } catch {} };
+  const docGen = () => { if (!obsDo(p, { type: 'probe-doc', run, tok: nextNo() }).code) sendTok(); };
+  wc.on('did-navigate', docGen); wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) docGen(); });
+  wc.on('dom-ready', sendTok);
   regWc(wc, 'probe', { ctx, pane: p, onCount: c => {   // its preload's count comes here (never to the live pane)
+    const drop = obsDo(p, { type: 'probe-scan', run, gen: c.gen, seq: c.seq }).code;   // an earlier page of this check, an older check, a duplicate / out-of-order scan
+    if (drop) { diag.rec('count.drop', drop, { p: p.id }, 600000); return; }
+    if (snapOk(c.snap, 'conv') && snapOk(c.snap, 'roles') && !snapOk(c.snap, 'stable')) { last = null; unsure = 'CHANGING'; return; }   // the page moved after its stable report: wait for the next one
     if (snapOk(c.snap, 'conv') && snapOk(c.snap, 'roles')) { last = c; lastAt = Date.now(); } else { last = null; unsure = snapIssue(c.snap); }   // a page without a confirmed conversation is no count: keep waiting
   } });
   try {
@@ -934,6 +964,7 @@ async function probePane(p) {
   } catch (e) { failed = true; dlog(`pane${p.id}`, 'probe error', String(e)); }
   finally {
     unregWc(r => r.wc === wc); probe = null;
+    obsDo(p, { type: 'probe-stop', run });                   // the run is over: nothing of it is taken any more
     try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
   }
   const ms = Date.now() - t0;
@@ -943,19 +974,19 @@ async function probePane(p) {
     diag.rec('probe', 'UNSURE', { p: p.id, ms, n: pushes + hard }); diag.rec('dom', issue, { p: p.id }, 600000);
     dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'unsure', issue); return;
   }
-  const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
-  const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
-  diag.rec('probe', changed ? 'CHANGED' : old ? 'SAME' : 'BASELINE', { p: p.id, ms, n: pushes + hard });
-  dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
-  p.sleepFp = nf;
+  const res = obsDo(p, { type: 'probe-result', sleep: sid, c: last });   // compared with the baseline of the sleep it was started in; becomes the new baseline
+  if (res.code) { diag.rec('probe', 'STALE', { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'stale run'); return; }   // woke / slept again / closed meanwhile: not this sleep's result
+  const nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
+  diag.rec('probe', res.verdict, { p: p.id, ms, n: pushes + hard });
+  dlog(`pane${p.id}`, 'probe', why, ms + 'ms', res.verdict, `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   if (last.hn && snapOk(last.snap, 'name')) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
   if (nf.waiting && last.q && snapOk(last.snap, 'quote')) p.reqQuote = last.q;              // refresh the quote shown while asleep
-  if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
-  p.unopened = true; p.msgMode = true; p.glow = false;
+  if (!res.fresh) return;                                                                 // nothing new (or only a baseline), or the user spoke last
+  p.msgMode = true; p.glow = false;                                                       // 'unopened' is set by the result (p.obs)
   p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
   p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
   updateBadge(); sendState();
-  if (p.needsReply && settings.notifications && !p.muted && canAlert(p)) showPaneNotification(p, `未開封の新着（待機中 ${p.unread}件）`);
+  if (p.needsReply && settings.notifications && !p.muted && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(nf) }).code) showPaneNotification(p, `未開封の新着（待機中 ${p.unread}件）`);
 }
 
 // ---- panes ----
@@ -1008,10 +1039,15 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     zoom: 1,
     lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1 };
   p.zoom = p.zoomIndiv ? clampZ(spec.zoom) : gZoom();
+  p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
   regWc(wc, 'pane', { ctx, pane: p });
+  // a new generation for every new page (load / reload / wake / sleep's blank page), SPA move of the main frame and renderer loss
+  wc.on('did-navigate', () => newGen(p, 'NAV'));
+  wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) newGen(p, 'SPA'); });
+  wc.on('render-process-gone', () => newGen(p, 'GONE'));
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
   guardNavigation(wc);
   const upd = () => { sendState(); save(); };
@@ -1024,7 +1060,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
-  wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); });
+  wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); sendGen(p); });   // the page's preload is listening by now
   wc.on('console-message', e => {
     if (!debugOn()) return;
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
@@ -1076,6 +1112,7 @@ function closePane(id, keepEmpty) {
   const [p] = panes.splice(i, 1);
   p.grokToken = null;
   unregWc(r => r.wc === p.view.webContents);                 // nothing from this page counts any more
+  obsDo(p, { type: 'close' }); abortProbe(p);                // ...nor from its background check (#02)
   win.contentView.removeChildView(p.view);
   p.view.webContents.close();
   if (maximizedId === id) maximizedId = null;
@@ -1509,8 +1546,8 @@ const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { 
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   othersInfo(n) {
-    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.done || p.glow || p.unread || p.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
-      waiting: !!p.waiting, working: !!p.working, done: !!p.done, glow: !!p.glow, unopened: !!p.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
+    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.done || p.glow || p.unread || p.obs.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
+      waiting: !!p.waiting, working: !!p.working, done: !!p.done, glow: !!p.glow, unopened: !!p.obs.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
   } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }

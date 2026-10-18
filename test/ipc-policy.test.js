@@ -185,11 +185,14 @@ t('unknown / inherited channel names -> E_CHANNEL', ['eval', '__proto__', 'const
 
 // ---- msgCount: only the fields main uses, cut as before ----
 { const m = P.msgCount({ ...COUNT, q: 'あ'.repeat(400), hn: 'h'.repeat(100), hh: 'x'.repeat(100), fp: 'f'.repeat(30), method: 'm'.repeat(50), extra: 'drop me', waiting: true, asks: 1 });
-  t('msgCount: known fields only', Object.keys(m).sort().join() === 'asks,bot,botSince,done,fp,hh,hn,method,q,snap,user,waiting,working');
+  t('msgCount: known fields only', Object.keys(m).sort().join() === 'asks,bot,botSince,done,fp,gen,hh,hn,method,q,seq,snap,user,waiting,working');
   t('msgCount: strings cut (quote 320, heading / header 80, fingerprint 24, method 40)', m.q.length === 320 && m.hn.length === 80 && m.hh.length === 80 && m.fp.length === 24 && m.method.length === 40);
   t('msgCount: flags are true only for true', m.waiting === true && m.asks === false && m.done === false);
   t('msgCount: snapshot copied item by item (a new object)', JSON.stringify(m.snap) === JSON.stringify(SNAPV) && m.snap !== SNAPV);
-  const s = P.msgCount({ user: 1, bot: 2, botSince: 1 }); t('msgCount: missing strings -> empty, missing snapshot -> null (= all unknown)', s.q === '' && s.hn === '' && s.fp === '' && s.method === '' && s.waiting === false && s.snap === null); }
+  const s = P.msgCount({ user: 1, bot: 2, botSince: 1 }); t('msgCount: missing strings -> empty, missing snapshot -> null (= all unknown)', s.q === '' && s.hn === '' && s.fp === '' && s.method === '' && s.waiting === false && s.snap === null);
+  t('msgCount: generation / scan numbers passed through, missing -> 0 (main drops it)', (g => g.gen === 7 && g.seq === 3)(P.msgCount({ ...COUNT, gen: 7, seq: 3 })) && s.gen === 0 && s.seq === 0); }
+t('msgcount: generation / scan numbers are non-negative safe integers (0 = none yet)', chk('pane:msgcount', 'pane', [{ ...COUNT, gen: 0, seq: 0 }]) === null && chk('pane:msgcount', 'probe', [{ ...COUNT, gen: Number.MAX_SAFE_INTEGER, seq: 1 }]) === null
+  && [-1, 1.5, '3', true, Number.MAX_SAFE_INTEGER + 1, NaN].every(v => pay('pane:msgcount', 'pane', [{ ...COUNT, gen: v }]) && pay('pane:msgcount', 'pane', [{ ...COUNT, seq: v }])));
 
 // ======================= contract with the real sources =======================
 const main = read('main.js');

@@ -176,6 +176,8 @@ const onS = s => {
     c.classList.toggle('done', !!p.done);
     c.classList.toggle('working', !!p.working);
     c.classList.toggle('unopened', !!p.unopened);
+    const lastOnly = p.obs === 'last' && !!(p.waiting || p.working || p.done), lt = lastOnly ? '・最終確認値（現在は未確認）' : '';   // marker not confirmed for the page as it is now
+    c.classList.toggle('stale', lastOnly);
     c.classList.toggle('colored', !!color);
     c.title = `${p.name || p.title}（ダブルクリックで名前変更・右クリックでメニュー）\n${p.url || '新しいペイン'}${p.muted ? '\n🔕 通知ミュート' : ''}`;
     const n = p.unread || 0;
@@ -184,7 +186,7 @@ const onS = s => {
     const lbl = shortLabel(chars.slice(1).join(''));
     const justCopied = (copied.get(p.id) || 0) > Date.now();
     c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}${p.unopened ? ' unop' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? '<span class="wdot" title="待機中（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : p.done ? '<span class="wdot done" title="終了（紫）"></span>' : '');
+      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? `<span class="wdot" title="待機中（緑）${lt}"></span>` : p.working ? `<span class="wdot work" title="作業中（赤）${lt}"></span>` : p.done ? `<span class="wdot done" title="終了（紫）${lt}"></span>` : '');
   });
 
   syncBtn(s);
@@ -214,6 +216,8 @@ const onS = s => {
     d.classList.toggle('unopened', !!p.unopened);
     d.classList.toggle('maxed', p.id === s.maximizedId);
     d.classList.toggle('sleeping', !!p.sleeping);
+    const lastOnly = p.obs === 'last' && !!(p.waiting || p.working || p.done);
+    d.classList.toggle('stale', lastOnly);
     { const sn = d.querySelector('.sleepid .sn'), sg = d.querySelector('.sleepid .sg'); sn.textContent = p.sname || ''; sg.textContent = p.sgroup || ''; sg.style.display = p.sgroup ? '' : 'none'; }
     { const q = d.querySelector('.sleepq'); q.textContent = p.quote || ''; q.classList.toggle('on', !!p.quote); }
     { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `待機中・終了にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
@@ -227,6 +231,7 @@ const onS = s => {
     inp.placeholder = 'URL・検索語を入力（Grok BotのURLを貼り付けてもOK）';
     const meta = [];
     if (p.sleeping) meta.push(p.unopened ? '<span title="スリープ中に新着メッセージ（未開封）— クリックで開く">💤✉ 未開封</span>' : '<span title="スリープ中（クリックで復帰）">💤</span>');
+    if (lastOnly) meta.push('<span class="lastok" title="表示中の待機中・作業中・終了は最後に確認できた状態です（再読み込み・移動・返信の生成中などで、今の状態はまだ確認できていません）。確認できるまで自動スリープしません">最終確認</span>');
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
     if (p.zoomIndiv) meta.push(`<span class="zind" title="ズームは個別設定（全体ズームの影響を受けません）">🔍個別 ${Math.round(p.zoom * 100)}%</span>`);

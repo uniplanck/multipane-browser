@@ -202,7 +202,7 @@ t('dom: the bot id is taken from the path', page({ blocks: [block({ text: 'x' })
   t('main: the name is kept only when unambiguous (live pane and background check)', /if \(c\.hn && snapOk\(s, 'name'\)\)/.test(om) && /if \(last\.hn && snapOk\(last\.snap, 'name'\)\)/.test(pp));
   t('main: auto-sleep needs a usable snapshot of the current conversation (manual sleep unchanged)', /if \(!force && !\(snapUsable\(p\.snap\) && p\.snap\.cid === botIdOf\(wc\.getURL\(\)\)\)\) return false;/.test(cs));
   t('main: background check counts only confirmed conversations and compares only usable ones', /if \(snapOk\(c\.snap, 'conv'\) && snapOk\(c\.snap, 'roles'\)\) \{ last = c; lastAt = Date\.now\(\); \} else \{ last = null;/.test(pp)
-    && /if \(!snapUsable\(last\.snap\) \|\| last\.snap\.cid !== id\) \{/.test(pp) && pp.indexOf("diag.rec('probe', 'UNSURE'") < pp.indexOf('const old = p.sleepFp'));
+    && /if \(!snapUsable\(last\.snap\) \|\| last\.snap\.cid !== id\) \{/.test(pp) && pp.indexOf("diag.rec('probe', 'UNSURE'") > 0 && pp.indexOf("diag.rec('probe', 'UNSURE'") < pp.indexOf("type: 'probe-result'"));
   t('main: the snapshot is forgotten on navigation and reset (never carried to a new page)', /wc\.on\('did-navigate', \(\) => \{ if \(p\.sleeping\) return; p\.snap = null;/.test(main) && /p\.snap = null;/.test(rc));
   t('main: the draft guard is unchanged (final live check before sleep)', /if \(!force && p\.hasDraft\) return false;/.test(cs) && /const d = await liveDraft\(p\); p\.hasDraft = d; if \(!d && canSleep\(p, panes\.indexOf\(p\)\)\) sleepPane\(p\);/.test(main));
   const lit = [...main.matchAll(/diag\.rec\('dom', '([A-Z_]+)'/g)].map(m => m[1]);
