@@ -247,6 +247,7 @@ setInterval(() => {
     const wc = p.view.webContents;
     if (now - p.lastReload < p.reloadMinutes * 60000) continue;
     if (now - p.lastTyping < TYPING_GRACE_MS || p.editing || wc.isLoading()) continue;
+    if (p.disposed || RP.view(p.rcv).gone) continue;       // (#32) a closed view / a page whose renderer is gone (reloaded by the user only)
     c.autoReload(p);
   }
 }, 15000);
@@ -499,6 +500,17 @@ function lqPoll() {
 }
 const lqPollOn = () => { if (!lqPollTimer) lqPollTimer = setInterval(lqPoll, 300); };
 function lqEnd(run, code) { lqRuns.delete(run.t.id); run.resolve(code); }   // -> the task's promise: the queue gives the slot back
+// ---- limited recovery (#32, recovery-policy.js): a transient main-frame load failure of the pane's current generation is reloaded by itself at
+// most RP.MAX_AUTO times in RP.WINDOW_MS (15 s, then 60 s later), through the input guard (#11) and the shared queue (#31); anything else (a
+// permanent failure, the limit, a renderer gone) waits for the user. No timer per pane: this one tick starts at most one due reload in all windows,
+// none while the Mac sleeps / is locked, right after it woke (the overdue ones then go one per tick) or while quitting. makeWindow: recover*.
+// Dev: MPB_RECOVERY_DEBUG=1 adds synthetic failures to the pane's context menu (the same handlers; no renderer is crashed).
+const RP = require('./recovery-policy');
+const RECOVERY_DEBUG = !!process.env.MPB_RECOVERY_DEBUG;
+setInterval(() => {
+  if (quitting || sysBlocked || Date.now() - resumeAt < RP.RESUME_MS) return;
+  for (const c of ctxs) { try { if (c.recoverNext()) break; } catch (e) { dlog('recover tick error', String(e)); } }
+}, RP.TICK_MS);
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -708,12 +720,13 @@ function sendState(cs = cells()) {
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
     canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
     panes: panes.map((p, i) => {
-      const wc = p.view.webContents, lt = lqView(p);              // its load in the queue (#31): waiting (with its place) / running
+      const wc = p.view.webContents, lt = lqView(p), rv = RP.view(p.rcv);   // its load in the queue (#31): waiting (with its place) / running; (#32) recovery
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         lq: lt ? lt.state : '', lqPos: lt && lt.state === 'wait' ? lq.position(lt.id) : 0, held: viewHeld(p), idle: !!p.loadIdle && !lt,
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
         sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i],
+        gone: rv.gone, fail: rv.fail, hang: rv.hang,             // (#32) renderer gone ('stopped' placeholder) / a failed load (retry planned / manual) / unresponsive
         chk: p.sleeping ? PB.label(p.pb, { hold: probeAuthHold, off: settings.sleepCheck === false }) : '' };   // (#33) last success / next check / failures / stopped
     }),
   };
@@ -955,6 +968,7 @@ async function grokFix(p, target, id, viaHome) {
 }
 // Watchdog: a bot pane that is on screen, finished its fix routine, and still shows no chat box (blank / landing page) is reloaded
 // through the fast path. Bounded (3 tries per pane, spaced out) so it can never loop.
+// (#32) A pane whose renderer is gone or whose load failed is the recovery policy's (recover*): left alone here. Its reloads count there too.
 const GROK_RENDERED = id => `(() => { const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   return location.pathname.includes(${JSON.stringify(id)}) && [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis) || /Page not found/i.test((document.body && document.body.innerText) || ''); })()`;
 setInterval(async () => {
@@ -963,6 +977,7 @@ setInterval(async () => {
     try {
       const wc = p.view.webContents;
       if (wc.isDestroyed() || p.sleeping || p.grokToken || p.grokPending || wc.isLoading() || !settings.grokFix) continue;
+      if (wc.isCrashed() || RP.view(p.rcv).gone || RP.owns(p.rcv)) continue;   // (#32) renderer gone: manual only; a failed load: retried there (bounded) or manual
       if (lqView(p, false) || p.loadIdle) continue;                     // waiting / loading in the queue, or its wait was cancelled (取消): about:blank is expected
       const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
       const own = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);   // the pane's own bot link
@@ -972,7 +987,7 @@ setInterval(async () => {
       if (await wc.executeJavaScript(GROK_RENDERED(id)).catch(() => true)) { p.wdTries = 0; continue; }
       if ((p.wdTries || 0) >= 3 || Date.now() - (p.wdAt || 0) < 30000) continue;
       if (!autoGate(p, await liveInput(p), 'watchdog')) continue;   // #11: a page that holds input is never reloaded by itself (tried again later)
-      p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now();
+      p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now(); p.rcv = RP.took(p.rcv, p.wdAt);   // (#32) one of the pane's automatic reloads (10 min / 2 there)
       dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries); diag.rec('watchdog', 'RELOAD', { p: p.id, n: p.wdTries });
       reloadPane(p, 'BULK');
     } catch {}
@@ -1017,6 +1032,7 @@ async function reloadPane(p, cls = 'USER', task = null) {
     return;
   }
   if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); diag.rec('reload', 'BLANK_LOAD', { p: p.id }); appLoad(wc, target); return; }   // nothing to hop from (woken / blank pane)
+  if (wc.isCrashed() || RP.view(p.rcv).gone) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload after renderer gone: hard load'); diag.rec('reload', 'GONE_LOAD', { p: p.id }); appLoad(wc, target); return; }   // (#32) no page to hop in: a new renderer
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
   if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
@@ -1068,6 +1084,7 @@ function sleepPane(p) {
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
   Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title }));   // bot name + group name shown in the placeholder (falls back to the tab title)
   p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.pb = PB.init(p.sleepAt, SLEEP_CHECK_MS);   // (#33) a new sleep: its first check one interval later
+  recoverCancel(p, true);                                    // (#32) a sleeping pane is never reloaded by itself; what it showed about its page goes
   obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
@@ -1114,6 +1131,92 @@ async function autoReload(p) {                                 // the per-pane �
     p.lastReload = Date.now(); reloadPane(p, 'BULK');
   } finally { p.autoChecking = false; }
 }
+// ---- limited recovery (#32, recovery-policy.js; the tick at the top level). p.rcv: automatic reloads in the window, the one planned reload
+// (entity / generation / URL it is for), the failure note, the renderer gone, unresponsive. Memory only, never saved, gone with the pane.
+// did-fail-load (also the dev hook): only a failed main-frame load of a web page counts. The error page that replaced the document is a new
+// generation (#02); a transient failure gets a planned reload, anything else waits for the user
+function recoverFail(p, code, url, isMain) {
+  if (p.disposed || p.sleeping || !p.rcv) return;
+  const web = /^https?:/i.test(String(url || '')), k = RP.classify({ type: 'fail', code, main: isMain === true, web }).kind;
+  if (k !== 'TRANSIENT' && k !== 'PERMANENT') return;        // ERR_ABORTED (an intended cancel) / a child frame / not a web page: no failure of the page
+  recoverLive(p);                                            // an error page has a renderer: not 'stopped' any more
+  newGen(p, 'FAIL');
+  const r = RP.onFail(p.rcv, { code, main: true, web, ent: p.obs.ent, gen: p.obs.gen, url }, Date.now()); p.rcv = r.rec;
+  if (r.code) diag.rec('recover', r.code, { p: p.id, n: r.n });
+  dlog(`pane${p.id}`, 'load failed', k, r.code, r.rec.due ? `reload in ${r.rec.due.wait / 1000}s` : 'manual only');
+  sendState();
+}
+// render-process-gone: the 'stopped' placeholder instead of the view, manual reload only (clean-exit: nothing). Asleep: nothing to show
+function recoverGone(p, reason) {
+  if (p.disposed || p.sleeping || !p.rcv) return;
+  const r = RP.onGone(p.rcv, reason); p.rcv = r.rec;
+  if (!r.code) return;
+  p.grokToken = null; p.grokPending = null;                  // a running bot-page fix has no page any more
+  diag.rec('recover', r.code, { p: p.id });
+  dlog(`pane${p.id}`, 'renderer gone: manual reload only');
+  showViews();
+}
+function recoverHang(p, on) { if (p.disposed || !p.rcv) return; p.rcv = RP.onHang(p.rcv, on); sendState(); }   // shown only; never a reason to reload
+// a live renderer again (a new page / an error page): the 'stopped' placeholder goes and the view comes back
+function recoverLive(p) {
+  const wc = p.view.webContents; if (!p.rcv || !p.rcv.gone || wc.isDestroyed() || wc.isCrashed()) return;
+  const r = RP.revived(p.rcv); p.rcv = r.rec;
+  if (r.code) diag.rec('recover', r.code, { p: p.id });
+  showViews();
+}
+// did-navigate: a new page - nothing planned / noted is about it any more
+function recoverPage(p) {
+  if (!p.rcv) return;
+  const r = RP.committed(p.rcv); p.rcv = r.rec;
+  if (r.code) diag.rec('recover', r.code, { p: p.id });
+  recoverLive(p);
+}
+// the user's own load (viewLoad USER) / sleep / close (clear: what the pane showed about its page goes too)
+function recoverCancel(p, clear = false) {
+  if (!p.rcv) return;
+  const r = RP.cancel(p.rcv, { clear }); p.rcv = r.rec;
+  if (r.code) diag.rec('recover', r.code, { p: p.id });
+}
+const recoverSeen = p => { const wc = p.view.webContents, gone = wc.isDestroyed();
+  return { ent: p.obs.ent, gen: p.obs.gen, url: paneUrl(p), closed: !!p.disposed || !!p.obs.closed || !panes.includes(p), sleeping: !!p.sleeping, crashed: gone || wc.isCrashed(),
+    idle: !!p.loadIdle, busy: !!p.broadcasting, ime: !!p.ime, hold: !!p.guardHold, loading: !gone && wc.isLoading(), queued: !!lqView(p, false), fixing: !!(p.grokToken || p.grokPending) }; };
+function recoverStep(p) {                                      // the planned reload against the pane now -> true: go
+  const r = RP.check(p.rcv, recoverSeen(p), Date.now()); p.rcv = r.rec;
+  if (r.code) { diag.rec('recover', r.code, { p: p.id, n: RP.count(p.rcv, Date.now()) }); sendState(); }
+  return r.act === 'go';
+}
+// the tick: the due panes of this window, the one due first first; at most one reload starts (-> true)
+function recoverNext() {
+  if (!win || win.isDestroyed()) return false;
+  for (const i of RP.dueList(panes.map(q => q.rcv), Date.now())) {
+    const p = panes[i];
+    if (p.recChecking || !recoverStep(p)) continue;
+    recoverGo(p); return true;
+  }
+  return false;
+}
+// read right before (#11: draft / attachment / upload / IME / unknown / a broadcast stop it, manual only then), checked again, then the queue (#31)
+async function recoverGo(p) {
+  p.recChecking = true;
+  try {
+    const g = await liveInput(p);
+    if (!RP.isDue(p.rcv, Date.now())) return;                // dropped meanwhile (closed / asleep / the user's own load / a new page)
+    if (!autoGate(p, g, 'recover')) { const r = RP.skip(p.rcv, GUARD.autoRefusal(g, Date.now())); p.rcv = r.rec; diag.rec('recover', r.code, { p: p.id }); sendState(); return; }
+    if (!recoverStep(p)) return;                             // moved on / started loading while it was read
+    p.rcv = RP.took(p.rcv, Date.now()); diag.rec('recover', 'RETRY', { p: p.id, n: RP.count(p.rcv, Date.now()) });
+    dlog(`pane${p.id}`, 'recover: automatic reload', RP.count(p.rcv, Date.now()));
+    p.lastReload = Date.now(); reloadPane(p, 'BULK');
+  } finally { p.recChecking = false; }
+}
+// dev (MPB_RECOVERY_DEBUG=1, the pane's context menu): synthetic events into the same handlers as the real ones - no renderer is crashed and
+// no load really fails (a synthetic 'stopped' page keeps its live page under the placeholder: its reload goes through the guard as usual)
+const recoverDebugItems = p => [
+  { label: '（開発）一時的な読込失敗', click: () => recoverFail(p, -106, paneUrl(p), true) },
+  { label: '（開発）恒久的な読込失敗', click: () => recoverFail(p, -20, paneUrl(p), true) },
+  { label: '（開発）取消（ERR_ABORTED）', click: () => recoverFail(p, RP.ABORTED, paneUrl(p), true) },
+  { label: '（開発）子フレームの読込失敗', click: () => recoverFail(p, -106, paneUrl(p), false) },
+  { label: '（開発）ページ停止（crashed）', click: () => recoverGone(p, 'crashed') },
+  { label: RP.view(p.rcv).hang ? '（開発）応答再開' : '（開発）応答なし', click: () => recoverHang(p, !RP.view(p.rcv).hang) }];
 // Manual operations that throw pages away. targets() = the panes it would drop right now (asked again right before acting), run(list) does it.
 // Nothing that could hold input -> at once, as before. Otherwise every target is read; the panes at risk are listed in one dialog (default / Esc =
 // やめる; skip: 'all but those' for reload-all); after a confirmation all are read again and any change cancels. Cancelled / expired: nothing
@@ -1188,12 +1291,14 @@ function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) trySleep(p)
 // ---- this window's loads through the shared queue (#31; lq / lqPoll at the top) ----
 // The pane's view load in the queue: live = waiting / running (what the screen shows), else also one still stopping after a cancel
 const lqView = (p, live = true) => p.obs ? lq.find(t => t.ent === p.obs.ent && !t.probe && (!live || t.state !== 'stop')) : null;
-// nothing to show yet / any more and waiting for a load (startup / new pane / 取消): its view stays hidden behind the placeholder (no blank page)
-const viewHeld = p => !p.sleeping && !hasPage(p) && (!!p.loadIdle || lqView(p)?.state === 'wait');
+// nothing to show yet / any more and waiting for a load (startup / new pane / 取消): its view stays hidden behind the placeholder (no blank page);
+// (#32) a renderer gone: hidden behind the 'stopped' placeholder until a new page has a renderer
+const viewHeld = p => !p.sleeping && (!hasPage(p) && (!!p.loadIdle || lqView(p)?.state === 'wait') || RP.view(p.rcv).gone);
 const lqDrop = (p, code) => p.obs && lq.cancel(t => t.ent === p.obs.ent && !t.probe, code);   // its waiting / running view load ends (a running one once it has stopped)
 // purpose: START / OPEN / WAKE / RELOAD / NAV / FIX; cls: USER / BULK; url: the page it is expected to load ('' = unknown); go(t): the load itself
 function viewLoad(p, purpose, cls, url, go) {
   if (!p.obs) { go(null); return null; }                     // the 承認Bot popup: not a pane, loads at once as before
+  if (cls === 'USER') recoverCancel(p);                      // (#32) the user's own load: no automatic reload of the pane is planned any more
   const { task, merged } = lq.request({ ent: p.obs.ent, gen: p.obs.gen, purpose, cls, win: ctx, url,
     data: { no: p.id, ok: p.guardOk || null, rank: () => panes[focused] === p ? 0 : 1 },
     onStart: t => startView(t, p, go), onStop: t => stopView(t, p), onEnd: (t, code) => endView(t, p, code) });
@@ -1403,6 +1508,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1,
     inputRev: 0, ime: false };                               // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
+  p.rcv = RP.createRec();                                    // (#32) its failures / planned reload (memory only)
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
@@ -1433,11 +1539,16 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
   });
   const loadMs = () => p.loadT0 ? Date.now() - p.loadT0 : undefined;
-  wc.on('did-fail-load', (e, code, desc, url, isMain) => { if (isMain && !p.sleeping) diag.rec('pane.load', DIAG.netCode(code), { p: p.id, ms: loadMs() }); dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'); });
-  wc.on('render-process-gone', (e, d) => { p.ime = false; diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); });
-  wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); });
+  // (#32) failures told apart (recovery-policy.js): a failed main-frame load (transient: reloaded by itself, bounded; else manual), the renderer
+  // gone (manual: the 'stopped' placeholder), unresponsive (noted only). ERR_ABORTED, a child frame and a load that is only slow are no failure
+  wc.on('did-fail-load', (e, code, desc, url, isMain) => { if (isMain && !p.sleeping) diag.rec('pane.load', DIAG.netCode(code), { p: p.id, ms: loadMs() }); dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'); recoverFail(p, code, url, isMain); });
+  wc.on('render-process-gone', (e, d) => { p.ime = false; diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); recoverGone(p, d && d.reason); });
+  wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); recoverHang(p, true); });
+  wc.on('responsive', () => { diag.rec('pane.hang', 'RESPONSIVE', { p: p.id }); dlog(`pane${p.id}`, 'responsive'); recoverHang(p, false); });
+  wc.on('did-navigate', () => recoverPage(p));
   wc.on('did-finish-load', () => {
     if (!p.sleeping) diag.rec('pane.load', 'OK', { p: p.id, ms: loadMs() });   // a sleeping pane loading about:blank is not a page load
+    recoverLive(p);
     onGrokLoad(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
@@ -1453,6 +1564,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
     items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => goHist(p, -1) },
       { label: '再読み込み', click: () => askReload(p.id) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
+    if (RECOVERY_DEBUG) items.push({ type: 'separator' }, ...recoverDebugItems(p));   // (#32) dev only
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   insertPane(p);
@@ -1493,16 +1605,26 @@ function closePane(id, keepEmpty) {
     if (!keepEmpty) CP.push(closedStack, CP.entry(paneSpec(panes[i]), w, NEWTAB));   // for ⌘⇧T (a blank / new-tab pane: nothing to reopen; closing many at once: not kept)
     lens[w.row]--; if (lens[w.row] <= 0) lens.splice(w.row, 1); }   // only this pane's row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
-  p.grokToken = null;
-  unregWc(r => r.wc === p.view.webContents);                 // nothing from this page counts any more
-  obsDo(p, { type: 'close' }); abortProbe(p);                // ...nor from its background check (#02)
-  lqDrop(p, 'CLOSED');                                       // its waiting / running load (#31): a running one gives its slot back once the view is gone
-  win.contentView.removeChildView(p.view);
-  p.view.webContents.close();
+  disposePane(p, 'CLOSED');
   if (maximizedId === id) maximizedId = null;
   focused = Math.max(0, Math.min(focused, panes.length - 1));
   if (!panes.length && !keepEmpty) addPane({ url: '' });
   else { updateBadge(); applyThrottling(); relayout(true); save(); }
+}
+// (#32) the end of one pane view, once per view addPane made (closePane; every pane when its window is closed): nothing from its page counts, its
+// background check / loads / planned reload end, then the view leaves the window and its WebContents is closed - detaching or hiding a view
+// does not end it. A second call does nothing; a window already gone is skipped.
+function disposePane(p, code) {
+  if (!p || p.disposed) return false;
+  p.disposed = true; p.grokToken = null; p.grokPending = null;
+  recoverCancel(p, true);
+  const wc = p.view.webContents;
+  unregWc(r => r.wc === wc);                                 // nothing from this page counts any more
+  obsDo(p, { type: 'close' }); abortProbe(p);                // ...nor from its background check (#02)
+  lqDrop(p, code);                                           // its waiting / running load (#31): a running one gives its slot back once the view is gone
+  try { if (!win.isDestroyed()) win.contentView.removeChildView(p.view); } catch {}
+  try { if (!wc.isDestroyed()) wc.close(); } catch {}
+  return true;
 }
 function newPane(url = '') {
   if (panes.length >= MAX) { const p = panes[focused]; if (p) openIn(p, url); return; }
@@ -1629,6 +1751,7 @@ function openApprove() {
   if (approveOpen) { closeOverlay(); return; }
   if (overlayOpen) closeOverlay();
   clearTimeout(approveTimer); approveTimer = null;
+  if (approve && !approve.webContents.isDestroyed() && approve.webContents.isCrashed()) destroyApprove();   // (#32) the hidden copy's renderer is gone: a new one
   const had = !!(approve && !approve.webContents.isDestroyed());
   ensureApprove();
   approveOpen = true;
@@ -1969,7 +2092,7 @@ function wsMenu() {
 function reloadAll() {
   guardRun('RELOAD_ALL', () => panes.filter(p => !p.view.webContents.isDestroyed()), list => {
     lastReloadAll = Date.now(); abortProbe();
-    lq.batch(() => { for (const p of list) reloadPane(p, 'BULK').catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e))); });
+    lq.batch(() => { for (const p of list) { recoverCancel(p); reloadPane(p, 'BULK').catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e))); } });   // (#32) the user's own: no planned reload left
     dlog('reload-all queued', list.length);
     setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
     fetchUsage();
@@ -2115,7 +2238,7 @@ function snapshot() {
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
-  sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
@@ -2151,7 +2274,10 @@ win.on('close', () => {
   panes.forEach(p => { p.grokToken = null; });
   saveNow(); updateDockBadge(); broadcast();
 });
-win.on('closed', () => unregWc(r => r.ctx === ctx));        // this window's UI, overlay, panes, popup and probe
+win.on('closed', () => {
+  unregWc(r => r.ctx === ctx);                               // this window's UI, overlay, panes, popup and probe
+  if (!quitting) panes.forEach(p => disposePane(p, 'WINDOW'));   // (#32) the panes' WebContents are not closed with the window: closed here (quitting: the app ends)
+});
 
 overlay = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
 regWc(overlay.webContents, 'overlay', { ctx });

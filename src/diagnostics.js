@@ -61,6 +61,10 @@ const REOPEN_CODES = ['OK', 'EMPTY', 'FULL', 'BUSY', 'FAIL'];
 // dry-run mode, a send refused (the same preview again / a batch still running / not the preview on screen), per target (p): send started,
 // confirmed, result unknown, skipped / moved since the preview / did not wake, cancelled (n), finished (n = confirmed). Never the text / a name / a URL
 const BCAST_CODES = ['PREVIEW', 'START', 'DRYRUN', 'DUP', 'STALE', 'BUSY', 'SENT', 'OK', 'UNSURE', 'SKIP', 'CHANGED', 'NO_WAKE', 'CANCEL', 'DONE'];
+// (#32, recovery-policy.js CODES; checked by test/recovery-policy.test.js) a transient load failure's automatic reload planned (n = attempt) /
+// started (n = automatic reloads in 10 min), no more (n), a permanent failure, dropped for input / a busy pane / because the pane moved on, the
+// renderer gone (manual reload only), its placeholder cleared by a new page. Never the URL / a name
+const RECOVER_CODES = ['SCHEDULED', 'RETRY', 'LIMIT', 'PERMANENT', 'SKIP_DRAFT', 'SKIP_BUSY', 'CANCELLED', 'GONE_MANUAL', 'CLEARED'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -82,10 +86,11 @@ const EVENTS = {
   app: { ja: '起動', r: ['START'] },
   'pane.load': { ja: 'ページの読込', r: ['OK', ...NET_CODES] },
   'pane.gone': { ja: 'ページのプロセス終了', r: GONE_CODES },
-  'pane.hang': { ja: 'ページの無応答', r: ['HANG'] },
+  'pane.hang': { ja: 'ページの無応答', r: ['HANG', 'RESPONSIVE'] },
   grokfix: { ja: 'Bot表示の補正', r: ['FAST_RENDERED', 'FAST_NOTFOUND', 'HARD_RELOAD', 'OK_ROUTER', 'OK_CLICK', 'RENDERED', 'NOTFOUND', 'FALLBACK_HOME', 'GAVE_UP'] },
-  reload: { ja: '再読み込み', r: ['PLAIN', 'BLANK_LOAD', 'ROUTER_OK', 'ROUTER_MISS', 'HARD_LOAD'] },
+  reload: { ja: '再読み込み', r: ['PLAIN', 'BLANK_LOAD', 'GONE_LOAD', 'ROUTER_OK', 'ROUTER_MISS', 'HARD_LOAD'] },
   watchdog: { ja: '真っ白なBotの再読込', r: ['RELOAD'] },
+  recover: { ja: '読込失敗・ページ停止からの復旧', r: RECOVER_CODES },
   'load.queue': { ja: '読み込みの順番待ち', r: LOAD_CODES },
   // (#33, probe-policy.js CODES; checked by test/probe-policy.test.js) + a failure backed off (n = failures in a row), the sign-in stop, 確認を再開
   probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR', 'BACKOFF', 'AUTH_HOLD', 'RESUME'] },
@@ -359,5 +364,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

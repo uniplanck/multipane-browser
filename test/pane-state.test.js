@@ -222,7 +222,7 @@ function page(blocks) {
     && at(ap, "newGen(p, 'NAV')") < at(ap, "wc.on('did-navigate', rememberUrl)"));
   t('main: reload and wake start a new generation; wake ends the sleep', /obsDo\(p, \{ type: 'wake', gen: nextNo\(\) \}\)/.test(rp) && /else newGen\(p, 'RELOAD'\);/.test(rp));
   t('main: sleep starts a sleep generation (baseline from the reducer, not from an older page)', /obsDo\(p, \{ type: 'sleep', gen: nextNo\(\) \}\);/.test(sp) && !/lastMsg/.test(sp));
-  t('main: closing a pane closes its state and stops its check', /obsDo\(p, \{ type: 'close' \}\); abortProbe\(p\);/.test(cp));
+  t('main: closing a pane closes its state and stops its check', /disposePane\(p, 'CLOSED'\);/.test(cp) && /obsDo\(p, \{ type: 'close' \}\); abortProbe\(p\);/.test(fn('disposePane')));   // (#32) the view's end: disposePane
   t('main: a check is a run of the sleep it starts in; its reports are checked per run / page, its result only for that sleep', at(pp, "type: 'probe-start', run") > 0 && at(pp, "type: 'probe-start'") < at(pp, 'new BrowserWindow')
     && at(pp, "type: 'probe-scan', run, gen: c.gen, seq: c.seq") < at(pp, 'last = c;') && /wc\.on\('did-navigate', docGen\);/.test(pp) && at(pp, "type: 'probe-stop', run") > at(pp, 'finally')
     && at(pp, "type: 'probe-result', sleep: sid") > at(pp, "diag.rec('probe', 'UNSURE'") && at(pp, "diag.rec('probe', 'STALE'") > 0);

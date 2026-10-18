@@ -183,7 +183,7 @@ const rankOf = tk => tk.data.rank;
     && /'watchdog: blank bot pane -> reload'[^\n]*\n\s*reloadPane\(p, 'BULK'\);/.test(main));
   t('main: startup / workspace / reload-all request in one batch (the focused pane first)', /lq\.batch\(\(\) => \{\s*\n?\s*specs\.slice\(0, MAX\)\.forEach\(s => addPane\(s, \{ focus: false, defer: true \}\)\);/.test(main) && /lq\.batch\(/.test(fn('loadWorkspace')) && /lq\.batch\(/.test(fn('reloadAll'))
     && /rank: \(\) => panes\[focused\] === p \? 0 : 1/.test(fn('viewLoad')));
-  t('main: closing a pane / a window cancels its loads; waking / reload-all / close abort the check through the queue', /lqDrop\(p, 'CLOSED'\);/.test(fn('closePane')) && /lq\.cancel\(t => t\.win === ctx, 'WINDOW'\);/.test(main)
+  t('main: closing a pane / a window cancels its loads; waking / reload-all / close abort the check through the queue', /disposePane\(p, 'CLOSED'\);/.test(fn('closePane')) && /lqDrop\(p, code\);/.test(fn('disposePane')) && /lq\.cancel\(t => t\.win === ctx, 'WINDOW'\);/.test(main)
     && /lq\.cancel\(t => t\.probe && t\.win === ctx && \(!p \|\| t\.ent === p\.obs\.ent\), 'ABORT'\);/.test(fn('abortProbe')));
   const poll = fn('lqPoll');
   t('main: a cancelled load gives its slot back only once it has stopped / its view is gone', /if \(t\.state === 'stop'\) \{ if \(gone \|\| !wc\.isLoading\(\)\) lqEnd\(run, 'STOPPED'\); continue; \}/.test(poll) && poll.indexOf("t.state === 'stop'") < poll.indexOf('LQ.settle('));

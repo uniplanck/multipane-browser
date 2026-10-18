@@ -297,3 +297,17 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .lqx:hover,.pbx:hover{background:var(--ctl-hi)}
 .meta .lqw{color:var(--accent);font-weight:600}
 .meta .lqx{height:18px;padding:0 6px;font-size:10.5px}
+
+/* (#32) the page's renderer is gone: main hides the view, this placeholder says so (manual 再読み込み only; waiting for a slot / reloading
+   instead of the button). A failed load / unresponsive page: a note in the header only */
+.pane .goneph{display:none;position:absolute;left:0;right:0;top:30px;bottom:0;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dim);background:var(--card);border-radius:0 0 9px 9px}
+.pane.gone .goneph{display:flex}
+.pane.gone .loadph{display:none}
+.pane .goneph .gp1{font-size:15px;font-weight:600;color:var(--text)}
+.pane .goneph small{font-size:11px;opacity:.7;max-width:80%;text-align:center}
+.pane .goneph .gp2,.pane .goneph .gp3{display:none;align-items:center;gap:10px;font-size:13px;font-weight:600}
+.pane.gone.lqwait .goneph .gpr,.pane.gone.loading .goneph .gpr{display:none}
+.pane.gone.lqwait .goneph .gp2{display:flex}
+.pane.gone.loading:not(.lqwait) .goneph .gp3{display:flex}
+.meta .rfail{color:#ff9f0a;font-weight:600}
+.meta .rhang{color:var(--dim);font-weight:600}

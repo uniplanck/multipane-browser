@@ -78,8 +78,11 @@ function mk(id) {
     </div>
   </div>
   <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" title="このペインを開いてログイン状態を確認します">ログインを確認</button><button class="pbx pbr" title="スリープ中の新着確認を再開します（1枚ずつ順番に確認）">確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
-  <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは2枚まで。順番が来ると自動で読み込みます</small></div>`;
+  <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは2枚まで。順番が来ると自動で読み込みます</small></div>
+  <div class="goneph"><span class="gp1">⚠ ページが停止しました</span><button class="pbx gpr" title="このペインのページを読み込み直します">再読み込み</button><span class="gp2">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="この読み込み待ちを取り消す">取消</button></span><span class="gp3">再読み込み中…</span><small>このペインのページの処理が止まりました（ほかのペインはそのままです）。自動では再読み込みしません。入力途中の文字・添付は戻らないことがあります</small></div>`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
+  // (#32) the page's renderer is gone: 再読み込み is the pane's usual reload (the input guard and the load queue as ↻)
+  d.querySelector('.gpr').onclick = e => { e.stopPropagation(); mpb.reload(id); };
   d.querySelector('.loadph').onclick = () => { if (d.classList.contains('idle')) mpb.wakePane(id); };
   // 取消 of a pane waiting for a load slot (placeholder / sleeping placeholder / header): only the wait ends, the click goes nowhere else
   d.addEventListener('click', e => { if (e.target.closest('.lqx')) { e.stopPropagation(); mpb.loadCancel(id); } }, true);
@@ -225,6 +228,7 @@ const onS = s => {
     d.classList.toggle('sleeping', !!p.sleeping);
     const lqWait = p.lq === 'wait';                                 // waiting for a load slot (#31); held: nothing to show yet, the placeholder instead of the page
     d.classList.toggle('lqwait', lqWait); d.classList.toggle('held', !!p.held); d.classList.toggle('idle', !!p.idle);
+    d.classList.toggle('gone', !!p.gone);                              // (#32) renderer gone: the 'stopped' placeholder (main hides the view)
     d.querySelectorAll('.lpn').forEach(b => { b.textContent = lqWait && p.lqPos ? `（${p.lqPos}番目）` : ''; });
     const lastOnly = p.obs === 'last' && !!(p.waiting || p.working || p.done);
     d.classList.toggle('stale', lastOnly);
@@ -243,6 +247,10 @@ const onS = s => {
     const meta = [];
     if (p.sleeping) meta.push(p.unopened ? '<span title="スリープ中に新着メッセージ（未開封）— クリックで開く">💤✉ 未開封</span>' : '<span title="スリープ中（クリックで復帰）">💤</span>');
     if (lqWait && !p.held && !p.sleeping) meta.push(`<span class="lqw" title="同時に読み込むのは2枚まで。順番が来ると自動で読み込みます（それまで表示中のページはそのまま）">⏳ 読み込み待ち${p.lqPos ? ` ${p.lqPos}番目` : ''}</span><button class="lqx" title="この読み込み待ちを取り消す">取消</button>`);
+    // (#32) a failed load: an automatic reload is planned (bounded) / manual only; unresponsive: noted only, never reloaded by itself
+    if (p.fail === 'retry') meta.push('<span class="rfail" title="ページを読み込めませんでした（通信エラー）。少し待って自動で読み込み直します（入力中の内容があるときは読み込み直しません・10分に2回まで）">⚠ 読込失敗・再試行待ち</span>');
+    else if (p.fail === 'manual') meta.push('<span class="rfail" title="ページを読み込めませんでした。自動では読み込み直しません。↻ で再読み込みできます">⚠ 読込失敗</span>');
+    if (p.hang) meta.push('<span class="rhang" title="ページが応答していません（重い処理の途中かもしれません）。自動では再読み込みしません。待つか ↻ で再読み込みできます">⏳ 応答なし</span>');
     if (lastOnly) meta.push('<span class="lastok" title="表示中の待機中・作業中・終了は最後に確認できた状態です（再読み込み・移動・返信の生成中などで、今の状態はまだ確認できていません）。確認できるまで自動スリープしません">最終確認</span>');
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
