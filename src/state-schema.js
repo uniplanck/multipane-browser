@@ -5,6 +5,9 @@
 // Policy: wrong container / value types and more than MAX_PANES panes are fatal (the file is kept and the user decides);
 // what the app silently dropped anyway (rows that do not match the panes, duplicate favorite URLs, favorites over 100) is repaired.
 // Messages name the position only (windows[0].panes[3].zoom), never URLs, pane / workspace names or other content.
+// (#22) A pane spec may carry an optional sleep snapshot `snap` (session-snapshot.js; no new schema): never fatal. A broken / newer-version one
+// is dropped and a usable one cleaned (types, limits) as a repair; a workspace never keeps one. validate() does not look at it.
+const SS = require('./session-snapshot');
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 
@@ -78,7 +81,17 @@ function migrate(raw) {
     if (!isObj(g) || g.rows === undefined || rowsOk(g.rows, paneCount(g))) return g;
     const c = { ...g }; delete c.rows; fixes.push(`${at}.rows: does not match the panes, dropped`); return c;
   };
-  if (Array.isArray(windows)) windows = windows.map((w, i) => fixRows(w, `windows[${i}]`));
+  const fixSnaps = (g, at, drop) => {                         // (#22) the panes' sleep snapshots: cleaned (windows) / dropped (workspaces, unusable)
+    if (!isObj(g) || !Array.isArray(g.panes) || !g.panes.some(s => isObj(s) && s.snap !== undefined)) return g;
+    return { ...g, panes: g.panes.map((s, i) => {
+      if (!isObj(s) || s.snap === undefined) return s;
+      const c = drop ? null : SS.clean(s.snap);
+      if (c && SS.same(c, s.snap)) return s;
+      const n = { ...s }; if (c) n.snap = c; else delete n.snap;
+      fixes.push(`${at}.panes[${i}].snap: ${c ? 'repaired' : 'dropped'}`); return n;
+    }) };
+  };
+  if (Array.isArray(windows)) windows = windows.map((w, i) => fixSnaps(fixRows(w, `windows[${i}]`), `windows[${i}]`, false));
   let favorites = raw.favorites == null ? [] : raw.favorites;
   if (Array.isArray(favorites) && favorites.every(f => isObj(f) && typeof f.url === 'string')) {
     const seen = new Set(), uniq = favorites.filter(f => !seen.has(f.url) && seen.add(f.url));
@@ -87,7 +100,7 @@ function migrate(raw) {
     favorites = uniq.slice(0, MAX_FAVS);
   }
   let workspaces = raw.workspaces == null ? {} : raw.workspaces;
-  if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixRows(ws, `workspaces#${i}`)]));
+  if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixSnaps(fixRows(ws, `workspaces#${i}`), `workspaces#${i}`, true)]));
   const doc = { schema: SCHEMA_VERSION, windows, favorites, settings: raw.settings == null ? {} : raw.settings, workspaces };
   const errors = validate(doc);
   return errors.length ? fail('recoveryRequired', 'invalid', errors) : { ok: true, status: 'ready', doc, from, fixes };

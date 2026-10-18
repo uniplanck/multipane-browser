@@ -65,6 +65,9 @@ const BCAST_CODES = ['PREVIEW', 'START', 'DRYRUN', 'DUP', 'STALE', 'BUSY', 'SENT
 // started (n = automatic reloads in 10 min), no more (n), a permanent failure, dropped for input / a busy pane / because the pane moved on, the
 // renderer gone (manual reload only), its placeholder cleared by a new page. Never the URL / a name
 const RECOVER_CODES = ['SCHEDULED', 'RETRY', 'LIMIT', 'PERMANENT', 'SKIP_DRAFT', 'SKIP_BUSY', 'CANCELLED', 'GONE_MANUAL', 'CLEARED'];
+// (#22, session-snapshot.js CODES; checked by the test) 前回のスリープ状態を復元 at startup: panes started asleep (n), of those shown without a
+// marker (saved too long ago / times off, n), saved snapshots not used (n). Counts only, never a name / quote / URL
+const RESTORE_CODES = ['ASLEEP', 'OLD', 'IGNORED'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -95,6 +98,7 @@ const EVENTS = {
   // (#33, probe-policy.js CODES; checked by test/probe-policy.test.js) + a failure backed off (n = failures in a row), the sign-in stop, 確認を再開
   probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR', 'BACKOFF', 'AUTH_HOLD', 'RESUME'] },
   sleep: { ja: 'スリープ', r: ['SLEPT', 'WAKE'] },
+  restore: { ja: '前回のスリープ状態の復元', r: RESTORE_CODES },
   draft: { ja: '操作前の入力欄の確認', r: ['EMPTY', 'PRESENT', 'NOINPUT'] },
   'guard.auto': { ja: '入力があるため止めた自動操作', r: GUARD_AUTO_CODES },
   'guard.ask': { ja: '入力が失われる操作の確認', r: ['ASKED', 'CANCEL', 'GO', 'BUSY', ...GUARD_EXPIRE_CODES] },
@@ -179,9 +183,9 @@ function planRotation({ files, now, incoming = 0, fileMax = FILE_MAX, gens = GEN
 
 // ---- what the summary / screen may show about the app (everything else in `x` is ignored) ----
 const VER_RE = /^[0-9][0-9A-Za-z.+-]{0,31}$/;
-const SETTINGS = { notifications: 'bool', quietHours: 'bool', ecoMode: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', grokFix: 'bool', autoPc: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
+const SETTINGS = { notifications: 'bool', quietHours: 'bool', ecoMode: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', restoreSleep: 'bool', saveQuote: 'bool', grokFix: 'bool', autoPc: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
   theme: ['system', 'dark', 'light'], memSaver: ['off', 'std', 'max'], globalZoom: [0.3, 3], sleepMinutes: [0, 1440], usageMargin: [0, 50] };
-const SET_JA = { notifications: '通知', quietHours: '静音時間', ecoMode: '省電力', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化',
+const SET_JA = { notifications: '通知', quietHours: '静音時間', ecoMode: '省電力', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', restoreSleep: 'スリープ状態の復元', saveQuote: '引用の保存', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化',
   syncCols: '列幅の同期', debugLog: 'デバッグログ', diagPersist: '診断ログのファイル保存', theme: 'テーマ', memSaver: 'メモリ節約', globalZoom: '全体ズーム', sleepMinutes: 'スリープまでの分', usageMargin: '使用量の余裕%' };
 const STORE_STATUS = ['ready', 'recoveryRequired', 'unsupportedVersion'];
 function safeEnv(x) {
@@ -364,5 +368,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

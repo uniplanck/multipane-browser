@@ -74,6 +74,19 @@ const QUIT_FLUSH_MS = 3000;                                // a normal quit wait
 let store = null;                                          // created in startup()
 let saveFails = 0;                                         // failed save attempts in a row (diagnostics)
 const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
+// ---- 前回のスリープ状態を復元 (#22, session-snapshot.js; settings.restoreSleep, default off): a window's own save adds the snap of a sleeping pane
+// (workspaces / ↩ / 複製 use paneSpec alone); at startup (store ready only) such a pane starts asleep without loading (makeWindow: restoreAsleep).
+// p.restored: what it was restored with, until it wakes / a background check finds something new (memory only). Off: no snap written or read
+const SS = require('./session-snapshot');
+function paneSave(p, now = Date.now()) {
+  const s = paneSpec(p);
+  if (settings.restoreSleep !== true || !p.sleeping) return s;
+  const r = p.restored, id = p.sleepSnap || {};
+  const snap = SS.make({ sleeping: true, mk: r ? r.mk : SS.markOf(p), ob: r ? r.ob : p.markAt || p.sleepAt, nm: id.name, gp: id.group, q: r ? r.q : p.reqQuote },
+    now, { quote: settings.saveQuote === true });   // the quote only with 設定 > スリープ中の引用も保存; turned off: gone with the next save
+  return snap ? { ...s, snap } : s;
+}
+const restorePlan = s => SS.plan(s, Date.now(), { enabled: settings.restoreSleep === true, ready: !!store && store.writable(), quote: settings.saveQuote === true });
 function stateDoc() {
   const wins = ctxs.map(c => c.snapshot());
   const first = wins[0] || lastClosedSnapshot || { layout: '2x2', focused: 0, panes: [] };
@@ -725,7 +738,8 @@ function sendState(cs = cells()) {
         lq: lt ? lt.state : '', lqPos: lt && lt.state === 'wait' ? lq.position(lt.id) : 0, held: viewHeld(p), idle: !!p.loadIdle && !lt,
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i],
+        sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : p.sleeping && p.restored ? p.restored.q || '' : '',
+        rs: p.sleeping && p.restored ? SS.label(p.restored, Date.now()) : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i],
         gone: rv.gone, fail: rv.fail, hang: rv.hang,             // (#32) renderer gone ('stopped' placeholder) / a failed load (retry planned / manual) / unresponsive
         chk: p.sleeping ? PB.label(p.pb, { hold: probeAuthHold, off: settings.sleepCheck === false }) : '' };   // (#33) last success / next check / failures / stopped
     }),
@@ -1018,7 +1032,7 @@ async function reloadPane(p, cls = 'USER', task = null) {
     viewLoad(p, p.sleeping ? 'WAKE' : 'RELOAD', cls, paneUrl(p), t => reloadPane(p, cls, t));
     return;
   }
-  if (p.sleeping) { diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; if (p.obs) obsDo(p, { type: 'wake', gen: nextNo() }); p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep: a new generation, ends the sleep's check / baseline, clears 'unopened'
+  if (p.sleeping) { diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; p.restored = null; if (p.obs) obsDo(p, { type: 'wake', gen: nextNo() }); p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep: a new generation, ends the sleep's check / baseline, clears 'unopened'
   else newGen(p, 'RELOAD');                                  // reports scanned before this reload no longer count
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
@@ -1083,13 +1097,24 @@ function sleepPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
   Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title }));   // bot name + group name shown in the placeholder (falls back to the tab title)
-  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.pb = PB.init(p.sleepAt, SLEEP_CHECK_MS);   // (#33) a new sleep: its first check one interval later
+  p.sleeping = true; p.sleepAt = p.markAt = Date.now(); p.grokToken = null; p.grokPending = null; p.pb = PB.init(p.sleepAt, SLEEP_CHECK_MS);   // (#33) a new sleep: its first check one interval later; (#22) markAt: its marker last seen
   recoverCancel(p, true);                                    // (#32) a sleeping pane is never reloaded by itself; what it showed about its page goes
   obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
   appLoad(wc, 'about:blank');                                // drops the page (its URL stays in p.url / p.botTarget); an unload: no queue slot (#31)
   applyThrottling(); sendState(); save();
+}
+// (#22) a pane saved asleep (設定 > 前回のスリープ状態を復元): starts asleep with no page and no load in the queue; opening it is the usual wake
+// (reloadPane: the queue, the user's own first). Its placeholder shows the saved name / group / marker as 前回・未再確認 (r = restorePlan());
+// none of it sets waiting / unread / glow / needsReply, so no colour, Dock badge or notification. A sleep generation without a baseline: its
+// first background check (one interval later, #33) is only a baseline
+function restoreAsleep(p, r) {
+  p.sleepSnap = { title: r.nm || p.name, favicon: '', name: r.nm || p.name, group: r.gp };
+  p.sleeping = true; p.sleepAt = Date.now(); p.restored = r; p.pb = PB.init(p.sleepAt, SLEEP_CHECK_MS);
+  obsDo(p, { type: 'sleep', gen: nextNo() });
+  p.view.setVisible(false);
+  dlog(`pane${p.id}`, 'restored asleep', r.age);
 }
 // ---- input guard (#11, draft-guard.js) ----
 // The live reading right before a page is thrown away: the shared composerState() run in the page (timeout CHECK_MS), framed by main's stamps
@@ -1460,8 +1485,10 @@ async function probePane(p) {
   if (res.verdict === 'CHANGED' && debugOn()) dlog(`pane${p.id}`, 'probe changed:', PS.fpDiff(base0, last));   // which field differed: names and numbers only
   if (last.hn && snapOk(last.snap, 'name')) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
   if (nf.waiting && last.q && snapOk(last.snap, 'quote')) p.reqQuote = last.q;              // refresh the quote shown while asleep
+  if (p.restored && !res.fresh) p.restored = SS.rechecked(p.restored, SS.markOf(nf), nf.waiting ? p.reqQuote : '', Date.now());   // (#22) read now: no longer 前回・未再確認 (still no colour / count / alert from it)
   probeEnd(p, sid, 'ok');                                                                 // (#33) the only success: a usable, stable scan of this bot became this sleep's result
   if (!res.fresh) return;                                                                 // nothing new (or only a baseline), or the user spoke last
+  p.restored = null; p.markAt = Date.now();                                               // (#22) from now on the pane's own (new) state
   p.msgMode = true; p.glow = false;                                                       // 'unopened' is set by the result (p.obs)
   p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
   p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
@@ -1494,7 +1521,7 @@ function insertPane(p) {
   panes.splice(idx, 0, p); lens[r]++;
   if (idx <= focused) focused++;
 }
-function addPane(spec = {}, { focus = true, defer = false } = {}) {
+function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {}) {   // asleep: (#22) restorePlan() of a saved spec at startup
   if (panes.length >= MAX) return null;
   const view = new WebContentsView({ webPreferences: {
     preload: process.env.MPB_NO_PRELOAD ? undefined : path.join(__dirname, 'pane-preload.js'),
@@ -1568,7 +1595,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   insertPane(p);
-  if (p.url === NEWTAB) loadInto(wc, p.url);                 // the local new-tab page: at once (not a load of the queue)
+  if (asleep && GROK_BOT_RE.test(p.url)) restoreAsleep(p, asleep);   // (#22) saved asleep: stays asleep, nothing loaded / queued until it is opened
+  else if (p.url === NEWTAB) loadInto(wc, p.url);            // the local new-tab page: at once (not a load of the queue)
   else viewLoad(p, defer ? 'START' : 'OPEN', defer ? 'BULK' : 'USER', p.url, () => loadInto(wc, p.url));   // (#31) startup / workspace: BULK; a pane the user opens: USER
   if (focus) setFocused(panes.indexOf(p));
   relayout();
@@ -2232,7 +2260,8 @@ function snapshot() {
   let bounds = lastBounds;
   try { if (!win.isDestroyed() && !win.isMaximized() && !win.isFullScreen()) bounds = win.getNormalBounds(); } catch {}
   lastBounds = bounds;
-  return (snapCache = { layout, focused, panes: panes.map(paneSpec), rows: [...getRows()], window: { bounds, maximized: win.isMaximized() } });
+  const now = Date.now();
+  return (snapCache = { layout, focused, panes: panes.map(p => paneSave(p, now)), rows: [...getRows()], window: { bounds, maximized: win.isMaximized() } });   // (#22) + a sleeping pane's snap
 }
 
 
@@ -2291,7 +2320,7 @@ overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input
 const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ url: '' }];
 // (#31) every pane requested before any starts: the focused one first, then the rest LQ.LIMIT at a time (shown as waiting meanwhile)
 lq.batch(() => {
-  specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
+  specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true, asleep: restore ? restorePlan(s) : null }));   // (#22) saved asleep: not loaded
   rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
   setFocused(Math.min(spec.focused || 0, panes.length - 1));
 });
@@ -2367,6 +2396,9 @@ function buildMenu() {
       { label: '終了（🟣）は1分後・待機中（🟢）は30分後に自動スリープ（入力欄に下書きがあれば眠らない）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示。失敗が続くと最長60分ごと）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); broadcast(); } },
       { label: '新着確認を再開（ログイン要確認で停止中）', enabled: probeAuthHold, click: () => probeResume() },   // (#33) the same as the placeholder's 確認を再開
+      // (#22) both off by default. Off: no snap / quote written (the next save removes them), every pane loads at startup as before
+      { label: '前回のスリープ状態を復元（再起動後。スリープ中だったペインは読み込まずにスリープのまま開く）', type: 'checkbox', checked: settings.restoreSleep === true, click: m => { settings.restoreSleep = m.checked; save(); buildMenu(); } },
+      { label: 'スリープ中の引用も保存（最大300文字）', type: 'checkbox', enabled: settings.restoreSleep === true, checked: settings.saveQuote === true, click: m => { settings.saveQuote = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },
@@ -2421,7 +2453,8 @@ function diagEnv() {
     platform: process.platform, arch: process.arch, packaged: app.isPackaged,
     settings: { notifications: !!settings.notifications, ecoMode: !!settings.ecoMode, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
       autoPc: settings.autoPc !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
-      globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin, quietHours: NP.quietOf(settings.quietHours).on },
+      globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin, quietHours: NP.quietOf(settings.quietHours).on,
+      restoreSleep: settings.restoreSleep === true, saveQuote: settings.saveQuote === true },
     counts: { windows: ctxs.length, panes: all.length, bots: all.filter(p => p.msgMode).length, sleeping: all.filter(p => p.sleeping).length },
     store: si && { status: si.status, saveError: si.saveError, frozen: si.frozen } };
 }
@@ -2465,6 +2498,11 @@ function startup() {
   nativeTheme.themeSource = ['dark', 'light'].includes(settings.theme) ? settings.theme : 'system';
   nativeTheme.on('updated', broadcast);
   wins.forEach(w => makeWindow(w, { restore: true }));
+  { const saved = wins.reduce((a, w) => a + (Array.isArray(w.panes) ? w.panes.slice(0, MAX).filter(s => s && s.snap).length : 0), 0);   // (#22) counts only
+    const rs = ctxs.flatMap(c => c.panes).filter(p => p.restored), old = rs.filter(p => p.restored.age !== 'fresh').length;
+    if (rs.length) diag.rec('restore', 'ASLEEP', { n: rs.length });
+    if (old) diag.rec('restore', 'OLD', { n: old });
+    if (saved > rs.length) diag.rec('restore', 'IGNORED', { n: saved - rs.length }); }
   buildMenu();
   if (!store.writable()) { const c = ctxs[0]; c.overlay.webContents.once('did-finish-load', () => c.openOverlay('recovery', { recovery: recoveryInfo() })); }
 

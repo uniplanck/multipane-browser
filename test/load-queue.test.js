@@ -181,7 +181,7 @@ const rankOf = tk => tk.data.rank;
   t('main: the background check is a task of its own (BG, probe), one at a time', /purpose: 'PROBE', cls: 'BG', probe: true/.test(fn('probeNext')) && /onStart: t => probePane\(q, t\)/.test(fn('probeNext')));
   t('main: reload-all / automatic reloads / watchdog are BULK; the user\'s are USER (default)', /async function reloadPane\(p, cls = 'USER', task = null\)/.test(main) && /reloadPane\(p, 'BULK'\)/.test(fn('reloadAll')) && /reloadPane\(p, 'BULK'\)/.test(fn('autoReload'))
     && /'watchdog: blank bot pane -> reload'[^\n]*\n\s*reloadPane\(p, 'BULK'\);/.test(main));
-  t('main: startup / workspace / reload-all request in one batch (the focused pane first)', /lq\.batch\(\(\) => \{\s*\n?\s*specs\.slice\(0, MAX\)\.forEach\(s => addPane\(s, \{ focus: false, defer: true \}\)\);/.test(main) && /lq\.batch\(/.test(fn('loadWorkspace')) && /lq\.batch\(/.test(fn('reloadAll'))
+  t('main: startup / workspace / reload-all request in one batch (the focused pane first)', /lq\.batch\(\(\) => \{\s*\n?\s*specs\.slice\(0, MAX\)\.forEach\(s => addPane\(s, \{ focus: false, defer: true(?:, asleep: restore \? restorePlan\(s\) : null)? \}\)\);/.test(main) && /lq\.batch\(/.test(fn('loadWorkspace')) && /lq\.batch\(/.test(fn('reloadAll'))
     && /rank: \(\) => panes\[focused\] === p \? 0 : 1/.test(fn('viewLoad')));
   t('main: closing a pane / a window cancels its loads; waking / reload-all / close abort the check through the queue', /disposePane\(p, 'CLOSED'\);/.test(fn('closePane')) && /lqDrop\(p, code\);/.test(fn('disposePane')) && /lq\.cancel\(t => t\.win === ctx, 'WINDOW'\);/.test(main)
     && /lq\.cancel\(t => t\.probe && t\.win === ctx && \(!p \|\| t\.ent === p\.obs\.ent\), 'ABORT'\);/.test(fn('abortProbe')));

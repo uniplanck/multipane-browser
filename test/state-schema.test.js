@@ -72,4 +72,15 @@ const cur = (over = {}) => ({ schema: 1, layout: '2x2', focused: 0, urls: [A], p
   t('round trip: parse(serialize(doc)) is the same doc', back.ok && J(back.doc) === J(doc) && back.fixes.length === 0);
   t('summary counts only', J(S.summary(doc)) === J({ windows: 2, panes: 3, favorites: 1, workspaces: 1 }));
 }
+
+// ---- (#22) optional sleep snapshot in a pane spec: no new schema, never fatal (details: test/session-snapshot.test.js) ----
+{
+  const snap = { v: 1, at: 1760000000000, sl: true, mk: 'WAIT', ob: 1759999990000, nm: 'n', gp: '' };
+  const ok = S.migrate(cur({ windows: [win([{ ...spec(A), snap }])] }));
+  t('a valid snap: ready, kept, no repair, schema stays 1', ok.ok && J(ok.doc.windows[0].panes[0].snap) === J(snap) && !ok.fixes.length && S.SCHEMA_VERSION === 1);
+  t('round trip keeps it', S.parse(S.serialize(ok.doc)).ok && J(S.parse(S.serialize(ok.doc)).doc) === J(ok.doc));
+  const br = S.migrate(cur({ windows: [win([{ ...spec(A), snap: 'broken' }, { ...spec(B), snap: { ...snap, v: 5 } }])] }));
+  t('broken / newer snap: dropped as a repair (not recoveryRequired)', br.ok && br.doc.windows[0].panes.every(s => !('snap' in s)) && br.fixes.length === 2);
+  t('a spec without snap is untouched (older files read as before)', J(S.migrate(cur()).doc.windows[0].panes[0]) === J(spec(A)));
+}
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);
