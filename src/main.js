@@ -776,7 +776,6 @@ function sleepPane(p) {
   p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
   const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
   p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, asks: !!lm.asks } : null;
-  if (process.env.MPB_FAKE_FP && p.sleepFp) p.sleepFp.fp = 'fake';   // dev only: force the next check to see a change
   dlog(`pane${p.id}`, 'sleep', paneUrl(p));
   p.view.setVisible(false);
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
