@@ -29,7 +29,8 @@ const ROLE_SENDER = { chrome: 'chrome', overlay: 'overlay', pane: 'pane', probe:
 const CH = Object.keys(P.CHANNELS);
 
 // ---- one valid message per channel, shaped like what the app sends today ----
-const COUNT = { user: 3, bot: 5, botSince: 2, waiting: true, working: false, done: false, q: '依頼の引用', hn: 'Bot', hh: 'Bot', asks: true, method: 'bot-entry', fp: '1x2y3z.120' };
+const SNAPV = { cid: 'abc', conv: 'OK', roles: 'TESTID', latest: 'BOT', marker: 'WAIT', stable: 'QUIET', draft: 'EMPTY', name: 'H1', quote: 'BLOCK' };
+const COUNT = { user: 3, bot: 5, botSince: 2, waiting: true, working: false, done: false, q: '依頼の引用', hn: 'Bot', hh: 'Bot', asks: true, method: 'bot-entry', fp: '1x2y3z.120', snap: SNAPV };
 const SAMPLE = {
   navigate: ['chrome', [1, 'https://grok.com/bot/abc']], 'set-reload': ['chrome', [1, 5]], swap: ['chrome', [1, 3]],
   layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
@@ -121,6 +122,9 @@ t('msgcount: counts 0..COUNT_MAX-1 integers', chk('pane:msgcount', 'pane', [{ ..
 t('msgcount: the selector-fallback shape (no quote / heading / fingerprint) is fine', chk('pane:msgcount', 'pane', [{ user: 1, bot: 2, botSince: 1, waiting: false, working: false, done: false, asks: false, method: 'selector' }]) === null);
 t('msgcount: flags booleans, strings bounded', pay('pane:msgcount', 'pane', [{ ...COUNT, waiting: 'yes' }]) && pay('pane:msgcount', 'pane', [{ ...COUNT, q: 5 }]) && pay('pane:msgcount', 'pane', [{ ...COUNT, fp: 'x'.repeat(P.TEXT_MAX + 1) }])
   && chk('pane:msgcount', 'pane', [{ ...COUNT, q: 'x'.repeat(P.TEXT_MAX) }]) === null && pay('pane:msgcount', 'pane', [null]) && pay('pane:msgcount', 'pane', [[3, 5, 2]]) && pay('pane:msgcount', 'pane', []));
+t('msgcount: snapshot = every item one of its fixed codes + a bot id', chk('pane:msgcount', 'probe', [{ ...COUNT, snap: { ...SNAPV, conv: 'AUTH_REQUIRED', roles: 'NONE', latest: 'NONE', marker: 'UNKNOWN', quote: 'UNKNOWN', cid: '' } }]) === null
+  && [{ ...SNAPV, conv: 'MAYBE' }, { ...SNAPV, marker: 'wait' }, { ...SNAPV, name: '__proto__' }, { ...SNAPV, quote: 'toString' }, { ...SNAPV, stable: true }, { ...SNAPV, extra: 'x' }, { ...SNAPV, cid: '../x' }, { ...SNAPV, cid: 5 },
+    { ...SNAPV, cid: 'a'.repeat(P.TEXT_MAX + 1) }, (({ draft, ...o }) => o)(SNAPV), 'OK', [SNAPV], { ...SNAPV, confidence: 0.9 }].every(s => pay('pane:msgcount', 'pane', [{ ...COUNT, snap: s }])));
 t('args not an array: treated as none', chk('add', 'chrome', null) === null && chk('reload', 'chrome', 'x') === 'E_PAYLOAD');
 t('a payload that throws while read -> E_PAYLOAD', chk('usage-pop-show', 'chrome', [new Proxy({}, { get() { throw new Error('x'); } })]) === 'E_PAYLOAD');
 
@@ -181,10 +185,11 @@ t('unknown / inherited channel names -> E_CHANNEL', ['eval', '__proto__', 'const
 
 // ---- msgCount: only the fields main uses, cut as before ----
 { const m = P.msgCount({ ...COUNT, q: 'あ'.repeat(400), hn: 'h'.repeat(100), hh: 'x'.repeat(100), fp: 'f'.repeat(30), method: 'm'.repeat(50), extra: 'drop me', waiting: true, asks: 1 });
-  t('msgCount: known fields only', Object.keys(m).sort().join() === 'asks,bot,botSince,done,fp,hh,hn,method,q,user,waiting,working');
+  t('msgCount: known fields only', Object.keys(m).sort().join() === 'asks,bot,botSince,done,fp,hh,hn,method,q,snap,user,waiting,working');
   t('msgCount: strings cut (quote 320, heading / header 80, fingerprint 24, method 40)', m.q.length === 320 && m.hn.length === 80 && m.hh.length === 80 && m.fp.length === 24 && m.method.length === 40);
   t('msgCount: flags are true only for true', m.waiting === true && m.asks === false && m.done === false);
-  const s = P.msgCount({ user: 1, bot: 2, botSince: 1 }); t('msgCount: missing strings -> empty', s.q === '' && s.hn === '' && s.fp === '' && s.method === '' && s.waiting === false); }
+  t('msgCount: snapshot copied item by item (a new object)', JSON.stringify(m.snap) === JSON.stringify(SNAPV) && m.snap !== SNAPV);
+  const s = P.msgCount({ user: 1, bot: 2, botSince: 1 }); t('msgCount: missing strings -> empty, missing snapshot -> null (= all unknown)', s.q === '' && s.hn === '' && s.fp === '' && s.method === '' && s.waiting === false && s.snap === null); }
 
 // ======================= contract with the real sources =======================
 const main = read('main.js');

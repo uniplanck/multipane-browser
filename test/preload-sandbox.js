@@ -12,7 +12,7 @@ function loadPreload(file = path.join(__dirname, '..', 'src', 'pane-preload.js')
     setTimeout: noop, clearTimeout: noop, setInterval: noop, clearInterval: noop,
   });
   vm.runInContext(fs.readFileSync(file, 'utf8'), ctx, { filename: path.basename(file) });
-  const api = vm.runInContext('({ QUOTE_MAX, markerOf, clipQuote, requestQuote, looksAsking, composerDraft })', ctx);
+  const api = vm.runInContext('({ QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerDraft, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey })', ctx);
   return { ...api, ctx, required };
 }
 module.exports = { loadPreload };

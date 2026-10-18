@@ -5,8 +5,10 @@ const { ipcRenderer, webFrame } = require('electron');
 let lastLen = -1, timer = null;
 
 // ---------- grok.com chat message counting ----------
-// Counts discrete message elements (a streaming reply is one element => counted once) and
-// classifies each as user/bot, most reliable signal first:
+// grok.com/bot turns are read by scanMessages (DOM -> plain data) and judged by readConversation (shared rules): counts + a snapshot whose items
+// are each valid or unknown (#03). The heuristics below are the older generic guesses, used only without bot-entry blocks (their result is
+// marked GUESS = unknown). They count discrete message elements (a streaming reply is one element => counted once) and
+// classify each as user/bot, most reliable signal first:
 //   1. explicit attributes: data-message-author-role / data-role / data-author / data-testid / aria-label
 //   2. class hints: "user"/"human" vs "assistant"/"bot"/"response"; flex alignment items-end/justify-end
 //   3. geometry: bubble right-aligned (its right edge near the chat's right, left edge well
@@ -73,27 +75,39 @@ function geoRole(el, box) {
   return nearRight && farFromLeft && r.width < w * 0.8 ? 'user' : 'bot';
 }
 // @include src/pane-rules.js
-function pageHead() {   // page heading (bot name / group room name) + header text (participants in a group room) for the sleeping placeholder
-  const f = e => e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
-  try { return [f(document.querySelector('h1')), f(document.querySelector('header'))]; } catch { return ['', '']; }
+// page heading (bot name / group room name) + header text (participants in a group room) for the sleeping placeholder
+const headText = e => e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+// composer for the snapshot: 'present' / 'empty' (composerDraft of the shared rules decides) / 'none' (no composer on the page: cannot tell) / 'error'
+function draftState() {
+  try {
+    if (composerDraft()) return 'present';
+    return [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(e => e.getAttribute('aria-hidden') !== 'true' && !(e.tabIndex < 0 && e.tagName === 'TEXTAREA')) ? 'empty' : 'none';
+  } catch { return 'error'; }
 }
+// Reads the page for readConversation (shared rules, which decide everything): DOM in, plain data out. The whole document - turns scrolled out of
+// view too, no visibility test - and only these structures: grok.com/bot turns are ".group/bot-entry" blocks, user turns contain
+// [data-testid="user-message"], h1 / header for the name. Never document.body's text. Without bot-entry blocks the old generic guesses below
+// still run, but readConversation marks their result GUESS (unknown).
 function scanMessages() {
-  // grok.com/bot: each turn is a ".group/bot-entry" block; user turns contain [data-testid="user-message"]
-  let ents = [...document.querySelectorAll('[class*="group/bot-entry"]')];
-  ents = ents.filter(e => !ents.some(o => o !== e && o.contains(e)) && (e.textContent || '').trim());
-  if (ents.length) {
-    let user = 0, bot = 0, botSince = 0;
-    for (const e of ents) { if (e.querySelector('[data-testid="user-message"]')) { user++; botSince = 0; } else { bot++; botSince++; } }
-    const t = (ents[ents.length - 1].textContent || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-');
-    const le = ents[ents.length - 1];
-    const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
-    const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
-    const mk = botSince > 0 ? markerOf(le.textContent) : null;
-    // fingerprint of the latest entry (tail of its text) so the app can tell whether a sleeping pane got something new
-    let h = 5381; const tail = t.slice(-400); for (let i = 0; i < tail.length; i++) h = ((h * 33) ^ tail.charCodeAt(i)) >>> 0;
-    let q = ''; if (mk === 'wait') { try { q = requestQuote(le.innerText || le.textContent, [...le.querySelectorAll('blockquote')].map(b => b.innerText || b.textContent)); } catch {} }
-    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', q, hn: pageHead()[0], hh: pageHead()[1], asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
+  let all = [...document.querySelectorAll('[class*="group/bot-entry"]')];
+  all = all.filter(e => !all.some(o => o !== e && o.contains(e)));
+  const entries = all.map(e => ({ user: !!e.querySelector('[data-testid="user-message"]'), blank: !(e.textContent || '').trim() }));
+  const li = entries.map(e => !e.blank).lastIndexOf(true), le = li >= 0 ? all[li] : null;
+  let last = null;
+  if (le) {
+    last = { text: le.textContent || '' };
+    if (!entries[li].user) {                     // innerText costs a layout: only for the latest bot turn, as before
+      let quotes = null; try { quotes = [...le.querySelectorAll('blockquote')].map(b => b.innerText || b.textContent); } catch {}
+      last.inner = le.innerText || le.textContent; last.quotes = quotes;
+      last.widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
+    }
   }
+  let h1s = [], hh = ''; try { h1s = [...document.querySelectorAll('h1')].map(headText); hh = headText(document.querySelector('header')); } catch {}
+  return { cid: (location.pathname.match(/^\/bot\/([A-Za-z0-9_-]+)/) || [])[1] || '', ready: document.readyState === 'complete',
+    auth: !!document.querySelector('input[type="password"]'), entries, last, guess: le ? null : guessMessages(), h1s, hh, draft: draftState() };
+}
+// The generic guesses from before the bot-entry structure was known (attribute / class / flex alignment / geometry): counts or null.
+function guessMessages() {
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
   // ignore the composer / anything inside a form or textbox
@@ -122,7 +136,7 @@ function scanMessages() {
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}/${c.q || ''}`;
+  const key = msgKey(c);
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -133,11 +147,10 @@ function check() {
   if (grokChat()) {
     // Grok chats: count only stable message scans; never fall back to raw DOM-change glow
     // (streaming, re-renders and question cards were causing phantom '1's).
-    const c = scanMessages();
-    if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}/${c.q || ''}`;
-      if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
-    }
+    // A report goes out only when two scans >= 1.2 s apart agree (snap.stable QUIET; a reply can still be in progress - the DOM cannot prove it ended).
+    // A page without a conversation is reported too (snap.conv LOADING / AUTH_REQUIRED / DOM_UNKNOWN), so main knows the state is unknown.
+    const f = scanMessages(), k = msgKey(readConversation(f));
+    if (k === pendingKey) sendCount(readConversation({ ...f, quiet: true })); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     return;
   }
   if (lastSent !== 'off') { lastSent = 'off'; ipcRenderer.send('pane:msgmode-off'); }

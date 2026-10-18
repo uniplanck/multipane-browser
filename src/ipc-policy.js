@@ -8,6 +8,7 @@
 //        approve = the 承認Bot popup (no preload: may not send anything)
 const path = require('path');
 const { fileURLToPath } = require('url');
+const { SNAP } = require('./pane-rules');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -46,16 +47,22 @@ const row = v => opt(v, x => int(x, 0, MAX_PANES));
 const kind = v => v === 'codex' || v === 'claude';
 const where = v => v === 'here' || v === 'new' || v === 'window';
 
-// pane:msgcount (pane-preload scanMessages): three counts; flags / quote / heading / fingerprint / method when the scan has them
+// pane:msgcount (pane-preload scanMessages -> readConversation): three counts; flags / quote / heading / fingerprint / method when the scan has them;
+// snap = the scan's snapshot (pane-rules SNAP): every item exactly one of its fixed codes + the bot id of the scanned path
+const SNAP_KEYS = Object.keys(SNAP);
+const snapShape = s => obj(s) && Object.keys(s).length === SNAP_KEYS.length + 1 && text(s.cid) && /^[A-Za-z0-9_-]*$/.test(s.cid)
+  && SNAP_KEYS.every(k => typeof s[k] === 'string' && Object.hasOwn(SNAP[k], s[k]));
 function countOk(c) {
   return obj(c) && ['user', 'bot', 'botSince'].every(k => int(c[k], 0, COUNT_MAX - 1))
     && ['waiting', 'working', 'done', 'asks'].every(k => opt(c[k], bool))
-    && ['q', 'hn', 'hh', 'fp', 'method'].every(k => opt(c[k], text));
+    && ['q', 'hn', 'hh', 'fp', 'method'].every(k => opt(c[k], text))
+    && opt(c.snap, snapShape);
 }
-// -> exactly the fields main uses, strings cut as before (quote 320, heading / header 80, fingerprint 24, method 40)
+// -> exactly the fields main uses, strings cut as before (quote 320, heading / header 80, fingerprint 24, method 40); no snapshot -> snap null (all unknown)
 const cut = (s, n) => typeof s === 'string' ? s.slice(0, n) : '';
 const msgCount = c => ({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true,
-  q: cut(c.q, 320), hn: cut(c.hn, 80), hh: cut(c.hh, 80), fp: cut(c.fp, 24), method: cut(c.method, 40) });
+  q: cut(c.q, 320), hn: cut(c.hn, 80), hh: cut(c.hh, 80), fp: cut(c.fp, 24), method: cut(c.method, 40),
+  snap: obj(c.snap) ? Object.fromEntries([['cid', c.snap.cid], ...SNAP_KEYS.map(k => [k, c.snap[k]])]) : null });
 
 // overlay-run actions (overlay.js; the chrome bar only sends next-unread). roles default: overlay only
 const OVERLAY = ['overlay'], CHROME = ['chrome'], UI = ['chrome', 'overlay'], PANE = ['pane'];

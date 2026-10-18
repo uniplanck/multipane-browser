@@ -566,7 +566,7 @@ function showPaneNotification(p, body) {
   n.show();
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
-function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.done || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; p.done = false; if (had) { updateBadge(); sendState(); } }
+function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.done || p.needsReply; p.snap = null; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; p.done = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
   return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
 
@@ -574,9 +574,25 @@ function markActivity(p, reason) {
   p.unread = (p.unread || 0) + 1;
   lightUp(p, reason);
 }
+// The scan's snapshot (#03, pane-rules SNAP): every item valid or unknown with a fixed reason. Unknown is never read as 'empty' or 'nothing new'
+// and never grounds an automatic action; name / quote / draft are judged on their own and do not affect the other items.
+const { snapOk, snapUsable, snapIssue } = require('./pane-rules');
+const botIdOf = u => (String(u || '').match(/^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)/) || [])[1] || '';   // = the preload's snap.cid for the same path
 function onMsgCount(p, c) {
   if (p.sleeping) { diag.rec('count.drop', 'SLEEPING', { p: p.id }, 600000); return; }   // a sleeping pane keeps its remembered state
-  if (!isBotUrl(p.view.webContents.getURL())) { diag.rec('count.drop', 'NOT_BOT', { p: p.id }, 600000); resetCounts(p); return; }
+  const wc = p.view.webContents;
+  if (!isBotUrl(wc.getURL())) { diag.rec('count.drop', 'NOT_BOT', { p: p.id }, 600000); resetCounts(p); return; }
+  const s = c.snap;
+  if (s && s.cid && s.cid !== botIdOf(wc.getURL())) { diag.rec('dom', 'OTHER_CONV', { p: p.id }, 600000); return; }   // scanned before the pane moved to another bot
+  p.snap = s;                                                // what auto-sleep may rely on now (canSleep)
+  const issue = snapIssue(s);
+  if (!snapOk(s, 'conv') || !snapOk(s, 'roles')) {          // no confirmed conversation on the page (loading / login / sidebar only / generic guesses): keep what was known, act on none of it
+    const code = issue === 'DOM_UNKNOWN' && (wc.isLoading() || p.grokToken || p.grokPending) ? 'LOADING' : issue;
+    diag.rec('dom', code, { p: p.id }, 600000);
+    return;
+  }
+  if (issue) diag.rec('dom', issue, { p: p.id }, 600000);
+  if (!snapOk(s, 'name')) diag.rec('dom', 'NAME_UNSURE', { p: p.id }, 600000);
   const prev = p.msgMode ? p.unread : null;
   p.msgMode = true;
   const same = p.lastMsg && p.lastMsg.user === c.user && p.lastMsg.bot === c.bot && p.lastMsg.botSince === c.botSince;
@@ -588,8 +604,8 @@ function onMsgCount(p, c) {
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (!wasW && p.waiting) p.waitSince = Date.now();
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
-  if (c.hn) { p.pageH1 = c.hn; p.pageHdr = c.hh || ''; }      // heading / header captured from the page (name + group for the sleeping placeholder)
-  p.reqQuote = p.waiting ? (c.q || '') : '';                 // the request quoted above the 🟢 marker (shown in the sleeping placeholder)
+  if (c.hn && snapOk(s, 'name')) { p.pageH1 = c.hn; p.pageHdr = c.hh || ''; }   // heading / header captured from the page (name + group for the sleeping placeholder); only an unambiguous one is kept
+  p.reqQuote = p.waiting ? (snapOk(s, 'quote') ? c.q || '' : p.reqQuote || '') : '';   // the request quoted above the 🟢 marker (shown in the sleeping placeholder); unknown keeps the last one
   const wasD = p.done; p.done = !!c.done && !p.waiting && !c.working && c.botSince > 0;   // purple: latest marker says '終了' (no glow / notification / badge)
   if (!wasD && p.done) p.waitSince = Date.now();
   if (wasD !== p.done) dlog(`pane${p.id}`, 'done', p.done);
@@ -823,6 +839,7 @@ function canSleep(p, i, force) {
   if (!(p.waiting || p.done) || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
   if (!force && p.hasDraft) return false;                    // typed text / pending attachment in the composer
+  if (!force && !(snapUsable(p.snap) && p.snap.cid === botIdOf(wc.getURL()))) return false;   // the latest scan of this very conversation must be sure: unknown / stale never puts a pane to sleep
   if (!force) { const d = sleepDelay(p); if (d == null || Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < d) return false; }   // waitSince = when 待機中 / 終了 was first detected
   return true;
 }
@@ -888,8 +905,10 @@ async function probePane(p) {
   const bw = new BrowserWindow({ show: false, width: 1000, height: 720, skipTaskbar: true, focusable: false, webPreferences: {      // hidden window: same session, same preload, own 1000x720 viewport
     preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
   const wc = bw.webContents, pr = probe = { p, abort: false };
-  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false;
-  regWc(wc, 'probe', { ctx, pane: p, onCount: c => { last = c; lastAt = Date.now(); } });   // its preload's count comes here (never to the live pane)
+  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false, unsure = '';
+  regWc(wc, 'probe', { ctx, pane: p, onCount: c => {   // its preload's count comes here (never to the live pane)
+    if (snapOk(c.snap, 'conv') && snapOk(c.snap, 'roles')) { last = c; lastAt = Date.now(); } else { last = null; unsure = snapIssue(c.snap); }   // a page without a confirmed conversation is no count: keep waiting
+  } });
   try {
     wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
     wc.loadURL(target).catch(() => {});
@@ -918,14 +937,19 @@ async function probePane(p) {
     try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
   }
   const ms = Date.now() - t0;
-  if (!last || !p.sleeping) { diag.rec('probe', failed ? 'ERROR' : !p.sleeping ? 'WOKE' : why.toUpperCase(), { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
+  if (!last || !p.sleeping) { diag.rec('probe', failed ? 'ERROR' : !p.sleeping ? 'WOKE' : why.toUpperCase(), { p: p.id, ms, n: pushes + hard }); if (unsure && !last) diag.rec('dom', unsure, { p: p.id }, 600000); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
+  if (!snapUsable(last.snap) || last.snap.cid !== id) {     // not sure what the page shows (partial latest turn / another bot): neither 'new' nor 'nothing new'; the remembered state stays
+    const issue = snapIssue(last.snap) || 'OTHER_CONV';
+    diag.rec('probe', 'UNSURE', { p: p.id, ms, n: pushes + hard }); diag.rec('dom', issue, { p: p.id }, 600000);
+    dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'unsure', issue); return;
+  }
   const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
   const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
   diag.rec('probe', changed ? 'CHANGED' : old ? 'SAME' : 'BASELINE', { p: p.id, ms, n: pushes + hard });
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   p.sleepFp = nf;
-  if (last.hn) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
-  if (nf.waiting && last.q) p.reqQuote = last.q;                                           // refresh the quote shown while asleep
+  if (last.hn && snapOk(last.snap, 'name')) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
+  if (nf.waiting && last.q && snapOk(last.snap, 'quote')) p.reqQuote = last.q;              // refresh the quote shown while asleep
   if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
   p.unopened = true; p.msgMode = true; p.glow = false;
   p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
@@ -995,7 +1019,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = p.loadT0 = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });

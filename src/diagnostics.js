@@ -34,6 +34,8 @@ const NET_CODES = [...new Set([...Object.values(NET), 'NET_CERT', 'NET_HTTP'])];
 const GONE = ['clean-exit', 'abnormal-exit', 'killed', 'crashed', 'oom', 'launch-failed', 'integrity-failure', 'memory-eviction'];   // render-process-gone reasons
 const GONE_CODES = GONE.map(g => g.toUpperCase().replace(/-/g, '_'));
 const IPC_CODES = ['E_CHANNEL', 'E_SENDER', 'E_ROLE', 'E_FRAME', 'E_PAGE', 'E_OWNER', 'E_PAYLOAD', 'E_TARGET'];   // = ipc-policy.js REJECT (checked by the test)
+// a scan main could not act on: pane-rules snapIssue() codes + a heading that is not unambiguous + a report about another bot than the pane shows
+const DOM_CODES = ['LOADING', 'AUTH_REQUIRED', 'DOM_UNKNOWN', 'ROLE_GUESS', 'LATEST_PARTIAL', 'CHANGING', 'NAME_UNSURE', 'OTHER_CONV'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -59,10 +61,11 @@ const EVENTS = {
   grokfix: { ja: 'Bot表示の補正', r: ['FAST_RENDERED', 'FAST_NOTFOUND', 'HARD_RELOAD', 'OK_ROUTER', 'OK_CLICK', 'RENDERED', 'NOTFOUND', 'FALLBACK_HOME', 'GAVE_UP'] },
   reload: { ja: '再読み込み', r: ['PLAIN', 'BLANK_LOAD', 'ROUTER_OK', 'ROUTER_MISS', 'HARD_LOAD'] },
   watchdog: { ja: '真っ白なBotの再読込', r: ['RELOAD'] },
-  probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR'] },
+  probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR'] },
   sleep: { ja: 'スリープ', r: ['SLEPT', 'WAKE'] },
   draft: { ja: 'スリープ前の下書き確認', r: ['EMPTY', 'PRESENT'] },
   'count.drop': { ja: '採用しなかった件数の報告', r: ['SLEEPING', 'NOT_BOT'] },
+  dom: { ja: '会話を確定できなかった読み取り', r: DOM_CODES },
   'ipc.reject': { ja: '拒否したIPC', r: IPC_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
@@ -321,5 +324,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };
