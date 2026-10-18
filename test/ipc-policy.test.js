@@ -1,0 +1,274 @@
+// node test/ipc-policy.test.js — IPC boundary (#71): src/ipc-policy.js accepts a message only from a registered sender of an allowed role, in its
+// top frame, on the bundled page / allowed origin, of a still-open window / pane, with a valid payload for an existing target of its own window;
+// everything else gets a fixed reject code. Contract with the real sources: every channel main.js listens on is in the policy and goes through
+// ipcOn / ipcHandle only, preload.js exposes fixed channels only (no ipcRenderer / event), and every call renderer.js / overlay.js make today
+// (sent through the real preload.js) is allowed for that page's role.
+const fs = require('fs'), path = require('path'), vm = require('vm');
+const { pathToFileURL } = require('url');
+const P = require('../src/ipc-policy');
+const { loadPreload } = require('./preload-sandbox');
+let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
+const SRC = path.join(__dirname, '..', 'src'), read = f => fs.readFileSync(path.join(SRC, f), 'utf8');
+const fileUrl = f => pathToFileURL(path.join(SRC, f)).href;
+const frame = (url, origin, extra) => ({ top: true, detached: false, url, origin, ...extra });
+const SND = {
+  chrome: { role: 'chrome', frame: frame(fileUrl('index.html'), 'file://') },
+  overlay: { role: 'overlay', frame: frame(fileUrl('overlay.html'), 'file://') },
+  pane: { role: 'pane', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
+  newtab: { role: 'pane', frame: frame(fileUrl('newtab.html'), 'file://') },
+  web: { role: 'pane', frame: frame('https://example.com/a', 'https://example.com') },
+  probe: { role: 'probe', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
+  approve: { role: 'approve', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
+};
+const as = (who, f) => ({ ...SND[who], frame: { ...SND[who].frame, ...f } });
+// the sender's window: panes 1, 2, 3 / favorites 1, 2 / workspace 'A'; another window (id 2) has pane 7
+const world = (o = {}) => ({ owned: true, pane: i => [1, 2, 3].includes(i), fav: i => [1, 2].includes(i), ws: n => Object.hasOwn({ A: 1 }, n), winPane: (w, p) => w === 2 && p === 7, ...o });
+const W = world();
+const chk = (ch, who, args = [], w = W) => P.check(ch, typeof who === 'string' ? SND[who] : who, args, w);
+const ROLE_SENDER = { chrome: 'chrome', overlay: 'overlay', pane: 'pane', probe: 'probe', approve: 'approve' };
+const CH = Object.keys(P.CHANNELS);
+
+// ---- one valid message per channel, shaped like what the app sends today ----
+const COUNT = { user: 3, bot: 5, botSince: 2, waiting: true, working: false, done: false, q: '依頼の引用', hn: 'Bot', hh: 'Bot', asks: true, method: 'bot-entry', fp: '1x2y3z.120' };
+const SAMPLE = {
+  navigate: ['chrome', [1, 'https://grok.com/bot/abc']], 'set-reload': ['chrome', [1, 5]], swap: ['chrome', [1, 3]],
+  layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
+  'fav-open': ['chrome', [1, 'here']], 'fav-menu': ['chrome', [2]], 'fav-move': ['chrome', [2, 1]], 'fav-add': ['chrome', ['https://example.com/', '']],
+  'focus-other': ['chrome', [2, 7]], 'usage-pop-show': ['chrome', [{ right: 812.5, bottom: 36, kind: 'grok', sel: '' }]], 'usage-win-menu': ['chrome', ['codex', '']],
+  'usage-pop-leave': ['overlay', []], 'usage-pop-keep': ['overlay', []], 'usage-pop-size': ['overlay', [242]], 'overlay-close': ['overlay', []],
+  'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
+  'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []],
+  'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]],
+};
+for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
+for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end']) SAMPLE[ch] = ['chrome', []];
+for (const ch of ['pane:pc-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
+
+// ---- allowed ----
+t(`every channel has a sample (${CH.length} channels)`, CH.every(ch => SAMPLE[ch]) && Object.keys(SAMPLE).every(ch => P.CHANNELS[ch]));
+t('every sample is allowed', CH.every(ch => chk(ch, SAMPLE[ch][0], SAMPLE[ch][1]) === null));
+t('every role in a channel is a known role', CH.every(ch => P.CHANNELS[ch].roles.length && P.CHANNELS[ch].roles.every(r => P.ROLES.includes(r))));
+t('the 承認Bot popup may not send anything', CH.every(ch => !P.CHANNELS[ch].roles.includes('approve')));
+t('a probe may only report its message count', CH.filter(ch => P.CHANNELS[ch].roles.includes('probe')).join() === 'pane:msgcount');
+t('panes / probe get no UI channel, the UI no pane channel', CH.every(ch => ch.startsWith('pane:') ? P.CHANNELS[ch].roles.every(r => r === 'pane' || r === 'probe') : P.CHANNELS[ch].roles.every(r => r === 'chrome' || r === 'overlay')));
+
+// ---- sender: unregistered / wrong role ----
+t('unregistered sender (no role) -> E_SENDER on every channel', CH.every(ch => chk(ch, { role: null, frame: SND.chrome.frame }, SAMPLE[ch][1]) === 'E_SENDER'));
+t('no sender / unknown role -> E_SENDER', chk('add', undefined) === 'E_SENDER' && chk('add', { role: 'admin', frame: SND.chrome.frame }) === 'E_SENDER' && chk('add', { role: '__proto__', frame: SND.chrome.frame }) === 'E_SENDER');
+t('every role not listed for a channel -> E_ROLE', CH.every(ch => P.ROLES.filter(r => !P.CHANNELS[ch].roles.includes(r)).every(r => chk(ch, ROLE_SENDER[r], SAMPLE[ch][1]) === 'E_ROLE')));
+t('a web pane cannot change settings / other panes (UI channels)', ['navigate', 'close', 'layout', 'sync-cols', 'overlay-run', 'fav-add', 'focus-other', 'usage:margin', 'set-reload'].every(ch => chk(ch, 'pane', SAMPLE[ch][1]) === 'E_ROLE' && chk(ch, 'web', SAMPLE[ch][1]) === 'E_ROLE'));
+t('the UI cannot fake pane signals', ['pane:msgcount', 'pane:interact', 'pane:draft'].every(ch => chk(ch, 'chrome', SAMPLE[ch][1]) === 'E_ROLE' && chk(ch, 'overlay', SAMPLE[ch][1]) === 'E_ROLE'));
+t('chrome-only channels from the overlay -> E_ROLE', chk('navigate', 'overlay', [1, 'x']) === 'E_ROLE' && chk('focus-other', 'overlay', [2, 7]) === 'E_ROLE' && chk('claude:auth-dialog', 'overlay') === 'E_ROLE');
+t('overlay-only channels from the chrome bar -> E_ROLE', chk('overlay-close', 'chrome') === 'E_ROLE' && chk('usage:margin', 'chrome', [5]) === 'E_ROLE' && chk('usage-pop-size', 'chrome', [10]) === 'E_ROLE');
+t('probe sending other pane signals -> E_ROLE (ignored)', ['pane:draft', 'pane:editing', 'pane:msgmode-off', 'pane:interact'].every(ch => chk(ch, 'probe', SAMPLE[ch][1]) === 'E_ROLE'));
+
+// ---- frame: child / gone / detached ----
+t('child frame -> E_FRAME on every channel', CH.every(ch => chk(ch, as(SAMPLE[ch][0], { top: false }), SAMPLE[ch][1]) === 'E_FRAME'));
+t('frame gone (null) -> E_FRAME on every channel', CH.every(ch => chk(ch, { role: SND[SAMPLE[ch][0]].role, frame: null }, SAMPLE[ch][1]) === 'E_FRAME'));
+t('detached frame (unloading) -> E_FRAME', chk('pane:typing', as('pane', { detached: true })) === 'E_FRAME' && chk('ready', as('chrome', { detached: true })) === 'E_FRAME');
+t('top must be exactly true', chk('add', as('chrome', { top: 1 })) === 'E_FRAME' && chk('add', as('chrome', { top: undefined })) === 'E_FRAME');
+
+// ---- page: bundled file (exact) / origin ----
+t('chrome on its own index.html: ok (query / hash ignored)', chk('add', as('chrome', { url: fileUrl('index.html') + '#x' })) === null && chk('add', as('chrome', { url: fileUrl('index.html') + '?a=1' })) === null);
+t('chrome showing overlay.html / newtab.html -> E_PAGE', chk('add', as('chrome', { url: fileUrl('overlay.html') })) === 'E_PAGE' && chk('add', as('chrome', { url: fileUrl('newtab.html') })) === 'E_PAGE');
+t('chrome navigated to a web page (dropped link) -> E_PAGE', chk('navigate', as('chrome', { url: 'https://example.com/index.html', origin: 'https://example.com' }), [1, 'x']) === 'E_PAGE');
+t('chrome on a dropped local file named index.html elsewhere -> E_PAGE', chk('add', as('chrome', { url: pathToFileURL(path.join(SRC, '..', 'index.html')).href })) === 'E_PAGE' && chk('add', as('chrome', { url: 'file:///tmp/src/index.html' })) === 'E_PAGE');
+t('file origin alone is not enough', chk('add', as('chrome', { url: 'file:///', origin: 'file://' })) === 'E_PAGE');
+t('file URL with a host -> E_PAGE', chk('add', as('chrome', { url: fileUrl('index.html').replace('file:///', 'file://evil.example/') })) === 'E_PAGE');
+t('file URL with localhost: same file -> ok', chk('add', as('chrome', { url: fileUrl('index.html').replace('file:///', 'file://localhost/') })) === null);
+t('bad / empty URL -> E_PAGE', chk('add', as('chrome', { url: '' })) === 'E_PAGE' && chk('add', as('chrome', { url: 'not a url' })) === 'E_PAGE' && chk('add', as('chrome', { url: undefined })) === 'E_PAGE');
+t('overlay showing index.html -> E_PAGE', chk('overlay-close', as('overlay', { url: fileUrl('index.html') })) === 'E_PAGE');
+t('msgcount only from https://grok.com', chk('pane:msgcount', 'pane', [COUNT]) === null && chk('pane:msgcount', 'probe', [COUNT]) === null
+  && ['https://example.com', 'http://grok.com', 'https://grok.com.evil.example', 'https://x.grok.com', 'https://grok.com:8443', 'null', 'file://', ''].every(o => chk('pane:msgcount', as('pane', { origin: o }), [COUNT]) === 'E_PAGE' && chk('pane:msgcount', as('probe', { origin: o }), [COUNT]) === 'E_PAGE'));
+t('newtab page cannot report counts', chk('pane:msgcount', 'newtab', [COUNT]) === 'E_PAGE');
+t('pc-opened only from grok.com', chk('pane:pc-opened', 'pane') === null && chk('pane:pc-opened', 'web') === 'E_PAGE');
+t('coarse pane signals from any site and the newtab page', ['pane:typing', 'pane:interact', 'pane:mouseup', 'pane:msgmode-off', 'pane:pc-closed'].every(ch => chk(ch, 'web') === null && chk(ch, 'newtab') === null) && chk('pane:draft', 'newtab', [false]) === null && chk('pane:editing', 'web', [true]) === null);
+// how Chromium and Node escape a packaged path can differ: compare as paths
+{ const f = '/Applications/Multi Pane ブラウザ (1).app/Contents/Resources/app.asar/src/index.html';
+  t('docMatches: Node-escaped URL', P.docMatches(pathToFileURL(f).href, f));
+  t('docMatches: Chromium-style escaping (%20, upper-case UTF-8, raw parentheses)', P.docMatches('file:///Applications/Multi%20Pane%20%E3%83%96%E3%83%A9%E3%82%A6%E3%82%B6%20(1).app/Contents/Resources/app.asar/src/index.html', f));
+  t('docMatches: a raw % in the path', P.docMatches('file:///Applications/100% Bots.app/src/index.html', '/Applications/100% Bots.app/src/index.html') && P.docMatches('file:///Applications/100%25%20Bots.app/src/index.html', '/Applications/100% Bots.app/src/index.html'));
+  t('docMatches: other file / other dir / https / encoded slash -> false', !P.docMatches(pathToFileURL(f.replace('index', 'overlay')).href, f) && !P.docMatches(pathToFileURL('/tmp/index.html').href, f)
+    && !P.docMatches('https://localhost' + f, f) && !P.docMatches('file:///Applications%2FMulti%20Pane/index.html', '/Applications/Multi Pane/index.html')); }
+t('DOCS are the bundled pages next to the policy', P.DOCS.chrome === path.join(SRC, 'index.html') && P.DOCS.overlay === path.join(SRC, 'overlay.html') && fs.existsSync(P.DOCS.chrome) && fs.existsSync(P.DOCS.overlay));
+
+// ---- owner: the sender's window / pane already closed ----
+t('owner gone -> E_OWNER on every channel', CH.every(ch => chk(ch, SAMPLE[ch][0], SAMPLE[ch][1], world({ owned: false })) === 'E_OWNER'));
+t('no world -> E_OWNER', chk('add', 'chrome', [], null) === 'E_OWNER' && chk('add', 'chrome', [], world({ owned: 1 })) === 'E_OWNER');
+
+// ---- payload: types, finite numbers, integer ranges, lengths, enums ----
+const pay = (ch, who, args) => chk(ch, who, args) === 'E_PAYLOAD';
+t('pane id: positive safe integer only', [0, -1, 1.5, NaN, Infinity, '1', null, undefined, true, 2 ** 53].every(v => pay('reload', 'chrome', [v])) && chk('reload', 'chrome', [3]) === null);
+t('navigate: URL string up to URL_MAX', chk('navigate', 'chrome', [1, 'x'.repeat(P.URL_MAX)]) === null && pay('navigate', 'chrome', [1, 'x'.repeat(P.URL_MAX + 1)]) && pay('navigate', 'chrome', [1, 5]) && pay('navigate', 'chrome', [1]) && chk('navigate', 'chrome', [1, '']) === null);
+t('layout: presets only', P.PRESETS.every(k => chk('layout', 'chrome', [k]) === null) && ['6x6', '', '2X2', 22, null, 'toString'].every(v => pay('layout', 'chrome', [v])));
+t('set-reload: reload choices only', P.RELOAD_CHOICES.every(m => chk('set-reload', 'chrome', [1, m]) === null) && [2, -1, '5', 0.5, null].every(m => pay('set-reload', 'chrome', [1, m])));
+t('split-start: axis c/r, splitter 1..MAX, row none or 0..MAX', chk('split-start', 'chrome', ['r', 1, undefined]) === null && chk('split-start', 'chrome', ['c', P.MAX_PANES, null]) === null && chk('split-start', 'chrome', ['c', 2, 0]) === null && chk('split-start', 'chrome', ['c', 2, P.MAX_PANES]) === null
+  && pay('split-start', 'chrome', ['x', 1]) && pay('split-start', 'chrome', ['c', 0]) && pay('split-start', 'chrome', ['c', P.MAX_PANES + 1]) && pay('split-start', 'chrome', ['c', 1.5]) && pay('split-start', 'chrome', ['c', 1, -1]) && pay('split-start', 'chrome', ['c', 1, P.MAX_PANES + 1]) && pay('split-start', 'chrome', ['c', 1, '0']));
+t('split-reset: axis + optional row', chk('split-reset', 'chrome', ['c', 0]) === null && chk('split-reset', 'chrome', ['c', undefined]) === null && pay('split-reset', 'chrome', ['', 0]) && pay('split-reset', 'chrome', ['c', 2.5]));
+t('sync-cols / draft / editing / usage:get: booleans only', [1, 0, 'true', null, undefined].every(v => pay('sync-cols', 'chrome', [v]) && pay('pane:draft', 'pane', [v]) && pay('pane:editing', 'pane', [v]) && pay('usage:get', 'chrome', [v])));
+t('usage-pop-show: finite rect + kind + optional selection', chk('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'codex' }]) === null && chk('usage-pop-show', 'chrome', [{ right: 0, bottom: 0, kind: 'claude', sel: 'x'.repeat(P.TEXT_MAX) }]) === null
+  && pay('usage-pop-show', 'chrome', [{ bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: Infinity, bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2e5, kind: 'grok' }])
+  && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'gpt' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'grok', sel: 'x'.repeat(P.TEXT_MAX + 1) }]) && pay('usage-pop-show', 'chrome', [[1, 2]]) && pay('usage-pop-show', 'chrome', [null]));
+t('usage-win-menu / aiusage:get: codex / claude only', chk('usage-win-menu', 'chrome', ['claude', 'five_hour']) === null && pay('usage-win-menu', 'chrome', ['grok', '']) && pay('usage-win-menu', 'chrome', ['codex', 5])
+  && chk('aiusage:get', 'chrome', ['codex', false]) === null && pay('aiusage:get', 'chrome', ['grok', false]) && pay('aiusage:get', 'chrome', ['codex']));
+t('usage-pop-size: 0..1e5', chk('usage-pop-size', 'overlay', [0]) === null && chk('usage-pop-size', 'overlay', [1e5]) === null && [-1, 1e5 + 1, NaN, '10'].every(v => pay('usage-pop-size', 'overlay', [v])));
+t('usage:margin: any number (NaN = read only), nothing else', [0, 50, 2.5, NaN, 99].every(v => chk('usage:margin', 'overlay', [v]) === null) && ['5', undefined, null].every(v => pay('usage:margin', 'overlay', [v])));
+t('fav-open: where here / new / window', ['here', 'new', 'window'].every(w => chk('fav-open', 'chrome', [1, w]) === null) && pay('fav-open', 'chrome', [1, 'tab']) && pay('fav-open', 'chrome', [1]));
+t('fav-add: URL + label strings', chk('fav-add', 'chrome', ['https://e.com/', 'x'.repeat(P.TEXT_MAX)]) === null && pay('fav-add', 'chrome', ['https://e.com/', 'x'.repeat(P.TEXT_MAX + 1)]) && pay('fav-add', 'chrome', ['x'.repeat(P.URL_MAX + 1), '']) && pay('fav-add', 'chrome', [5, '']));
+t('focus-other: two ids', pay('focus-other', 'chrome', [2]) && pay('focus-other', 'chrome', ['2', 7]) && pay('focus-other', 'chrome', [2, 0]));
+t('msgcount: counts 0..COUNT_MAX-1 integers', chk('pane:msgcount', 'pane', [{ ...COUNT, user: 0, bot: 0, botSince: 0 }]) === null && chk('pane:msgcount', 'pane', [{ ...COUNT, user: P.COUNT_MAX - 1 }]) === null
+  && [P.COUNT_MAX, -1, 1.5, '1', null, undefined].every(v => pay('pane:msgcount', 'pane', [{ ...COUNT, botSince: v }])));
+t('msgcount: the selector-fallback shape (no quote / heading / fingerprint) is fine', chk('pane:msgcount', 'pane', [{ user: 1, bot: 2, botSince: 1, waiting: false, working: false, done: false, asks: false, method: 'selector' }]) === null);
+t('msgcount: flags booleans, strings bounded', pay('pane:msgcount', 'pane', [{ ...COUNT, waiting: 'yes' }]) && pay('pane:msgcount', 'pane', [{ ...COUNT, q: 5 }]) && pay('pane:msgcount', 'pane', [{ ...COUNT, fp: 'x'.repeat(P.TEXT_MAX + 1) }])
+  && chk('pane:msgcount', 'pane', [{ ...COUNT, q: 'x'.repeat(P.TEXT_MAX) }]) === null && pay('pane:msgcount', 'pane', [null]) && pay('pane:msgcount', 'pane', [[3, 5, 2]]) && pay('pane:msgcount', 'pane', []));
+t('args not an array: treated as none', chk('add', 'chrome', null) === null && chk('reload', 'chrome', 'x') === 'E_PAYLOAD');
+t('a payload that throws while read -> E_PAYLOAD', chk('usage-pop-show', 'chrome', [new Proxy({}, { get() { throw new Error('x'); } })]) === 'E_PAYLOAD');
+
+// ---- overlay-run: action types per role ----
+const run = (who, a, w) => chk('overlay-run', who, [a], w);
+const RUNS = [
+  { type: 'rename', id: 1, value: '新しい名前' }, { type: 'rename', id: 1, value: '' }, { type: 'fav-rename', id: 2, value: 'お気に入り' }, { type: 'ws-rename', name: 'A', value: 'B' },
+  { type: 'ws-save', value: '監視セットA' }, { type: 'recovery-restore', id: 'panes.json.prev-1' }, { type: 'recovery-fresh' }, { type: 'close' },
+  { type: 'open-new', url: 'https://example.com/' }, { type: 'open-new', url: '' }, { type: 'open-new', url: 'https://grok.com/' }, { type: 'open-new', url: 'search words' },
+  { type: 'open-here', url: 'example.com' }, { type: 'new-window', url: '' }, { type: 'fav-add', url: 'https://example.com/' }, { type: 'fav-open', id: 1, where: 'here' }, { type: 'fav-open', id: 1, where: 'new' },
+  { type: 'focus', id: 3 }, { type: 'next-unread' }, { type: 'maximize' }, { type: 'rename-prompt' }, { type: 'ws-overwrite', name: 'A' }, { type: 'ws-overwrite', name: 'A', confirm: true },
+  { type: 'ws-save-prompt' }, { type: 'approve-open' }, { type: 'broadcast-prompt' }, { type: 'fav-add-current' }, { type: 'reload-all' }, { type: 'clear-unread' },
+  { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
+  { type: 'broadcast', text: 'こんにちは', ids: [1, 3] }, { type: 'toggle-notifications' },
+];
+t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
+t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(a => a.type === k)));
+t('chrome bar: next-unread only', run('chrome', { type: 'next-unread' }) === null && RUNS.filter(a => a.type !== 'next-unread').every(a => run('chrome', a) === 'E_ROLE'));
+t('unknown / inherited / missing type -> E_PAYLOAD', [{ type: 'eval' }, { type: '__proto__' }, { type: 'toString' }, { type: 'constructor' }, {}, { type: 5 }, null, 'focus', ['focus']].every(a => run('overlay', a) === 'E_PAYLOAD'));
+t('focus / rename: pane of this window', run('overlay', { type: 'focus', id: 7 }) === 'E_TARGET' && run('overlay', { type: 'rename', id: 9, value: 'x' }) === 'E_TARGET' && run('overlay', { type: 'focus', id: '3' }) === 'E_PAYLOAD');
+t('broadcast: 1..MAX distinct pane ids of this window, text up to BROADCAST_MAX', run('overlay', { type: 'broadcast', text: 'x'.repeat(P.BROADCAST_MAX), ids: [1, 2, 3] }) === null
+  && run('overlay', { type: 'broadcast', text: 'x'.repeat(P.BROADCAST_MAX + 1), ids: [1] }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: [] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'broadcast', text: 'x', ids: Array.from({ length: P.MAX_PANES + 1 }, (_, i) => i + 1) }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: [1, 1] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'broadcast', text: 'x', ids: [1, '2'] }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', text: 'x', ids: 1 }) === 'E_PAYLOAD' && run('overlay', { type: 'broadcast', ids: [1] }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'broadcast', text: 'x', ids: [1, 7] }) === 'E_TARGET'
+  && run('overlay', { type: 'broadcast', text: 'x', ids: Array.from({ length: P.MAX_PANES }, (_, i) => i + 1) }, world({ pane: () => true })) === null);
+t('workspaces: existing names only (own keys), no "__proto__" as a new name', run('overlay', { type: 'ws-load', name: 'B' }) === 'E_TARGET' && run('overlay', { type: 'ws-load', name: '__proto__' }) === 'E_TARGET' && run('overlay', { type: 'ws-delete', name: 'toString' }) === 'E_TARGET'
+  && run('overlay', { type: 'ws-save', value: '__proto__' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: ' __proto__ ' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-rename', name: 'A', value: '__proto__' }) === 'E_PAYLOAD'
+  && run('overlay', { type: 'ws-overwrite', name: 'A', confirm: 'yes' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: 'x'.repeat(P.TEXT_MAX + 1) }) === 'E_PAYLOAD');
+t('favorites: existing ids only', run('overlay', { type: 'fav-open', id: 3, where: 'here' }) === 'E_TARGET' && run('overlay', { type: 'fav-rename', id: 9, value: 'x' }) === 'E_TARGET' && run('overlay', { type: 'fav-open', id: 1, where: 'top' }) === 'E_PAYLOAD');
+t('open / fav-add URLs bounded', run('overlay', { type: 'open-new', url: 'x'.repeat(P.URL_MAX + 1) }) === 'E_PAYLOAD' && run('overlay', { type: 'open-here' }) === 'E_PAYLOAD' && run('overlay', { type: 'fav-add', url: 'u', label: 5 }) === 'E_PAYLOAD');
+
+// ---- target: exists, and belongs to the sender's window ----
+t('pane of another window / closed pane -> E_TARGET', ['navigate', 'close', 'reload', 'sleep-toggle', 'wake-pane', 'pane-menu'].every(ch => chk(ch, 'chrome', ch === 'navigate' ? [7, 'x'] : [7]) === 'E_TARGET'));
+t('swap needs both panes in this window', chk('swap', 'chrome', [1, 7]) === 'E_TARGET' && chk('swap', 'chrome', [7, 1]) === 'E_TARGET');
+t('favorites must exist', chk('fav-open', 'chrome', [3, 'here']) === 'E_TARGET' && chk('fav-move', 'chrome', [1, 3]) === 'E_TARGET' && chk('fav-menu', 'chrome', [9]) === 'E_TARGET');
+t('focus-other: an existing window + its pane', chk('focus-other', 'chrome', [3, 7]) === 'E_TARGET' && chk('focus-other', 'chrome', [2, 1]) === 'E_TARGET');
+
+// ---- order and side effects: nothing about the world is looked at before the sender / frame / page / payload pass ----
+{ let looked = 0; const spy = world({ pane: () => { looked++; return true; }, fav: () => { looked++; return true; }, ws: () => { looked++; return true; }, winPane: () => { looked++; return true; } });
+  chk('reload', { role: null, frame: SND.chrome.frame }, [1], spy); chk('reload', 'pane', [1], spy); chk('reload', as('chrome', { top: false }), [1], spy); chk('reload', as('chrome', { url: 'https://e.com/' }), [1], spy);
+  chk('reload', 'chrome', ['1'], spy); chk('overlay-run', 'chrome', [{ type: 'broadcast', text: 'x', ids: [1] }], spy); chk('reload', 'chrome', [1], world({ owned: false, pane: spy.pane }));
+  t('rejected before the target check: the world is never consulted', looked === 0);
+  t('allowed: the target is checked once', chk('reload', 'chrome', [1], spy) === null && looked === 1); }
+t('order: sender before role before frame before page before owner before payload', chk('reload', { role: null, frame: null }, ['x'], world({ owned: false })) === 'E_SENDER' && chk('reload', { role: 'pane', frame: null }, ['x']) === 'E_ROLE'
+  && chk('reload', as('chrome', { top: false, url: 'https://e.com/' }), ['x']) === 'E_FRAME' && chk('reload', as('chrome', { url: 'https://e.com/' }), ['x'], world({ owned: false })) === 'E_PAGE' && chk('reload', 'chrome', ['x'], world({ owned: false })) === 'E_OWNER');
+t('unknown / inherited channel names -> E_CHANNEL', ['eval', '__proto__', 'constructor', 'toString', 'hasOwnProperty', '', 'mem', 'state', 'mpb:zoom'].every(ch => chk(ch, 'chrome') === 'E_CHANNEL') && chk(5, 'chrome') === 'E_CHANNEL' && chk(undefined, 'chrome') === 'E_CHANNEL');
+// every result is null or a fixed code with a short Japanese reason (no payload, URL or name in it)
+{ const seen = new Set(); const all = [];
+  for (const ch of [...CH, 'nope']) for (const who of [...Object.values(SND), { role: null, frame: SND.chrome.frame }, as('chrome', { top: false })]) for (const args of [SAMPLE[ch]?.[1] || [], ['https://secret.example/x?token=1'], [{ type: 'focus', id: 7 }], [7, 'secret']]) for (const w of [W, world({ owned: false })]) all.push(chk(ch, who, args, w));
+  all.forEach(r => { if (r) seen.add(r); });
+  t('results are null or a known code', all.every(r => r === null || Object.hasOwn(P.REJECT, r)));
+  t(`every reject code is reachable (${[...seen].sort().join(' ')})`, Object.keys(P.REJECT).every(k => seen.has(k)));
+  t('codes are fixed E_* strings with a short Japanese reason', Object.entries(P.REJECT).every(([k, v]) => /^E_[A-Z]+$/.test(k) && typeof v === 'string' && v.length <= 30 && /[぀-ヿ一-鿿]/.test(v) && !/[{}$]/.test(v))); }
+
+// ---- msgCount: only the fields main uses, cut as before ----
+{ const m = P.msgCount({ ...COUNT, q: 'あ'.repeat(400), hn: 'h'.repeat(100), hh: 'x'.repeat(100), fp: 'f'.repeat(30), method: 'm'.repeat(50), extra: 'drop me', waiting: true, asks: 1 });
+  t('msgCount: known fields only', Object.keys(m).sort().join() === 'asks,bot,botSince,done,fp,hh,hn,method,q,user,waiting,working');
+  t('msgCount: strings cut (quote 320, heading / header 80, fingerprint 24, method 40)', m.q.length === 320 && m.hn.length === 80 && m.hh.length === 80 && m.fp.length === 24 && m.method.length === 40);
+  t('msgCount: flags are true only for true', m.waiting === true && m.asks === false && m.done === false);
+  const s = P.msgCount({ user: 1, bot: 2, botSince: 1 }); t('msgCount: missing strings -> empty', s.q === '' && s.hn === '' && s.fp === '' && s.method === '' && s.waiting === false); }
+
+// ======================= contract with the real sources =======================
+const main = read('main.js');
+const listed = re => [...main.matchAll(re)].map(m => m[1]);
+const uiCh = listed(/^on\('([^']+)'/gm), paneCh = listed(/^paneOn\('([^']+)'/gm), onCh = listed(/^ipcOn\('([^']+)'/gm), hCh = listed(/^ipcHandle\('([^']+)'/gm);
+const mainCh = [...uiCh, ...paneCh, ...onCh, ...hCh];
+t(`main.js: listens on exactly the policy's channels (UI ${uiCh.length} + pane ${paneCh.length} + other ${onCh.length} + invoke ${hCh.length} = ${mainCh.length})`, mainCh.length === new Set(mainCh).size && mainCh.length === CH.length && mainCh.every(ch => P.CHANNELS[ch]));
+t('main.js: ipcMain is used only by ipcOn / ipcHandle (the gate)', (main.match(/\bipcMain\s*\.\s*\w+\s*\(/g) || []).join() === 'ipcMain.on(,ipcMain.handle(' && /const ipcOn = \(ch, fn\) => ipcMain\.on\(ch, \(e, \.\.\.a\) => \{ const r = ipcGate\(ch, e, a\); if \(r\) fn\(r, \.\.\.a\); \}\);/.test(main) && /const ipcHandle = \(ch, fn\) => ipcMain\.handle\(ch, \(e, \.\.\.a\) => \{ const r = ipcGate\(ch, e, a\); return r \? fn\(r, \.\.\.a\) : null; \}\);/.test(main));
+t('main.js: UI / pane registration goes through the gate', /function registerUi\(ch\) \{[^\n]*ipcOn\(ch,/.test(main) && /function registerPane\(ch\) \{[\s\S]{0,200}?ipcOn\(ch,/.test(main));
+t('src: no other file listens on ipcMain', fs.readdirSync(SRC).filter(f => f.endsWith('.js') && f !== 'main.js').every(f => !/\bipcMain\b/.test(read(f))));
+t('main.js: every role is registered for the pages main creates', P.ROLES.every(r => new RegExp(`regWc\\([^)]*, '${r}'`).test(main)));
+t('main.js: sender is taken from the registry and the event frame, not from the payload', /wcReg\.get\(e\.sender\.id\)/.test(main) && /e\.senderFrame/.test(main) && /f\.parent === null/.test(main));
+{ const keys = [...(main.match(/const PRESETS = \{([^}]*)\}/) || ['', ''])[1].matchAll(/'(\w+)':/g)].map(m => m[1]);
+  const rel = ((main.match(/const RELOAD_CHOICES = \[([^\]]*)\]/) || ['', ''])[1]).split(',').map(Number);
+  t('main.js constants = policy (presets, reload choices, MAX)', keys.join() === P.PRESETS.join() && rel.join() === P.RELOAD_CHOICES.join() && Number((main.match(/const MAX = (\d+);/) || [])[1]) === P.MAX_PANES); }
+
+// ---- preload.js, run like a sandboxed preload with a recording ipcRenderer ----
+function loadUiPreload() {
+  const sent = [], listeners = {}, exposed = {};
+  const ipc = { send: (ch, ...a) => { sent.push({ ch, a }); return ipc; }, invoke: (ch, ...a) => { sent.push({ ch, a, invoke: true }); return Promise.resolve(null); }, on: (ch, f) => { listeners[ch] = f; return ipc; } };
+  const ctx = vm.createContext({ require: m => { if (m !== 'electron') throw new Error(`preload requires '${m}'`); return { contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } }, ipcRenderer: ipc }; }, process: { platform: 'darwin' } });
+  vm.runInContext(read('preload.js'), ctx, { filename: 'preload.js' });
+  return { sent, listeners, exposed, ipc };
+}
+const UP = loadUiPreload(), api = UP.exposed.mpb || {};
+t('preload: exposes only window.mpb', Object.keys(UP.exposed).join() === 'mpb');
+t('preload: only functions plus the platform string', Object.entries(api).every(([k, v]) => typeof v === 'function' || (k === 'platform' && typeof v === 'string')));
+const apiCh = {};                                            // mpb.<name> -> the one channel it sends
+{ let ok = true, ret = true, lis = true, evt = true;
+  for (const [k, f] of Object.entries(api)) {
+    if (typeof f !== 'function') continue;
+    if (/^on[A-Z]/.test(k)) {                                 // listener: registers one main->page channel, hands over the payload only
+      const before = new Set(Object.keys(UP.listeners)), got = [];
+      const r = f((...a) => got.push(a));
+      const added = Object.keys(UP.listeners).filter(c => !before.has(c));
+      if (r !== undefined) ret = false;
+      if (added.length !== 1) { lis = false; continue; }
+      const EVENT = { sender: UP.ipc, senderFrame: {}, ports: [] };
+      UP.listeners[added[0]](EVENT, 'a', 'b');
+      if (got.some(a => a.includes(EVENT) || a.includes(UP.ipc))) evt = false;
+      continue;
+    }
+    const n0 = UP.sent.length, r1 = f(1, 2, 3), n1 = UP.sent.length, r2 = f('a', 'b', 'c'), n2 = UP.sent.length;
+    if (n1 !== n0 + 1 || n2 !== n1 + 1 || UP.sent[n0].ch !== UP.sent[n1].ch) { ok = false; continue; }
+    for (const r of [r1, r2]) if (!(r === undefined || r instanceof Promise) || r === UP.ipc) ret = false;
+    apiCh[k] = UP.sent[n0].ch;
+  }
+  t('preload: every function sends exactly one fixed channel', ok);
+  t('preload: nothing returns ipcRenderer (send -> undefined, invoke -> Promise, on* -> undefined)', ret);
+  t('preload: every on* registers exactly one listener', lis);
+  t('preload: listeners never hand the IPC event / ipcRenderer to the page', evt); }
+t(`preload: every channel it sends is in the policy (${Object.keys(apiCh).length} functions)`, Object.values(apiCh).every(ch => P.CHANNELS[ch] && !ch.startsWith('pane:')));
+t('preload: every UI channel in the policy is reachable from preload.js', CH.filter(ch => !ch.startsWith('pane:')).every(ch => Object.values(apiCh).includes(ch)));
+t('preload: no generic send / invoke / listen in the API', !Object.keys(api).some(k => /^(send|invoke|on|once|listen|emit|ipc|ipcRenderer|electron)$/i.test(k)));
+t('preload: a channel name as argument is just data', (() => { const n = UP.sent.length; api.reload('pane:msgcount'); api.layout('focus-other'); return UP.sent[n].ch === 'reload' && UP.sent[n + 1].ch === 'layout'; })());
+
+// ---- what renderer.js (chrome) and overlay.js (overlay) send today, through the real preload ----
+const CALLS = [
+  ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }],
+  ['chrome', 'approveOpen'], ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1],
+  ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
+  ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],
+  ['chrome', 'renamePane', 1], ['chrome', 'chipMenu', 2], ['chrome', 'syncReset'], ['chrome', 'syncCols', false], ['chrome', 'syncCols', true],
+  ['chrome', 'splitStart', 'c', 1, undefined], ['chrome', 'splitStart', 'c', 2, 1], ['chrome', 'splitStart', 'r', 1, undefined], ['chrome', 'splitReset', 'c', undefined], ['chrome', 'splitReset', 'c', 0], ['chrome', 'splitEnd'],
+  ['chrome', 'favOpen', 1, 'here'], ['chrome', 'favOpen', 2, 'new'], ['chrome', 'favOpen', 1, 'window'], ['chrome', 'favMenu', 1], ['chrome', 'favMove', 2, 1], ['chrome', 'favAdd', 'https://example.com/', ''],
+  ['chrome', 'ready'], ['chrome', 'usage', true], ['chrome', 'usage', undefined], ['chrome', 'usageDetail'], ['chrome', 'aiUsage', 'codex', false], ['chrome', 'aiUsage', 'claude', true], ['chrome', 'claudeAuthDialog'],
+  ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
+  ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'],
+  ['overlay', 'closeOverlay'], ['overlay', 'usagePopKeep'], ['overlay', 'usagePopLeave'], ['overlay', 'usagePopSize', 242], ['overlay', 'usageMargin', 5], ['overlay', 'usageMargin', NaN], ['overlay', 'usage', false],
+  ...RUNS.map(a => ['overlay', 'run', a]),
+];
+const viaPreload = (name, args) => { const n = UP.sent.length; api[name](...args); const m = UP.sent[n]; return m ? [m.ch, m.a] : [null, []]; };
+t(`every call the UI makes today is allowed (${CALLS.length} calls)`, CALLS.every(([who, name, ...args]) => { const [ch, a] = viaPreload(name, args); return chk(ch, who, a) === null; }));
+{ const usedIn = (f, buttons) => { const s = read(f), u = new Set([...s.matchAll(/mpb\.(\w+)\s*\(/g)].map(m => m[1])); if (buttons) for (const m of s.matchAll(/data-a="(\w+)"/g)) u.add(m[1]); return [...u].filter(k => typeof api[k] === 'function' && !/^on[A-Z]/.test(k)); };
+  const typesIn = f => [...new Set([...read(f).matchAll(/type: '([\w-]+)'/g)].map(m => m[1]))];
+  const r = usedIn('renderer.js', true), o = usedIn('overlay.js');
+  t(`renderer.js: every mpb call it makes has an allowed sample (${r.length})`, r.length > 30 && r.every(k => CALLS.some(c => c[0] === 'chrome' && c[1] === k)));
+  t(`overlay.js: every mpb call it makes has an allowed sample (${o.length})`, o.length >= 7 && o.every(k => CALLS.some(c => c[0] === 'overlay' && c[1] === k)));
+  t('renderer.js / overlay.js: every action type they run has an allowed sample', typesIn('renderer.js').every(k => CALLS.some(c => c[0] === 'chrome' && c[1] === 'run' && c[2].type === k)) && typesIn('overlay.js').every(k => RUNS.some(a => a.type === k)));
+  t('only those two scripts run in the UI pages (local-icons.js has no mpb calls)', /<script src="local-icons\.js"><\/script><script src="renderer\.js"><\/script>/.test(read('index.html')) && /<script src="overlay\.js"><\/script>/.test(read('overlay.html')) && !(fs.existsSync(path.join(SRC, 'local-icons.js')) && /mpb\./.test(read('local-icons.js')))); }
+
+// ---- pane preload (built) and the newtab page ----
+{ const pp = read('pane-preload.js'), code = pp.replace(/\/\/.*$/gm, ''), sends = [...new Set([...pp.matchAll(/ipcRenderer\.send\('([^']+)'/g)].map(m => m[1]))];
+  t(`pane-preload: every channel it sends allows a pane (${sends.length}: ${sends.join(' ')})`, sends.length >= 9 && sends.every(ch => P.CHANNELS[ch]?.roles.includes('pane')));
+  t('pane-preload: exposes nothing to the page (no contextBridge)', !/exposeInMainWorld|contextBridge/.test(code) && !!loadPreload());
+  t('pane-preload: every pane channel in the policy is one it sends', CH.filter(ch => ch.startsWith('pane:')).every(ch => sends.includes(ch)));
+  t('newtab page uses no app API', !/mpb|ipcRenderer|require/.test(read('newtab.js'))); }
+
+console.log(`inventory: main listens on ${mainCh.length} channels (on ${uiCh.length} / paneOn ${paneCh.length} / ipcOn ${onCh.length} / ipcHandle ${hCh.length}); preload.js sends ${Object.keys(apiCh).length}, listens ${Object.keys(UP.listeners).length}`);
+console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

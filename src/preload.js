@@ -1,6 +1,9 @@
-// Preload for the app's own UI pages (index.html, overlay.html). Exposes a narrow API only.
+// Preload for the app's own UI pages (index.html, overlay.html). Exposes a narrow API only: every function sends one fixed channel,
+// listeners get the payload without the IPC event, and nothing returns ipcRenderer (ipcRenderer.on() returns it, so listen() drops it).
+// main checks the sender page and every payload again (ipc-policy.js).
 const { contextBridge, ipcRenderer } = require('electron');
-const send = (ch, ...a) => ipcRenderer.send(ch, ...a);
+const send = (ch, ...a) => { ipcRenderer.send(ch, ...a); };
+const listen = (ch, f) => { ipcRenderer.on(ch, f); };
 contextBridge.exposeInMainWorld('mpb', {
   platform: process.platform,
   navigate: (id, url) => send('navigate', id, String(url)),
@@ -22,17 +25,17 @@ contextBridge.exposeInMainWorld('mpb', {
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id),
   approveOpen: () => send('approve-open'), focusOther: (wid, pid) => send('focus-other', wid, pid),
   saveRetry: () => send('save-retry'), recoveryOpen: () => send('recovery-open'),
-  onMem: cb => ipcRenderer.on('mem', (_, b) => cb(b)), onOthers: cb => ipcRenderer.on('others', (_, l) => cb(l)),
-  onWsSaved: cb => ipcRenderer.on('ws-saved', (_, n) => cb(n)), onApproveRect: cb => ipcRenderer.on('approve-rect', (_, r) => cb(r)),
+  onMem: cb => listen('mem', (_, b) => cb(b)), onOthers: cb => listen('others', (_, l) => cb(l)),
+  onWsSaved: cb => listen('ws-saved', (_, n) => cb(n)), onApproveRect: cb => listen('approve-rect', (_, r) => cb(r)),
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),
   usageMargin: v => ipcRenderer.invoke('usage:margin', v),
-  onUsagePop: cb => ipcRenderer.on('usage-pop', (_, d) => cb(d)), onUsageUpdated: cb => ipcRenderer.on('usage-updated', () => cb()),
-  usageWinMenu: (kind, sel) => send('usage-win-menu', kind, sel), onUsageWin: cb => ipcRenderer.on('usage-win-chosen', (_, k, id) => cb(k, id)),
+  onUsagePop: cb => listen('usage-pop', (_, d) => cb(d)), onUsageUpdated: cb => listen('usage-updated', () => cb()),
+  usageWinMenu: (kind, sel) => send('usage-win-menu', kind, sel), onUsageWin: cb => listen('usage-win-chosen', (_, k, id) => cb(k, id)),
   usageDetail: () => ipcRenderer.invoke('usage:detail'),
   claudeAuthDialog: () => ipcRenderer.invoke('claude:auth-dialog'),
   aiUsage: (kind, force) => ipcRenderer.invoke('aiusage:get', kind, !!force),
   usage: force => ipcRenderer.invoke('usage:get', !!force),
-  onState: cb => ipcRenderer.on('state', (_, s) => cb(s)),
-  onFocusUrl: cb => ipcRenderer.on('focus-url', (_, id) => cb(id)),
-  onOverlayOpen: cb => ipcRenderer.on('overlay-open', (_, o) => cb(o)),
+  onState: cb => listen('state', (_, s) => cb(s)),
+  onFocusUrl: cb => listen('focus-url', (_, id) => cb(id)),
+  onOverlayOpen: cb => listen('overlay-open', (_, o) => cb(o)),
 });

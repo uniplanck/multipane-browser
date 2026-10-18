@@ -110,11 +110,47 @@ function updateDockBadge() {
   if (isMac) app.dock?.setBadge(n ? String(n) : '');
   else app.setBadgeCount?.(n);
 }
-const uiCtx = sender => ctxs.find(c => c.win.webContents === sender || c.overlay?.webContents === sender);
-const paneCtx = sender => ctxs.find(c => c.panes.some(p => p.view.webContents === sender));
+// ---- IPC boundary (#71): ipc-policy.js decides. Every page main creates is registered here with its role and owner (window / pane), and
+// ipcOn / ipcHandle are the only listeners: a message counts only from a registered, live sender in its top frame showing the expected page,
+// with a valid payload for an existing target of its own window. Anything else is dropped without side effects (debug log: code + channel + role).
+const IPC = require('./ipc-policy');
+const wcReg = new Map();                                   // webContents id -> { wc, role, ctx, pane?, onCount? }
+function regWc(wc, role, extra) {
+  const id = wc.id, r = { wc, role, ...extra }; wcReg.set(id, r);
+  wc.once('destroyed', () => { if (wcReg.get(id) === r) wcReg.delete(id); });
+  return r;
+}
+function unregWc(pred) { for (const [id, r] of wcReg) if (pred(r)) wcReg.delete(id); }
+function ipcSender(e) {                                    // who sent it, from main's own registry (the payload never names the sender)
+  let reg = null, frame = null;
+  try { const r = wcReg.get(e.sender.id); if (r && r.wc === e.sender && !e.sender.isDestroyed()) reg = r; } catch {}
+  try { const f = e.senderFrame; if (f && !f.isDestroyed()) frame = { top: f.parent === null, detached: f.detached, url: f.url, origin: f.origin }; } catch {}
+  return { reg, sender: { role: reg ? reg.role : null, frame } };
+}
+const ipcWorld = r => ({
+  owned: !!r && ctxs.includes(r.ctx) && !r.ctx.win.isDestroyed() && (!r.pane || r.ctx.panes.includes(r.pane)),
+  pane: id => !!r && r.ctx.panes.some(p => p.id === id),
+  fav: id => favorites.some(f => f.id === id),
+  ws: name => Object.hasOwn(workspaces, name),
+  winPane: (wid, pid) => ctxs.some(c => !c.win.isDestroyed() && c.win.id === wid && c.panes.some(p => p.id === pid)),
+});
+const ipcLogAt = new Map();
+function ipcGate(ch, e, args) {                            // -> the sender's registry entry, or null (rejected)
+  const { reg, sender } = ipcSender(e);
+  const code = IPC.check(ch, sender, args, ipcWorld(reg));
+  if (!code) return reg;
+  const k = `${code} ${ch} ${sender.role}`;
+  if (debugOn() && Date.now() - (ipcLogAt.get(k) || 0) > 60000) { ipcLogAt.set(k, Date.now()); dlog('ipc reject', code, IPC.REJECT[code], ch, sender.role || '-'); }
+  return null;
+}
+const ipcOn = (ch, fn) => ipcMain.on(ch, (e, ...a) => { const r = ipcGate(ch, e, a); if (r) fn(r, ...a); });
+const ipcHandle = (ch, fn) => ipcMain.handle(ch, (e, ...a) => { const r = ipcGate(ch, e, a); return r ? fn(r, ...a) : null; });
 const regUi = new Set(), regPane = new Set();
-function registerUi(ch) { if (regUi.has(ch)) return; regUi.add(ch); ipcMain.on(ch, (e, ...a) => { const c = uiCtx(e.sender); c?.ui[ch]?.(...a); }); }
-function registerPane(ch) { if (regPane.has(ch)) return; regPane.add(ch); ipcMain.on(ch, (e, ...a) => { const c = paneCtx(e.sender); c?.paneIpc[ch]?.(e, ...a); }); }
+function registerUi(ch) { if (regUi.has(ch)) return; regUi.add(ch); ipcOn(ch, (r, ...a) => r.ctx.ui[ch]?.(...a)); }
+function registerPane(ch) {                                // pane handlers get the registered pane; a probe only reports its message count
+  if (regPane.has(ch)) return; regPane.add(ch);
+  ipcOn(ch, (r, ...a) => { if (r.role === 'probe') { if (ch === 'pane:msgcount') r.onCount(IPC.msgCount(a[0])); return; } r.ctx.paneIpc[ch]?.(r.pane, ...a); });
+}
 const cur = () => { const w = BrowserWindow.getFocusedWindow(); return ctxs.find(c => c.win === w) || ctxs[ctxs.length - 1]; };
 
 function favChanged() { save(); broadcast(); }
@@ -203,7 +239,7 @@ function scheduleOthers() {
     });
   }, 200);
 }
-ipcMain.on('focus-other', (e, wid, pid) => {
+ipcOn('focus-other', (r, wid, pid) => {
   const c = ctxs.find(k => !k.win.isDestroyed() && k.win.id === wid); if (!c) return;
   if (c.win.isMinimized()) c.win.restore();
   c.win.show(); c.win.focus(); c.focusPaneById(Number(pid));
@@ -256,8 +292,6 @@ function guardNavigation(wc) {
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
-const probeCbs = new Map();                                  // probe webContents id -> callback(msgcount)
-ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', hn: typeof c.hn === 'string' ? c.hn.slice(0, 80) : '', hh: typeof c.hh === 'string' ? c.hh.slice(0, 80) : '', fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -843,7 +877,7 @@ async function probePane(p) {
     preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
   const wc = bw.webContents, pr = probe = { p, abort: false };
   let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout';
-  probeCbs.set(wc.id, c => { last = c; lastAt = Date.now(); });
+  regWc(wc, 'probe', { ctx, pane: p, onCount: c => { last = c; lastAt = Date.now(); } });   // its preload's count comes here (never to the live pane)
   try {
     wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
     wc.loadURL(target).catch(() => {});
@@ -868,7 +902,7 @@ async function probePane(p) {
     }
   } catch (e) { dlog(`pane${p.id}`, 'probe error', String(e)); }
   finally {
-    probeCbs.delete(wc.id); probe = null;
+    unregWc(r => r.wc === wc); probe = null;
     try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
   }
   const ms = Date.now() - t0;
@@ -940,6 +974,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
+  regWc(wc, 'pane', { ctx, pane: p });
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
   guardNavigation(wc);
   const upd = () => { sendState(); save(); };
@@ -1001,6 +1036,7 @@ function closePane(id, keepEmpty) {
     lens[r]--; if (lens[r] <= 0) lens.splice(r, 1); }          // only this pane's row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
   p.grokToken = null;
+  unregWc(r => r.wc === p.view.webContents);                 // nothing from this page counts any more
   win.contentView.removeChildView(p.view);
   p.view.webContents.close();
   if (maximizedId === id) maximizedId = null;
@@ -1016,7 +1052,6 @@ function newPane(url = '') {
   if (p) setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
 }
 const byId = id => panes.find(p => p.id === id);
-const byWc = wc => panes.find(p => p.view.webContents === wc);
 // Zoom: every pane either follows the GLOBAL zoom (settings.globalZoom) or is "individual" (own p.zoom, ignores global changes).
 // Chromium keeps ONE zoom level per site (host zoom map), so wc.setZoomFactor on one grok.com pane zoomed every grok.com pane.
 // Zoom is therefore applied per page from the pane preload (webFrame.setZoomFactor); the shared site level is kept at 100%.
@@ -1085,6 +1120,7 @@ function ensureApprove() {
   approve.setBorderRadius?.(14);
   approve.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
   const wc = approve.webContents;
+  regWc(wc, 'approve', { ctx });                             // no preload: registered so that nothing from it is ever accepted
   approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now(), cpuRate: 1 };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
   guardNavigation(wc);
@@ -1099,6 +1135,7 @@ function destroyApprove() {
   clearTimeout(approveTimer); approveTimer = null;
   if (!approve || approveOpen) return;
   try { win.contentView.removeChildView(approve); } catch {}
+  unregWc(r => r.wc === approve.webContents);
   try { if (!approve.webContents.isDestroyed()) approve.webContents.close(); } catch {}
   approve = null; approvePane = null;
 }
@@ -1374,23 +1411,20 @@ on('fav-menu', id => favMenu(id));
 on('fav-move', (a, b) => moveFavorite(a, b));
 on('fav-add', (url, label) => addFavorite(String(url || ''), String(label || '')));
 on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id, value: p.name || chipDefault(p) }); });
-// from web content (pane-preload): only trusted when the sender is one of our panes
-paneOn('pane:msgcount', (e, c) => {
-  const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', hn: typeof c.hn === 'string' ? c.hn.slice(0, 80) : '', hh: typeof c.hh === 'string' ? c.hh.slice(0, 80) : '', method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
-});
-paneOn('pane:pc-opened', e => {                              // the page's computer view appeared (user clicked 'コンピュータを表示')
-  const p = byWc(e.sender); if (!p || p.pcMax || p.sleeping || !isBotUrl(p.view.webContents.getURL())) return;
+// from web content (pane-preload): p = the pane main registered for the sending page (checked by ipcGate: own window, top frame, payload)
+paneOn('pane:msgcount', (p, c) => onMsgCount(p, IPC.msgCount(c)));
+paneOn('pane:pc-opened', p => {                              // the page's computer view appeared (user clicked 'コンピュータを表示')
+  if (p.pcMax || p.sleeping || !isBotUrl(p.view.webContents.getURL())) return;
   if (maximizedId === p.id || settings.autoPc !== false) setPcMax(p, true);   // already maximised: just relax the size caps (no maximize / restore dance)
 });
-paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
-paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
-paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 'dom'); });
-paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
-paneOn('pane:mouseup', e => { if (byWc(e.sender)) splitEnd(); });
-paneOn('pane:typing', e => { const p = byWc(e.sender); if (p) { p.lastTyping = Date.now(); p.lastInteract = Date.now(); } });
-paneOn('pane:draft', (e, v) => { const p = byWc(e.sender); if (p) p.hasDraft = v === true; });
-paneOn('pane:editing', (e, v) => { const p = byWc(e.sender); if (p) p.editing = !!v; });
+paneOn('pane:pc-closed', p => { if (p.pcMax) setPcMax(p, false); });
+paneOn('pane:msgmode-off', p => resetCounts(p));
+paneOn('pane:mutation', p => markActivity(p, 'dom'));
+paneOn('pane:interact', p => { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); });
+paneOn('pane:mouseup', () => splitEnd());
+paneOn('pane:typing', p => { p.lastTyping = Date.now(); p.lastInteract = Date.now(); });
+paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
+paneOn('pane:editing', (p, v) => { p.editing = !!v; });
 // ---- favorites (global list, opened in this window) ----
 function openFavorite(id, where = 'here') {
   const f = favorites.find(x => x.id === id); if (!f) return;
@@ -1443,6 +1477,7 @@ win = new BrowserWindow({ ...bounds, minWidth: 600, minHeight: 400, title: 'Mult
   backgroundColor: isMac ? '#00000000' : (nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ececec'),
   ...(isMac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, vibrancy: 'under-window', visualEffectState: 'followWindow' } : {}),
   webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+regWc(win.webContents, 'chrome', { ctx });
 ctxs.push(ctx);
 if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximize();
 win.loadFile(path.join(__dirname, 'index.html'));
@@ -1460,8 +1495,10 @@ win.on('close', () => {
   panes.forEach(p => { p.grokToken = null; });
   saveNow(); updateDockBadge(); broadcast();
 });
+win.on('closed', () => unregWc(r => r.ctx === ctx));        // this window's UI, overlay, panes, popup and probe
 
 overlay = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+regWc(overlay.webContents, 'overlay', { ctx });
 overlay.setBackgroundColor('#00000000');
 overlay.setVisible(false);
 win.contentView.addChildView(overlay);
@@ -1749,14 +1786,14 @@ function usageDetail() {
 }
 const AIU = require('./ai-usage');
 AIU.setOnChange(() => { ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} }); });
-ipcMain.handle('aiusage:get', async (_, kind, force) => {
+ipcHandle('aiusage:get', async (_, kind, force) => {
   if (!['codex', 'claude'].includes(kind)) return null;
   const r = await AIU.get(kind, !!force);
   dlog('aiusage', kind, (r.ok ? 'ok ' : 'err ') + (r.stale ? 'STALE ' : '') + (r.buckets || []).map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') + (r.err ? ' | ' + r.err : ''));
   return r;
 });
-ipcMain.handle('claude:auth-dialog', async e => {
-  const w = BrowserWindow.fromWebContents(e.sender) || undefined;
+ipcHandle('claude:auth-dialog', async r => {
+  const w = r.ctx.win;
   const repoll = () => AIU.get('claude', true).catch(() => {});
   const { response } = await dialog.showMessageBox(w, { type: 'warning', message: 'Claudeの認証が切れています', detail: 'Claudeの使用量を表示するには、Claude Codeの再ログインが必要です。', buttons: ['自動で再認証を試す', 'ターミナルでログイン', '閉じる'], defaultId: 0, cancelId: 2, noLink: true });
   if (response === 0) {
@@ -1768,8 +1805,8 @@ ipcMain.handle('claude:auth-dialog', async e => {
   }
   return response;
 });
-ipcMain.handle('usage:detail', () => usageDetail());
-ipcMain.handle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });
+ipcHandle('usage:detail', () => usageDetail());
+ipcHandle('usage:margin', (_, v) => { const n = Number(v); if (Number.isFinite(n) && n >= 0 && n <= 50) { settings.usageMargin = n; save(); } return usageDetail(); });
 // Day rollover (09:00 JST): checked every 15 s in the main process (timers in a hidden renderer are throttled) and on app focus.
 // On a change the baseline is re-fetched at once and every window redraws, instead of waiting for the next 5-minute poll.
 let lastDayKey = UD.dayKey(nowT());
@@ -1782,4 +1819,4 @@ async function checkDayRollover() {
 }
 setInterval(() => { checkDayRollover().catch(() => {}); }, 15000);
 app.on('browser-window-focus', () => { checkDayRollover().catch(() => {}); });
-ipcMain.handle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());
+ipcHandle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());

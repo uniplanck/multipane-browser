@@ -43,6 +43,7 @@ npm run build:preload    # src/pane-preload.js を生成（下記）
 npm run check:preload    # 生成物が最新か確認（変更しない。古い/無いと exit 1）
 ```
 - `src/pane-preload.js` は**生成物なので直接編集しない**。ペインの preload は sandbox で動きローカルファイルを `require` できないため、マーカー判定・引用抽出・下書き判定（`src/pane-rules.js`、main とテストも同じものを `require`）を `scripts/build-pane-preload.js` が `src/pane-preload.template.js` に組み込んで作る。どちらかを編集したら `npm run build:preload`。`npm start` とパッケージング（electron-builder の `beforePack`）の前に自動で確認し、古ければ止まる
+- IPC: main が受け取る全チャンネルは `src/ipc-policy.js` の表にあり、受信は `src/main.js` の `ipcOn` / `ipcHandle` だけ。main が作った画面（ウィンドウUI・overlay・ペイン・裏の新着確認・承認Bot）を役割つきで登録し、登録済みの送信元・トップフレーム・同梱画面（file: は index.html / overlay.html と一致するときだけ）または許可origin・そのウィンドウにある対象・引数の型と範囲をすべて満たす送信だけを処理する。満たさない送信は何もせずに捨て、デバッグログには固定コード（`E_ROLE` など）だけを残す（内容・URLは出さない）。チャンネルや引数を変えたら `src/ipc-policy.js` も直し、`node test/ipc-policy.test.js` で確認する（実際の preload / renderer / overlay の送信が通ることも検査）
 - テスト: `for f in test/*.test.js; do node "$f"; done`
 デバッグログ: `MPB_DEBUG=1 npm start` → `~/Library/Application Support/MultiPane Browser/pane-debug.log`
 
