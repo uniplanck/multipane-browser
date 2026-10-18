@@ -1,6 +1,6 @@
 // Pure rules for auto-sleep (unit-tested in test/sleep.test.js). Working / unmarked panes never sleep.
 const SLEEP_DONE_MS = 60000;      // 🟣 終了: sleeps 1 minute after it became 終了
-const SLEEP_WAIT_MS = 600000;     // 🟢 待機中 (also the old 入力待機中 wording): sleeps 10 minutes after
+const SLEEP_WAIT_MS = 1800000;    // 🟢 待機中 (also the old 入力待機中 wording): sleeps 30 minutes after
 // state: { working, done, waiting } -> delay in ms, or null when the pane must not auto-sleep
 function sleepDelayFor(state, waitMs = SLEEP_WAIT_MS, doneMs = SLEEP_DONE_MS) {
   if (!state || state.working) return null;

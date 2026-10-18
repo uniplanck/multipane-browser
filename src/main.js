@@ -254,7 +254,7 @@ const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.en
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
 const probeCbs = new Map();                                  // probe webContents id -> callback(msgcount)
-ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
+ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -465,7 +465,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -542,6 +542,7 @@ function onMsgCount(p, c) {
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (!wasW && p.waiting) p.waitSince = Date.now();
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
+  p.reqQuote = p.waiting ? (c.q || '') : '';                 // the request quoted above the 🟢 marker (shown in the sleeping placeholder)
   const wasD = p.done; p.done = !!c.done && !p.waiting && !c.working && c.botSince > 0;   // purple: latest marker says '終了' (no glow / notification / badge)
   if (!wasD && p.done) p.waitSince = Date.now();
   if (wasD !== p.done) dlog(`pane${p.id}`, 'done', p.done);
@@ -762,7 +763,7 @@ async function reloadPane(p) {
 }
 
 // ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
-// A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 10 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
+// A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 30 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
 const { sleepDelayFor } = require('./sleep-rules');
 const sleepDelay = p => Number(process.env.MPB_SLEEP_SEC) > 0 ? ((p.waiting || p.done) && !p.working ? Number(process.env.MPB_SLEEP_SEC) * 1000 : null)   // dev override: same delay for both
@@ -772,6 +773,7 @@ function canSleep(p, i, force) {
   if (!force && (settings.sleepWaiting === false || p.sleepOn === false)) return false;
   if (!(p.waiting || p.done) || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
+  if (!force && p.hasDraft) return false;                    // typed text / pending attachment in the composer
   if (!force) { const d = sleepDelay(p); if (d == null || Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < d) return false; }   // waitSince = when 待機中 / 終了 was first detected
   return true;
 }
@@ -786,7 +788,34 @@ function sleepPane(p) {
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
   applyThrottling(); sendState(); save();
 }
-function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) sleepPane(p); }); }
+// Final live check right before discarding the page: a draft (or a failed check) means: do not sleep.
+// DRAFT-BEGIN
+const DRAFT_FN = `function composerDraft() {
+  const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
+  for (const e of els) {
+    const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
+    if (String(txt).trim().length > 0) return true;
+    const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
+    if (box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')) return true;
+  }
+  return false;
+}`;
+// DRAFT-END
+const DRAFT_JS = `(${DRAFT_FN})()`;
+async function liveDraft(p) { try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); return d === false ? false : true; } catch { return true; } }
+async function trySleep(p) {
+  if (p.sleepChecking) return; p.sleepChecking = true;
+  try { const d = await liveDraft(p); p.hasDraft = d; if (!d && canSleep(p, panes.indexOf(p))) sleepPane(p); } finally { p.sleepChecking = false; }
+}
+async function sleepNowAsk(p) {                                // manual 今すぐスリープ: warn when a draft exists
+  if (!canSleep(p, panes.indexOf(p), true)) return;
+  if (await liveDraft(p)) {
+    const r = await dialog.showMessageBox(win, { type: 'warning', buttons: ['スリープする', 'やめる'], defaultId: 1, cancelId: 1, message: '入力欄に下書き（または添付）があるか、確認できませんでした', detail: 'スリープすると入力途中の内容は失われます。' });
+    if (r.response !== 0) return;
+  }
+  if (canSleep(p, panes.indexOf(p), true)) sleepPane(p);
+}
+function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) trySleep(p); }); }
 
 // Background check: a temporary hidden window (same session / preload) opens the stored bot URL, the preload reports the same stable
 // message scan it gives a live pane, then the view is destroyed again (the pane stays asleep). Changed fingerprint => 'unopened'.
@@ -853,9 +882,10 @@ async function probePane(p) {
   const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   p.sleepFp = nf;
+  if (nf.waiting && last.q) p.reqQuote = last.q;                                           // refresh the quote shown while asleep
   if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
   p.unopened = true; p.msgMode = true; p.glow = false;
-  p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working;
+  p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
   p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
   updateBadge(); sendState();
   if (p.needsReply && settings.notifications && !p.muted && canAlert(p)) showPaneNotification(p, `未開封の新着（待機中 ${p.unread}件）`);
@@ -921,7 +951,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1276,7 +1306,7 @@ function chipMenu(id) {
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || chipDefault(p) }) },
     { label: '再読み込み', click: () => reloadPane(p) },
     { label: '待機中・終了にスリープ', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
-    { label: '今すぐスリープ（待機中・終了のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepPane(p) },
+    { label: '今すぐスリープ（待機中・終了のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepNowAsk(p) },
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
@@ -1305,7 +1335,7 @@ on('swap', (a, b) => swapPanes(a, b));
 on('maximize', id => toggleMaximize(id));
 on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
 on('wake-pane', id => { const p = byId(id); if (p?.sleeping) { reloadPane(p); setFocused(panes.indexOf(p)); } });
-on('sleep-now', id => { const p = byId(id); if (p && canSleep(p, panes.indexOf(p), true)) sleepPane(p); });
+on('sleep-now', id => { const p = byId(id); if (p) sleepNowAsk(p); });
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
 on('reload-all', () => reloadAll());
@@ -1333,7 +1363,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
 });
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
@@ -1341,6 +1371,7 @@ paneOn('pane:mutation', e => { const p = byWc(e.sender); if (p) markActivity(p, 
 paneOn('pane:interact', e => { const p = byWc(e.sender); if (p) { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); } });
 paneOn('pane:mouseup', e => { if (byWc(e.sender)) splitEnd(); });
 paneOn('pane:typing', e => { const p = byWc(e.sender); if (p) { p.lastTyping = Date.now(); p.lastInteract = Date.now(); } });
+paneOn('pane:draft', (e, v) => { const p = byWc(e.sender); if (p) p.hasDraft = v === true; });
 paneOn('pane:editing', (e, v) => { const p = byWc(e.sender); if (p) p.editing = !!v; });
 // ---- favorites (global list, opened in this window) ----
 function openFavorite(id, where = 'here') {
@@ -1490,7 +1521,7 @@ function buildMenu() {
           dialog.showMessageBox({ type: 'question', buttons: ['今すぐ再起動', 'あとで'], defaultId: 0, message: 'メモリ節約モードを変更しました', detail: '再起動すると反映されます。ペインの構成と状態は保存されています。' })
             .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
         } })) },
-      { label: '終了（🟣）は1分後・待機中（🟢）は10分後に自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
+      { label: '終了（🟣）は1分後・待機中（🟢）は30分後に自動スリープ（入力欄に下書きがあれば眠らない）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },

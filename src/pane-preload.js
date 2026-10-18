@@ -92,6 +92,30 @@ function markerOf(text) {
   return best;
 }
 // MARK-END
+// QUOTE-BEGIN
+// The "request" a 🟢 待機中 reply leaves for the user: the <blockquote> right above the marker (layout: --- / blank / > text / blank / marker).
+// Pure functions (unit-tested): fullText = the entry's text, blockquoteTexts = texts of its <blockquote> elements in document order.
+const QUOTE_MAX = 300;
+const clipQuote = t => { t = String(t || '').replace(/[ \t\u3000]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim(); return t.length > QUOTE_MAX ? t.slice(0, QUOTE_MAX - 1) + '…' : t; };
+function requestQuote(fullText, blockquoteTexts) {
+  const full = String(fullText || ''), nf = full.replace(/[\s\u3000]+/g, ''), tailRe = new RegExp('^-*' + WAIT_CORE);
+  for (let i = (blockquoteTexts || []).length - 1; i >= 0; i--) {
+    const q = String(blockquoteTexts[i] || '').trim(), nq = q.replace(/[\s\u3000]+/g, ''); if (!nq) continue;
+    const at = nf.lastIndexOf(nq); if (at < 0) continue;
+    if (tailRe.test(normMark(nf.slice(at + nq.length)))) return clipQuote(q.replace(/^>[ \t]*/gm, ''));   // only a quote that sits immediately above the marker
+  }
+  const lines = full.split('\n').map(l => l.trim());       // fallback: the line(s) just above the marker
+  let mi = -1; for (let i = lines.length - 1; i >= 0; i--) if (WAIT_ANY.test(normMark(lines[i]))) { mi = i; break; }
+  if (mi < 0) return '';
+  const out = [];
+  for (let i = mi - 1; i >= 0 && out.length < 3; i--) {
+    const l = lines[i];
+    if (!l || /^[-─━=*_\s]+$/.test(l)) { if (out.length) break; continue; }
+    out.unshift(l.replace(/^>[ \t]*/, ''));
+  }
+  return clipQuote(out.join('\n'));
+}
+// QUOTE-END
 // ASK-BEGIN
 // Does the latest bot message wait for the user? (explicit marker / question / choice widget / asking phrases)
 function looksAsking(text, hasWidget) {
@@ -122,7 +146,8 @@ function scanMessages() {
     const mk = botSince > 0 ? markerOf(le.textContent) : null;
     // fingerprint of the latest entry (tail of its text) so the app can tell whether a sleeping pane got something new
     let h = 5381; const tail = t.slice(-400); for (let i = 0; i < tail.length; i++) h = ((h * 33) ^ tail.charCodeAt(i)) >>> 0;
-    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
+    let q = ''; if (mk === 'wait') { try { q = requestQuote(le.innerText || le.textContent, [...le.querySelectorAll('blockquote')].map(b => b.innerText || b.textContent)); } catch {} }
+    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', q, asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -152,7 +177,7 @@ function scanMessages() {
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}`;
+  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}/${c.q || ''}`;
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -165,7 +190,7 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     const c = scanMessages();
     if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}`;
+      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}/${c.q || ''}`;
       if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     }
     return;
@@ -177,7 +202,7 @@ function check() {
   lastLen = len;
 }
 // Debounced: text length is compared at most every 1.5 s, so animations/attribute changes don't count.
-const obs = new MutationObserver(() => { if (!timer) timer = setTimeout(check, 1500); });
+const obs = new MutationObserver(() => { if (!timer) timer = setTimeout(check, 1500); scheduleDraft(); });
 window.addEventListener('DOMContentLoaded', () => {
   obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setTimeout(check, 3000);
@@ -194,6 +219,27 @@ function reportEditing() {
   const hasText = isEditable(el) && ((el.value ?? el.textContent ?? '').trim().length > 0);
   ipcRenderer.send('pane:editing', hasText);
 }
+// DRAFT-BEGIN
+function composerDraft() {
+  const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
+  for (const e of els) {
+    const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
+    if (String(txt).trim().length > 0) return true;
+    const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
+    if (box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')) return true;
+  }
+  return false;
+}
+// DRAFT-END
+// Reports whether the composer holds typed text / a pending attachment (blocks auto-sleep). Debounced, only sends on change.
+let lastDraft = null, draftTimer = null;
+function reportDraft() { draftTimer = null; let d = false; try { d = composerDraft(); } catch {} if (d !== lastDraft) { lastDraft = d; ipcRenderer.send('pane:draft', d); } }
+const scheduleDraft = () => { if (grokChat() && !draftTimer) draftTimer = setTimeout(reportDraft, 500); };
+window.addEventListener('input', scheduleDraft, true);
+window.addEventListener('focusout', scheduleDraft, true);
+window.addEventListener('keyup', scheduleDraft, true);
+window.addEventListener('paste', scheduleDraft, true);
+window.addEventListener('drop', scheduleDraft, true);
 window.addEventListener('input', reportEditing, true);
 window.addEventListener('focusin', reportEditing, true);
 window.addEventListener('focusout', () => setTimeout(reportEditing, 0), true);

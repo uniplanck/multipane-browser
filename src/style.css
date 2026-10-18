@@ -252,3 +252,7 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .pane.sleeping.done:not(.unopened) .sleepph{color:var(--done)}
 .pane.sleeping.waiting:not(.unopened) .sleepph{color:var(--wait)}
 .pane.sleeping.done:not(.unopened) .sleepph:hover,.pane.sleeping.waiting:not(.unopened) .sleepph:hover{color:var(--text)}
+
+/* the request quoted above the 🟢 marker, shown while a 待機中 pane sleeps */
+.pane .sleepph .sleepq{display:none;margin:2px 0 0;max-width:82%;max-height:42%;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;font-size:12.5px;font-weight:400;line-height:1.5;color:var(--text);padding:8px 12px;border-left:3px solid var(--wait);border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--wait) 10%,transparent)}
+.pane .sleepph .sleepq.on{display:block}

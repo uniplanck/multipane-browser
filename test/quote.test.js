@@ -1,0 +1,37 @@
+// node test/quote.test.js — request-quote extraction (above the 🟢 marker) + draft-check code kept identical in preload and main
+const fs = require('fs'), path = require('path');
+const pre = fs.readFileSync(path.join(__dirname, '..', 'src', 'pane-preload.js'), 'utf8');
+const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+const blk = (t, a, b) => t.slice(t.indexOf(a) + a.length, t.indexOf(b));
+const body = blk(pre, '// MARK-BEGIN', '// MARK-END') + blk(pre, '// QUOTE-BEGIN', '// QUOTE-END');
+const { requestQuote, clipQuote } = new Function(body + ';return { requestQuote, clipQuote };')();
+const M = '🟢 ━━ 《 待機中 》 ━━ 🟢', D = '◆ 2026-10-18 17:00 ◆';
+let bad = 0; const eq = (n, got, exp) => { const ok = got === exp; if (!ok) { bad++; console.log('FAIL', n, JSON.stringify(got), '!=', JSON.stringify(exp)); } else console.log('ok  ', n); };
+eq('blockquote directly above marker', requestQuote(`本文です\n---\n\n> 次の作業を指示してください\n\n${M}\n${D}`, ['次の作業を指示してください']), '次の作業を指示してください');
+eq('blockquote with > markers kept clean', requestQuote(`本文\n> A案かB案か選んでください\n${M}`, ['> A案かB案か選んでください']), 'A案かB案か選んでください');
+eq('rule between quote and marker', requestQuote(`本文\n\n> どうしますか\n\n---\n${M}`, ['どうしますか']), 'どうしますか');
+eq('datetime after marker', requestQuote(`> 確認をお願いします\n${M} ${D}`, ['確認をお願いします']), '確認をお願いします');
+eq('multi-line blockquote', requestQuote(`本文\n1行目\n2行目\n${M}`, ['1行目\n2行目']), '1行目\n2行目');
+eq('old ◆ marker', requestQuote('本文\n> 旧表記の依頼\n◆ ━━ 入力待機中 ━━ ◆', ['旧表記の依頼']), '旧表記の依頼');
+eq('old 🟢 入力待機中 marker', requestQuote('本文\n> 旧の依頼\n🟢 ━━ 入力待機中 ━━ 🟢', ['旧の依頼']), '旧の依頼');
+eq('full-width spaces in marker', requestQuote('本文\n> 依頼X\n🟢　━━　《　待機中　》　━━　🟢', ['依頼X']), '依頼X');
+eq('待機中30 follow-up', requestQuote('本文\n> 依頼Y\n🟢 ━━ 《 待機中30 》 ━━ 🟢', ['依頼Y']), '依頼Y');
+eq('last of two blockquotes wins', requestQuote(`> 古い引用\n本文\n> 新しい依頼\n${M}`, ['古い引用', '新しい依頼']), '新しい依頼');
+eq('non-adjacent blockquote is ignored -> fallback line', requestQuote(`> 途中の引用\n\nその後に長い説明が続きます。\n\n${M}`, ['途中の引用']), 'その後に長い説明が続きます。');
+eq('no blockquote -> line above marker', requestQuote(`進捗です\n\n次は何をしますか？\n---\n${M}`, []), '次は何をしますか？');
+eq('fallback up to 3 lines', requestQuote(`a\nb\nc\nd\n${M}`, []), 'b\nc\nd');
+eq('fallback stops at blank line', requestQuote(`前の段落\n\n依頼1\n依頼2\n${M}`, []), '依頼1\n依頼2');
+eq('fallback strips > prefix', requestQuote(`> 依頼Z\n${M}`, []), '依頼Z');
+eq('no marker -> empty', requestQuote('ただの本文\n> 引用', ['引用']), '');
+eq('empty input', requestQuote('', []), '');
+eq('done marker is not a request', requestQuote('本文\n> 引用\n🟣 ━━ ［ 終　了 ］ ━━ 🟣', ['引用']), '');
+const long = 'あ'.repeat(500);
+eq('clip to 300', clipQuote(long).length, 300);
+eq('clip adds ellipsis', clipQuote(long).endsWith('…'), true);
+eq('long quote clipped via requestQuote', requestQuote(`> ${long}\n${M}`, [long]).length, 300);
+eq('short not clipped', clipQuote('短い'), '短い');
+// the live draft check in main (executeJavaScript) must be the same code as the one in the preload
+const preFn = blk(pre, '// DRAFT-BEGIN', '// DRAFT-END').trim();
+const mainFn = blk(main, '// DRAFT-BEGIN', '// DRAFT-END').trim().replace(/^const DRAFT_FN = `/, '').replace(/`;$/, '');
+eq('draft code identical in preload and main', mainFn, preFn);
+console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

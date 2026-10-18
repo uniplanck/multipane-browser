@@ -1,9 +1,9 @@
 // node test/sleep.test.js — auto-sleep delay rules
 const { SLEEP_DONE_MS, SLEEP_WAIT_MS, sleepDelayFor, sleepDue } = require('../src/sleep-rules');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
-t('constants', SLEEP_DONE_MS === 60000 && SLEEP_WAIT_MS === 600000);
+t('constants', SLEEP_DONE_MS === 60000 && SLEEP_WAIT_MS === 1800000);
 t('done -> 1 min', sleepDelayFor({ done: true }) === 60000);
-t('waiting -> 10 min', sleepDelayFor({ waiting: true }) === 600000);
+t('waiting -> 30 min', sleepDelayFor({ waiting: true }) === 1800000);
 t('working -> never', sleepDelayFor({ working: true }) === null);
 t('working beats waiting', sleepDelayFor({ working: true, waiting: true }) === null);
 t('working beats done', sleepDelayFor({ working: true, done: true }) === null);
@@ -13,8 +13,9 @@ t('done beats waiting', sleepDelayFor({ done: true, waiting: true }) === 60000);
 t('custom wait minutes', sleepDelayFor({ waiting: true }, 300000) === 300000 && sleepDelayFor({ done: true }, 300000) === 60000);
 t('done due after 61 s', sleepDue({ done: true }, 0, 61000));
 t('done not due at 59 s', !sleepDue({ done: true }, 0, 59000));
-t('waiting not due at 5 min', !sleepDue({ waiting: true }, 0, 300000));
-t('waiting due at 10 min', sleepDue({ waiting: true }, 0, 600000));
+t('waiting not due at 10 min', !sleepDue({ waiting: true }, 0, 600000));
+t('waiting not due at 29 min', !sleepDue({ waiting: true }, 0, 29 * 60000));
+t('waiting due at 30 min', sleepDue({ waiting: true }, 0, 1800000));
 t('done timer restarts on later interaction', !sleepDue({ done: true }, 50000, 100000));
 t('unmarked never due', !sleepDue({}, 0, 1e9));
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);
