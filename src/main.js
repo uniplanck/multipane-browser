@@ -4,6 +4,8 @@ const fs = require('fs');
 
 // dev/test hook: MPB_SWITCHES="name=value;name2" appends Chromium switches before the app is ready
 for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
+// dev/test hook: MPB_USER_DATA=/absolute/dir runs on its own profile (userData + sessionData: panes.json, cookies, storage), never the real one
+if (process.env.MPB_USER_DATA && path.isAbsolute(process.env.MPB_USER_DATA)) { app.setPath('userData', process.env.MPB_USER_DATA); app.setPath('sessionData', process.env.MPB_USER_DATA); }
 // Memory saver (measured, 8 grok.com panes): std = small V8 young generation + optimize-for-size  (-~730MB / -20%, no behaviour change)
 // max = std + process-per-site (all same-site panes share one renderer: -~1.7GB, but panes then share one JS thread and one crash) .
 // Must be decided before app ready, so settings.memSaver is read synchronously from panes.json here. Values: 'off' | 'std' (default) | 'max'.
@@ -56,26 +58,25 @@ function chromeUA() {
 }
 
 // ---- persistence (backward compatible: layout/focused/urls are always written and read) ----
+// state-store.js is the only writer of panes.json (temp file + fsync + rename, numbered requests, 3 good generations) and state-schema.js
+// migrates / validates it. When the file cannot be used (broken / newer version) nothing is read from it or written over it until the user decides.
 const { rotateBackup } = require('./state-backup');
+const { createStore } = require('./state-store');
+const { emptyDoc } = require('./state-schema');
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
+const QUIT_FLUSH_MS = 3000;                                // a normal quit waits at most this long for the last save
+let store = null;                                          // created in startup()
 const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
-function saveNow() {
-  try {
-    const wins = ctxs.map(c => c.snapshot());
-    const first = wins[0] || lastClosedSnapshot || { layout: '2x2', focused: 0, panes: [] };
-    fs.writeFileSync(stateFile(), JSON.stringify({
-      // legacy single-window fields (= first window)
-      layout: first.layout, focused: first.focused, urls: first.panes.map(s => s.url), panes: first.panes, window: first.window,
-      windows: wins.length ? wins : [first],
-      favorites: favorites.map(({ url, label }) => ({ url, label })),
-      settings, workspaces,
-    }, null, 2));
-  } catch (e) { console.error('save failed', e); }
+function stateDoc() {
+  const wins = ctxs.map(c => c.snapshot());
+  const first = wins[0] || lastClosedSnapshot || { layout: '2x2', focused: 0, panes: [] };
+  return { windows: wins.length ? wins : [first], favorites: favorites.map(({ url, label }) => ({ url, label })), settings, workspaces };
 }
+function saveNow() { if (store?.writable()) store.save(stateDoc()); }
+const storeState = () => store ? { status: store.info().status, saveError: store.info().saveError } : null;
 let lastClosedSnapshot = null;
 let quitting = false;
 function save() { if (quitting) return; clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 200); }
-function load() { try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return null; } }
 // A pane that is still waiting in the startup queue, mid-redirect or on an error page reports about:blank / '' / chrome-error:.
 // That must never be saved, reopened or reloaded: fall back to the pane's own intended URL (p.url follows the last real page).
 const BOT_URL_RE = /^https:\/\/grok\.com\/bot\/[A-Za-z0-9_-]+\/?(?:[?#].*)?$/;
@@ -462,7 +463,7 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    canReopen: closedStack.length > 0 && panes.length < MAX, globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length,
+    canReopen: closedStack.length > 0 && panes.length < MAX, globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(),
     panes: panes.map((p, i) => {
       const wc = p.view.webContents;
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -1234,6 +1235,8 @@ function runAction(a) {
     case 'fav-add-current': { closeOverlay(); const p = panes[focused]; if (p && paneUrl(p)) addFavorite(paneUrl(p), p.name || displayTitle(p)); break; }
     case 'fav-rename': { const f = favorites.find(x => x.id === a.id); if (f) { f.label = String(a.value || '').slice(0, 60); favChanged(); } closeOverlay(); break; }
     case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: [{ url: String(a.url || '') }] }); break;
+    case 'recovery-restore': closeOverlay(); recoveryRestore(win, String(a.id || '')); break;
+    case 'recovery-fresh': closeOverlay(); recoveryFresh(win); break;
   }
 }
 function clearAll() { panes.forEach(p => { p.glow = false; if (!p.msgMode) p.unread = 0; }); updateBadge(); sendState(); }
@@ -1364,6 +1367,8 @@ on('palette', () => openOverlay('palette'));
 on('overlay-run', a => runAction(a));
 on('overlay-close', () => closeOverlay());
 on('ready', () => { sendState(); sendMem(); });
+on('save-retry', () => saveNow());
+on('recovery-open', () => { if (store && store.info().status !== 'ready' && !store.info().frozen) openOverlay('recovery', { recovery: recoveryInfo() }); });
 on('fav-open', (id, where) => openFavorite(id, where));
 on('fav-menu', id => favMenu(id));
 on('fav-move', (a, b) => moveFavorite(a, b));
@@ -1555,24 +1560,47 @@ function restoreBounds(ws) {
   return visible ? { x: b.x, y: b.y, width: Math.max(600, b.width), height: Math.max(400, b.height) } : { width: b.width, height: b.height };
 }
 
+// ---- recovery: panes.json is broken / from a newer version. Restore a readable generation or start fresh; the original is always kept ----
+const RECOVERY_WHY = { read: 'ファイルを読み取れません', json: '内容が壊れています（途中で切れている・JSONとして読めない）', invalid: '内容の形式が正しくありません', newer: '新しいバージョンのアプリで保存された構成です' };
+const keptName = () => `panes.json.${store.info().status === 'unsupportedVersion' ? 'newer' : 'broken'}-日時`;
+const fileTime = t => new Date(t).toLocaleString('ja-JP', { hour12: false });   // generations can be seconds apart
+function recoveryInfo() {
+  return { why: RECOVERY_WHY[store.info().reason] || '読み込めません', candidates: store.candidates().slice(0, 8).map(c => ({ id: c.id, kind: c.kind, atText: fileTime(c.at), windows: c.windows, panes: c.panes, favorites: c.favorites, workspaces: c.workspaces })) };
+}
+async function recoveryRestore(win, id) {
+  const c = store.candidates().find(x => x.id === id); if (!c) return;
+  const { response } = await dialog.showMessageBox(win, { type: 'question', message: `${fileTime(c.at)} の構成を復元しますか？`,
+    detail: `ウィンドウ${c.windows}・ペイン${c.panes}・お気に入り${c.favorites}・ワークスペース${c.workspaces}\n読み込めなかった panes.json は別名（${keptName()}）で同じフォルダに残します。復元するとアプリを再起動します。`,
+    buttons: ['復元して再起動', 'キャンセル'], defaultId: 1, cancelId: 1, noLink: true });
+  if (response !== 0) return;
+  const r = store.restore(id);
+  if (!r.ok) { dialog.showMessageBox(win, { type: 'warning', message: '復元できませんでした', detail: `panes.json は変更していません（${r.error}）。`, buttons: ['閉じる'] }); return; }
+  app.relaunch(); app.quit();                              // the store stays frozen: nothing is saved over the restored file before the restart
+}
+async function recoveryFresh(win) {
+  const { response } = await dialog.showMessageBox(win, { type: 'question', message: '新しい構成で始めますか？',
+    detail: `読み込めなかった panes.json は別名（${keptName()}）で同じフォルダに残し、いま表示中のペイン構成から保存を再開します。お気に入り・ワークスペース・設定は初期状態です。`,
+    buttons: ['新しく始める', 'キャンセル'], defaultId: 1, cancelId: 1, noLink: true });
+  if (response !== 0) return;
+  const r = store.startFresh();
+  if (!r.ok) { dialog.showMessageBox(win, { type: 'warning', message: '新しく始められませんでした', detail: `panes.json は変更していません（${r.error}）。`, buttons: ['閉じる'] }); return; }
+  saveNow(); broadcast();
+}
+
 function startup() {
-  try { rotateBackup(stateFile()); } catch (e) { console.error('backup failed', e); }                 // keep the last few distinct panes.json versions (undo for a bad overwrite)
-  const st = load();
-  if (st?.settings) settings = { ...settings, ...st.settings };
+  store = createStore({ file: stateFile(), onChange: i => { if (i.saveError) dlog('state', 'save failed', i.saveError); broadcast(); } });
+  const ld = store.load();
+  // keep the last few distinct panes.json versions (undo for a bad overwrite); only readable ones, so a broken file never pushes a good backup out
+  if (ld.status === 'ready' && ld.exists) { try { rotateBackup(stateFile()); } catch (e) { console.error('backup failed', e.code || ''); } }
+  const st = ld.status === 'ready' ? ld.doc : emptyDoc();   // recoveryRequired / unsupportedVersion: nothing is taken from the file
+  settings = { ...settings, ...st.settings };
   if (!settings.notifV2) { settings.notifications = true; settings.notifV2 = true; }
   if (!settings.splits || typeof settings.splits !== 'object') settings.splits = {};
-  if (st?.workspaces && typeof st.workspaces === 'object') workspaces = st.workspaces;
-  if (Array.isArray(st?.favorites)) favorites = st.favorites.filter(f => f && typeof f.url === 'string').slice(0, 100)
-    .map(f => ({ id: nextFavId++, url: f.url, label: String(f.label || '').slice(0, 60) || defaultFavLabel(f.url) }));
-  let wins;
-  if (Array.isArray(st?.windows) && st.windows.length) wins = st.windows;
-  else {                                                   // old single-window format
-    let specs;
-    if (Array.isArray(st?.panes) && st.panes.length) specs = st.panes;
-    else if (Array.isArray(st?.urls) && st.urls.length) specs = st.urls.map(url => ({ url }));
-    else specs = Array(4).fill(0).map(() => ({ url: '' }));
-    wins = [{ layout: st?.layout, focused: st?.focused, panes: specs, window: st?.window }];
-  }
+  if (ld.status !== 'ready') dlog('state', ld.status, ld.reason, ld.errors.slice(0, 5).join('; '));
+  else if (ld.fixes.length) dlog('state', 'repaired on load:', ld.fixes.join('; '));
+  workspaces = st.workspaces;
+  favorites = st.favorites.slice(0, 100).map(f => ({ id: nextFavId++, url: f.url, label: String(f.label || '').slice(0, 60) || defaultFavLabel(f.url) }));
+  let wins = st.windows;                                   // migrate() has already turned the old single-window format into windows[]
   if (process.env.MPB_DEMO) {
     wins = [{ layout: '5x2', focused: 0, panes: ['https://example.com', 'https://www.wikipedia.org', 'https://news.ycombinator.com', 'https://github.com',
       'https://www.electronjs.org', 'https://developer.mozilla.org', 'https://www.python.org', 'https://nodejs.org',
@@ -1585,6 +1613,7 @@ function startup() {
   nativeTheme.on('updated', broadcast);
   wins.forEach(w => makeWindow(w, { restore: true }));
   buildMenu();
+  if (!store.writable()) { const c = ctxs[0]; c.overlay.webContents.once('did-finish-load', () => c.openOverlay('recovery', { recovery: recoveryInfo() })); }
 
   if (process.env.MPB_AUTO_PC) setTimeout(() => { const c = ctxs[0], p = c.panes[Number(process.env.MPB_AUTO_PC)]; dlog('auto-pc', p ? p.id : 'none', p ? p.view.webContents.getURL() : ''); if (p) c.togglePc(p.id); }, Number(process.env.MPB_AUTO_PC_DELAY || 40000));   // dev only: exercise the cloud-PC maximise
   if (process.env.MPB_SCREENSHOT) setTimeout(async () => {
@@ -1623,7 +1652,17 @@ app.whenReady().then(() => {
   });
   startup();
 });
-app.on('before-quit', () => { clearTimeout(saveTimer); if (!quitting) saveNow(); quitting = true; });
+// a normal quit first waits (QUIT_FLUSH_MS at most) for the last snapshot to be on disk, then quits for real. Blocked (recovery): nothing to write.
+let quitFlush = 0;                                         // 0 = not started, 1 = flushing, 2 = done
+app.on('before-quit', e => {
+  clearTimeout(saveTimer);
+  if (quitFlush === 2 || !store?.writable()) { quitting = true; return; }
+  e.preventDefault();
+  if (quitFlush === 1) return;
+  quitFlush = 1; const doc = stateDoc(); quitting = true;
+  store.flush(doc, QUIT_FLUSH_MS).then(ok => { if (!ok) console.error('state: last save not confirmed before quit'); })
+    .finally(() => { quitFlush = 2; app.quit(); });
+});
 app.on('window-all-closed', () => { clearTimeout(saveTimer); quitting = true; app.quit(); });
 
 

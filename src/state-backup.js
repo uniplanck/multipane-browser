@@ -14,4 +14,4 @@ function rotateBackup(file, keep = 5, now = new Date()) {
   list.concat(name).sort().slice(0, Math.max(0, list.length + 1 - keep)).forEach(n => { try { fs.unlinkSync(path.join(dir, n)); } catch {} });
   return name;
 }
-module.exports = { rotateBackup };
+module.exports = { rotateBackup, stamp };

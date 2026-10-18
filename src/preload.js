@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('mpb', {
   reloadAll: () => send('reload-all'), reopenClosed: () => send('reopen-closed'),
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id),
   approveOpen: () => send('approve-open'), focusOther: (wid, pid) => send('focus-other', wid, pid),
+  saveRetry: () => send('save-retry'), recoveryOpen: () => send('recovery-open'),
   onMem: cb => ipcRenderer.on('mem', (_, b) => cb(b)), onOthers: cb => ipcRenderer.on('others', (_, l) => cb(l)),
   onWsSaved: cb => ipcRenderer.on('ws-saved', (_, n) => cb(n)), onApproveRect: cb => ipcRenderer.on('approve-rect', (_, r) => cb(r)),
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),

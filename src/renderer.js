@@ -25,6 +25,8 @@ $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
 $('#approve-btn').onclick = () => mpb.approveOpen();
+// panes.json warning (state-store.js): unreadable at start -> recovery list; a save failed -> retry. The panes stay as they are.
+$('#save-warn').onclick = () => { const st = (S && S.store) || {}; if (st.status && st.status !== 'ready') mpb.recoveryOpen(); else mpb.saveRetry(); };
 // memory meter: fixed-width, tabular digits; <1GB -> "333MB", else "1.2GB"
 const memEl = $('#mem');
 const fmtMem = b => { const mb = b / 1048576; return Math.round(mb) < 1024 ? `${Math.round(mb)}MB` : `${(mb / 1024).toFixed(1)}GB`; };
@@ -153,6 +155,11 @@ const onS = s => {
   us.classList.toggle('show', !!(glowN || unreadN));
   $('#add').disabled = s.panes.length >= s.max;
   $('#reopen').disabled = !s.canReopen; $('#reopen').style.opacity = s.canReopen ? '' : '.4';
+  { const w = $('#save-warn'), st = s.store || {}, rec = !!st.status && st.status !== 'ready';
+    w.classList.toggle('show', rec || !!st.saveError);
+    w.textContent = rec ? '⚠ 構成を復旧' : '⚠ 保存できません';
+    w.title = rec ? '構成ファイル（panes.json）を読み込めないため、自動保存を止めています（元のファイルは変更していません）。クリックで復旧方法を選ぶ'
+      : `構成を保存できませんでした（${st.saveError}）。表示中の状態はそのままです。前回保存した内容は残っています。クリックで再試行`; }
   { const wb = $('#ws-btn'); if (!wb.classList.contains('saved')) wb.title = s.activeWs ? `レイアウト保存・切替（現在: 「${s.activeWs}」— クリックで上書き保存／新規保存／切替）` : 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; wb.classList.toggle('active-ws', !!s.activeWs); }
 
   // strip

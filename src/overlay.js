@@ -19,6 +19,15 @@ function build() {
   if (mode === 'fav-rename') return [{ sec: 'お気に入りの名前', label: v ? `「${v}」に変更` : '名前を入力してください', icon: '★', act: v ? { type: 'fav-rename', id: ctx.id, value: v } : null }];
   if (mode === 'ws-rename') return [{ sec: `「${ctx.name}」の名前を変更`, label: v ? `「${v}」に変更` : '名前を入力してください', icon: '✎', act: v ? { type: 'ws-rename', name: ctx.name, value: v } : null }];
   if (mode === 'ws-save') return [{ sec: 'ワークスペースを保存', label: v ? `「${v}」として現在のペイン構成を保存` : '名前を入力してください', icon: '⧉', act: v ? { type: 'ws-save', value: v } : null }];
+  if (mode === 'recovery') {                     // panes.json unreadable: every choice is confirmed again in main before anything is written
+    const r = ctx.recovery || {}, cs = r.candidates || [];
+    return [{ sec: '構成ファイル（panes.json）を読み込めません', label: r.why || '読み込めません', sub: '自動保存と構成の読み込みを止めています。元のファイルは変更していません', icon: '⚠', act: null },
+      ...(cs.length ? cs.map(c => ({ sec: '読み込める保存世代から復元（新しい順）', label: `${c.atText}（${c.kind === 'prev' ? '保存世代' : '起動時のバックアップ'}）`,
+        sub: `ウィンドウ${c.windows}・ペイン${c.panes}・お気に入り${c.favorites}・ワークスペース${c.workspaces}`, icon: '↺', act: { type: 'recovery-restore', id: c.id } }))
+        : [{ sec: '読み込める保存世代から復元', label: '復元できる保存世代がありません', icon: '–', act: null }]),
+      { sec: 'そのほか', label: '新しい構成で始める（元のファイルは別名で残す）', icon: '＋', act: { type: 'recovery-fresh' } },
+      { sec: 'そのほか', label: 'あとで決める（保存は止めたまま・上部の「⚠ 構成を復旧」から再表示）', icon: '✕', act: { type: 'close' } }];
+  }
   if (v && looksUrl(v)) {
     const g = grokBot(v);
     out.push({ sec: '開く', label: `${g ? 'Grok Botを' : ''}新しいペインで開く`, sub: v, icon: g ? '✦' : '＋', act: { type: 'open-new', url: v }, key: `${MOD}↵` });
@@ -102,13 +111,15 @@ mpb.onOverlayOpen(o => {
   document.body.classList.toggle('bc', mode === 'broadcast');
   if (mode === 'broadcast') { bcSel.clear(); bcText.value = ''; $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
-  q.value = o.value || '';
+  q.value = o.value || ''; q.readOnly = mode === 'recovery';
   q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
-    : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';
-  $('#icon').textContent = mode === 'palette' ? '⌕' : '✎';
+    : mode === 'recovery' ? '構成の復旧（↑↓で選んで ↵・選んだあとに確認があります）' : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';
+  $('#icon').textContent = mode === 'palette' ? '⌕' : mode === 'recovery' ? '⚠' : '✎';
   // restart pop animation
   const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
-  render(); q.focus(); q.select();
+  render();
+  if (mode === 'recovery') { sel = Math.max(0, items.findIndex(it => it.act)); render(); }   // start on the first choice, not the explanation
+  q.focus(); q.select();
 });
 
 // ---- broadcast composer ----
