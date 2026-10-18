@@ -6,6 +6,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const LAYOUTS = ['2x1', '3x1', '4x1', '2x2', '3x2', '4x2', '3x3', '5x2'];
 const looksUrl = v => /^https?:\/\/\S+$/i.test(v) || /^[^\s]+\.[a-z]{2,}(\/\S*)?$/i.test(v);
 const grokBot = v => /grok\.com\/bot\/[A-Za-z0-9_-]+/.test(v);
+const QCOL = { REPLY: '#ff9f0a', UNOPENED: '#64d2ff', ISSUE: '#ff453a', WAIT: '#30d158' };   // 対応キュー: the dot of each kind
 function fuzzy(text, query) {
   if (!query) return 1;
   text = text.toLowerCase(); query = query.toLowerCase();
@@ -36,6 +37,15 @@ function build() {
       { sec: '操作', label: '閉じる', icon: '✕', act: { type: 'close' } },
       ...(d.rows || []).map(r => ({ sec: r.sec, label: r.label, sub: r.sub, icon: '·', act: null }))];
   }
+  if (mode === 'queue') {                        // 対応キュー (#01): main's list as it is now; only ↵ / click sends a choice (pane id + its conversation), checked again in main
+    const qs = (S?.queue || []).filter(it => fuzzy(`${it.name} ${it.kja} ${it.why}`, v) > 0), n = {};
+    qs.forEach(it => { n[it.kind] = (n[it.kind] || 0) + 1; });
+    const note = S?.qNote ? [{ sec: 'お知らせ', label: S.qNote, icon: '⚠', act: null }] : [];
+    if (!qs.length) return [...note, { sec: '対応キュー', label: v ? '該当なし' : '対応が必要なペインはありません', icon: '✓', act: null }];
+    return [...note, ...qs.map(it => { const sub = [it.why, it.seen, ...(it.also || [])].filter(Boolean).join('・');
+      return { sec: `${it.kja}（${n[it.kind]}）`, label: it.name, sub, tip: `${it.name}\n${sub}`, color: QCOL[it.kind] || '', tag: it.sleeping ? '💤' : '', qk: it.key,
+        act: { type: 'queue-pick', id: it.id, ref: it.ref } }; })];
+  }
   if (v && looksUrl(v)) {
     const g = grokBot(v);
     out.push({ sec: '開く', label: `${g ? 'Grok Botを' : ''}新しいペインで開く`, sub: v, icon: g ? '✦' : '＋', act: { type: 'open-new', url: v }, key: `${MOD}↵` });
@@ -55,6 +65,7 @@ function build() {
     badge: p.unread, glow: p.glow, key: `${p.index + 1}`, act: { type: 'focus', id: p.id } }));
   const cmds = [
     ['次の未読ペインへ', '●', { type: 'next-unread' }, `${MOD}J`],
+    ['対応キュー（要返信・未確認の新着・観測異常・待機）', '☰', { type: 'queue-open' }],
     ['フォーカス中のペインを最大化 / 元に戻す', '⤢', { type: 'maximize' }, `${MOD}\\`],
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
     ...(S?.activeWs ? [[`ワークスペース「${S.activeWs}」を上書き保存`, '⧉', { type: 'ws-overwrite', name: S.activeWs }]] : []),
@@ -76,16 +87,25 @@ function build() {
   if (v && !looksUrl(v)) out.push({ sec: '検索', label: `「${v}」をGoogleで検索（新しいペイン）`, icon: '⌕', act: { type: 'open-new', url: v } });
   return out;
 }
+// 対応キュー: after an update the selection stays on its item (pane id + kind), wherever it moved; gone -> the nearest row that can be chosen
+function queueSel(was) {
+  const k = was ? items.findIndex(it => it.qk === was) : -1;
+  if (k >= 0) return k;
+  const i = Math.min(sel, Math.max(0, items.length - 1));
+  for (let d = 0; d < items.length; d++) for (const j of [i + d, i - d]) if (items[j] && items[j].act) return j;
+  return i;
+}
 function render() {
   if (mode === 'broadcast') return renderBc();
-  items = build(); sel = Math.min(sel, Math.max(0, items.length - 1));
+  const was = mode === 'queue' && items[sel] ? items[sel].qk : '';
+  items = build(); sel = mode === 'queue' ? queueSel(was) : Math.min(sel, Math.max(0, items.length - 1));
   let html = '', last = '';
   items.forEach((it, i) => {
     if (it.sec !== last) { html += `<div class="sec">${esc(it.sec)}</div>`; last = it.sec; }
     const ic = it.fav ? `<img src="${esc(it.fav)}" alt="">` : it.color ? `<span class="dot" style="background:${esc(it.color)}"></span>` : esc(it.icon || '•');
-    html += `<div class="it${i === sel ? ' sel' : ''}" data-i="${i}" role="option"><span class="ic">${ic}</span>
+    html += `<div class="it${i === sel ? ' sel' : ''}" data-i="${i}" role="option"${it.tip ? ` title="${esc(it.tip)}"` : ''}><span class="ic">${ic}</span>
       <span class="lb">${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>
-      <span class="rt">${it.badge ? `<span class="bd">${it.badge}</span>` : ''}${it.glow ? '<span style="color:var(--glow)">●</span>' : ''}${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}</span></div>`;
+      <span class="rt">${it.tag ? `<span>${esc(it.tag)}</span>` : ''}${it.badge ? `<span class="bd">${it.badge}</span>` : ''}${it.glow ? '<span style="color:var(--glow)">●</span>' : ''}${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}</span></div>`;
   });
   list.innerHTML = html || '<div class="empty">該当なし</div>';
   list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
@@ -98,7 +118,7 @@ function run(i, alt) {
   mpb.run(act);
   if (act.type === 'ws-delete') render();
 }
-q.oninput = () => { sel = 0; render(); };
+q.oninput = () => { sel = 0; if (mode === 'queue') items = []; render(); };   // 対応キュー: a new search starts on its first row
 q.onkeydown = e => {
   if (mode === 'broadcast') return;
   if (e.key === 'ArrowDown') { sel = Math.min(items.length - 1, sel + 1); render(); e.preventDefault(); }
@@ -106,18 +126,21 @@ q.onkeydown = e => {
   else if (e.key === 'Enter') { run(sel, e.metaKey || e.ctrlKey); e.preventDefault(); }
   else if (e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); }
 };
-list.onmousemove = e => { if (mode === 'broadcast') return; const el = e.target.closest('.it'); if (el && Number(el.dataset.i) !== sel) { sel = Number(el.dataset.i); render(); } };
+let mxy = '';                                                // 対応キュー: only a real pointer move selects (not the list re-drawn / scrolled under a still pointer)
+list.onmousemove = e => { if (mode === 'broadcast') return; const at = `${e.clientX},${e.clientY}`; if (mode === 'queue' && at === mxy) return; mxy = at; const el = e.target.closest('.it'); if (el && Number(el.dataset.i) !== sel) { sel = Number(el.dataset.i); render(); } };
 list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.dataset.i), e.metaKey || e.ctrlKey); };
 $('#scrim').onclick = () => mpb.closeOverlay();
 function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
 mpb.onApproveRect(apRect);
 addEventListener('keydown', e => { if (mode === 'approve' && e.key === 'Escape') mpb.closeOverlay(); });
-mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette') render(); else if (mode === 'broadcast') renderBc(true); });
+mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true); });
 mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
   document.body.classList.toggle('approve', mode === 'approve');
   document.body.classList.toggle('diag', mode === 'diag');
+  document.body.classList.toggle('queue', mode === 'queue');
+  items = [];                                                // (#01) nothing kept from the previous screen
   if (mode === 'approve') { apRect(o.rect); return; }
   document.body.classList.toggle('bc', mode === 'broadcast');
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
@@ -125,8 +148,9 @@ mpb.onOverlayOpen(o => {
   q.value = o.value || ''; q.readOnly = mode === 'recovery' || mode === 'diag';
   q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
     : mode === 'recovery' ? '構成の復旧（↑↓で選んで ↵・選んだあとに確認があります）' : mode === 'diag' ? '診断（会話・名前・URLは記録していません）'
+    : mode === 'queue' ? '対応キュー（↑↓で選んで ↵ でそのペインへ・文字で絞り込み・esc で閉じる）'
     : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';
-  $('#icon').textContent = mode === 'palette' ? '⌕' : mode === 'recovery' ? '⚠' : mode === 'diag' ? '🩺' : '✎';
+  $('#icon').textContent = mode === 'palette' ? '⌕' : mode === 'recovery' ? '⚠' : mode === 'diag' ? '🩺' : mode === 'queue' ? '☰' : '✎';
   // restart pop animation
   const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
   render();

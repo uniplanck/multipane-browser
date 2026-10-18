@@ -140,10 +140,17 @@ const RUNS = [
   { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
   { type: 'bc-preview', text: 'こんにちは', ids: [1, 3] }, { type: 'bc-send', pid: 5 }, { type: 'bc-cancel', bid: 6 }, { type: 'bc-reset' }, { type: 'toggle-notifications' },
   { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },
+  { type: 'queue-open' }, { type: 'queue-pick', id: 3, ref: 'bot:abc' }, { type: 'queue-pick', id: 1, ref: '' },
 ];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
 t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(a => a.type === k)));
-t('chrome bar: next-unread only', run('chrome', { type: 'next-unread' }) === null && RUNS.filter(a => a.type !== 'next-unread').every(a => run('chrome', a) === 'E_ROLE'));
+t('chrome bar: next-unread / queue-open only', run('chrome', { type: 'next-unread' }) === null && run('chrome', { type: 'queue-open' }) === null
+  && RUNS.filter(a => a.type !== 'next-unread' && a.type !== 'queue-open').every(a => run('chrome', a) === 'E_ROLE'));
+t('対応キュー (#01): a choice is a pane id + a bounded conversation ref; a pane closed / in another window is left to main (it says why)',
+  run('overlay', { type: 'queue-pick', id: 7, ref: 'bot:x' }) === null && run('overlay', { type: 'queue-pick', id: 1, ref: 'x'.repeat(P.URL_MAX) }) === null
+  && [0, -1, 1.5, '3', null, undefined].every(v => run('overlay', { type: 'queue-pick', id: v, ref: '' }) === 'E_PAYLOAD')
+  && [undefined, null, 5, 'x'.repeat(P.URL_MAX + 1)].every(v => run('overlay', { type: 'queue-pick', id: 1, ref: v }) === 'E_PAYLOAD')
+  && run('pane', { type: 'queue-open' }) === 'E_ROLE' && run('pane', { type: 'queue-pick', id: 1, ref: '' }) === 'E_ROLE');
 t('unknown / inherited / missing type -> E_PAYLOAD', [{ type: 'eval' }, { type: '__proto__' }, { type: 'toString' }, { type: 'constructor' }, {}, { type: 5 }, null, 'focus', ['focus']].every(a => run('overlay', a) === 'E_PAYLOAD'));
 t('focus / rename: pane of this window', run('overlay', { type: 'focus', id: 7 }) === 'E_TARGET' && run('overlay', { type: 'rename', id: 9, value: 'x' }) === 'E_TARGET' && run('overlay', { type: 'focus', id: '3' }) === 'E_PAYLOAD');
 t('broadcast preview (#12): 1..MAX distinct pane ids of this window, text up to BROADCAST_MAX', run('overlay', { type: 'bc-preview', text: 'x'.repeat(P.BROADCAST_MAX), ids: [1, 2, 3] }) === null
@@ -255,7 +262,7 @@ t('preload: a channel name as argument is just data', (() => { const n = UP.sent
 
 // ---- what renderer.js (chrome) and overlay.js (overlay) send today, through the real preload ----
 const CALLS = [
-  ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }],
+  ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }], ['chrome', 'run', { type: 'queue-open' }],
   ['chrome', 'approveOpen'], ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
   ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
   ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],

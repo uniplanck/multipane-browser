@@ -68,11 +68,15 @@ const msgCount = c => ({ user: c.user, bot: c.bot, botSince: c.botSince, waiting
   gen: id(c.gen) ? c.gen : 0, seq: id(c.seq) ? c.seq : 0,
   snap: obj(c.snap) ? Object.fromEntries([['cid', c.snap.cid], ...SNAP_KEYS.map(k => [k, c.snap[k]])]) : null });
 
-// overlay-run actions (overlay.js; the chrome bar only sends next-unread). roles default: overlay only
+// overlay-run actions (overlay.js; the chrome bar only sends next-unread / queue-open). roles default: overlay only
 const OVERLAY = ['overlay'], CHROME = ['chrome'], UI = ['chrome', 'overlay'], PANE = ['pane'];
 const inPane = (x, w) => w.pane(x.id), inFav = (x, w) => w.fav(x.id), inWs = (x, w) => w.ws(x.name);
 const ACTIONS = {
   'next-unread': { roles: UI },
+  // 対応キュー (#01): open the list (bar / palette); a choice = the pane id + the conversation it was listed for. No target check here on purpose:
+  // a pane closed / moved meanwhile is refused by main itself (attention-queue.js stale), which then says why in the list
+  'queue-open': { roles: UI },
+  'queue-pick': { shape: x => id(x.id) && str(x.ref, URL_MAX) },
   focus: { shape: x => id(x.id), target: inPane },
   layout: { shape: x => PRESETS.includes(x.layout) },
   'open-new': { shape: x => str(x.url, URL_MAX) },

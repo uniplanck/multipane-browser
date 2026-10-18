@@ -24,6 +24,7 @@ $('#reload-all').onclick = () => mpb.reloadAll();
 $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
+$('#queue-sum').onclick = () => mpb.run({ type: 'queue-open' });   // (#01) 対応キュー in the overlay (opening it marks nothing read)
 $('#approve-btn').onclick = () => mpb.approveOpen();
 // panes.json warning (state-store.js): unreadable at start -> recovery list; a save failed -> retry. The panes stay as they are.
 $('#save-warn').onclick = () => { const st = (S && S.store) || {}; if (st.status && st.status !== 'ready') mpb.recoveryOpen(); else mpb.saveRetry(); };
@@ -163,6 +164,12 @@ const onS = s => {
   const us = $('#unread-sum');
   us.innerHTML = glowN || unreadN ? `<span class="dot"></span>${glowN ? `新着 ${glowN}ペイン` : `未返信 ${unreadN}`}<kbd>${MOD}J</kbd>` : '';
   us.classList.toggle('show', !!(glowN || unreadN));
+  { const q = s.queue || [], qs = $('#queue-sum'), n = {};   // (#01) 対応 n: main's list (要返信 → 未確認の新着 → 観測異常 → 待機); the dot = its first kind
+    q.forEach(it => { n[it.kja] = (n[it.kja] || 0) + 1; });
+    qs.innerHTML = q.length ? `<span class="dot"></span>対応 ${q.length}` : '';
+    qs.dataset.k = q.length ? q[0].kind : '';
+    qs.title = q.length ? `対応キューを開く（${Object.entries(n).map(([k, c]) => `${k} ${c}`).join('・')}）` : '';
+    qs.classList.toggle('show', q.length > 0); }
   $('#add').disabled = s.panes.length >= s.max;
   $('#reopen').disabled = !s.canReopen; $('#reopen').style.opacity = s.canReopen ? '' : '.4';
   { const w = $('#save-warn'), st = s.store || {}, rec = !!st.status && st.status !== 'ready';

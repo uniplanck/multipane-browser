@@ -447,6 +447,10 @@ const { COMPOSER_JS } = require('./pane-rules');             // composerState() 
 // ---- 閉じたペインを開き直す (#23, closed-panes.js): what a closed pane leaves in its window's history, when an entry is taken, the focus after
 // (makeWindow: closePane / reopenClosed). Memory only: never in panes.json, gone after a restart; a draft / attachment never comes back.
 const CP = require('./closed-panes');
+// ---- 対応キュー (#01, attention-queue.js): per window, built from the pane state on every sendState (要返信 → 未確認の新着 → 観測異常 → 待機);
+// the list is shown in the overlay and counted in the bar (対応 n). Looking at it changes nothing; only a choice from the open list focuses / wakes
+// that pane (makeWindow: queueOpen / queuePick). Memory: the list and p.qSince only (never in panes.json)
+const AQ = require('./attention-queue');
 // ---- 一斉送信 (#12, broadcast-state.js): a preview of every chosen pane (read live), then one confirmed batch: per target the same pane /
 // generation / conversation / keys typed as previewed and an empty composer right before it, input, a check, the send, then page evidence
 // (makeWindow: bc*). Memory only (never in panes.json, never resumed after a restart); the text is never logged.
@@ -527,8 +531,9 @@ setInterval(() => {
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
-let win, overlay, overlayOpen = false;
-let activeWs = null;                       // name of the saved layout currently loaded / last saved in this window
+let win, overlay, overlayOpen = false, overlayMode = '';
+let queueNote = '';                        // (#01) why the last choice from the 対応キュー was not carried out (shown in the open list until the next one)
+let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null;
 let lastBounds = spec.window?.bounds || null;
@@ -744,9 +749,25 @@ function sendState(cs = cells()) {
         chk: p.sleeping ? PB.label(p.pb, { hold: probeAuthHold, off: settings.sleepCheck === false }) : '' };   // (#33) last success / next check / failures / stopped
     }),
   };
+  state.queue = queueBuild(state.panes);                      // (#01) 対応キュー: the bar's count and the open list
+  state.qNote = overlayOpen && overlayMode === 'queue' ? queueNote : '';
   win.webContents.send('state', state);
   scheduleOthers();
   if (overlayOpen) overlay.webContents.send('state', state);
+}
+// ---- 対応キュー (#01, attention-queue.js): each pane's facts as this state shows them -> the list; p.qSince follows the kind (gone with the item).
+// A stale / unknown / sign-in state is never listed as 要返信 / 待機 (pane-state.js shown: only 'live' or the pane's own sleep state counts)
+function queueBuild(rows, now = Date.now()) {
+  const chk = settings.sleepCheck !== false;
+  const items = AQ.build(panes.map((p, i) => {
+    const s = rows[i] || {}, pb = p.sleeping && p.pb ? p.pb : null;
+    return { id: p.id, url: s.url, name: s.name || s.sname || s.title, since: p.qSince, sleeping: !!p.sleeping, needsReply: !!p.needsReply, waiting: !!p.waiting,
+      unopened: !!p.obs.unopened, shown: s.obs, issue: p.obs.issue, gone: s.gone, fail: s.fail, hang: s.hang,
+      hold: !!p.sleeping && chk && probeAuthHold, fails: pb && chk ? pb.failureCount : 0,                   // (#33) checks stopped / failing
+      checkedAt: p.sleeping ? Math.max(pb ? pb.lastSuccessAt || 0 : 0, p.restored ? 0 : p.markAt || 0) : 0 };   // asleep: last check / its own sleep (#22 restored: not)
+  }), now);
+  for (const p of panes) { const it = items.find(x => x.id === p.id); if (it) p.qSince = { kind: it.kind, at: it.at }; else delete p.qSince; }
+  return items;
 }
 
 // ---- focus / activity ----
@@ -1800,7 +1821,7 @@ function hideApprove() {
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
   popOpen = false; clearTimeout(popTimer);
-  overlayOpen = true;
+  overlayOpen = true; overlayMode = mode;
   const [w, h] = win.getContentSize();
   overlay.setBounds({ x: 0, y: 0, width: w, height: h });
   bringOverlayToFront();
@@ -1815,8 +1836,8 @@ function openOverlay(mode, extra = {}) {
 }
 function closeOverlay() {
   if (!overlayOpen) return;
-  overlayOpen = false;
-  bcPv = null; bcPvNo = 0;                                   // (#12) a preview holds only while it is on screen (a batch goes on)
+  overlayOpen = false; overlayMode = '';
+  bcPv = null; bcPvNo = 0;                                  // (#12) a preview holds only while it is on screen (a batch goes on)
   if (approveOpen) hideApprove();
   overlay.setVisible(false);
   panes[focused]?.view.webContents.focus();
@@ -1885,10 +1906,31 @@ function loadWorkspace(name) {
     relayout(); save();
   });
 }
+// (#01) 対応キュー: opening it marks nothing read, wakes nothing and moves no focus (the list comes with the state)
+function queueOpen() {
+  queueNote = '';
+  openOverlay('queue');                                      // its sendState builds the list (p.qSince: exactly the listed panes)
+  diag.rec('queue', 'OPEN', { n: panes.filter(p => p.qSince).length });
+}
+// a choice from the open list: the pane by its id, only if it still shows the conversation it was listed for (closed / moved: nothing is done, the
+// list says why). Then like a click on it: focus (asleep: woken through the load queue), the layout as focusPane leaves it; marked read only when
+// the user really sees it (inView), as everywhere else
+function queuePick(a) {
+  if (!overlayOpen || overlayMode !== 'queue') return;       // only from the list on screen (a second Enter after it closed: nothing)
+  const code = AQ.stale({ id: a.id, ref: a.ref }, panes.map(p => ({ id: p.id, url: paneUrl(p) })));
+  if (code) { queueNote = AQ.STALE_JA[code]; diag.rec('queue', code, { p: a.id }); dlog('queue', 'choice not carried out', code); sendState(); return; }
+  const p = byId(a.id);
+  queueNote = ''; diag.rec('queue', 'PICK', { p: p.id });
+  closeOverlay();
+  focusPane(panes.indexOf(p), { clear: false });
+  if (inView(p)) clearUnread(p);
+}
 function runAction(a) {
   if (!a || typeof a !== 'object') return;
   switch (a.type) {
     case 'focus': { const i = panes.findIndex(p => p.id === a.id); closeOverlay(); focusPane(i); break; }
+    case 'queue-open': queueOpen(); break;                   // (#01) the bar's 対応 n / the palette
+    case 'queue-pick': queuePick(a); break;
     case 'layout': closeOverlay(); applyPreset(a.layout); break;
     case 'open-new': closeOverlay(); newPane(String(a.url || '')); break;
     case 'open-here': { closeOverlay(); const p = panes[focused]; if (p) openIn(p, String(a.url || '')); break; }

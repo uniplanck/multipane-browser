@@ -34,6 +34,9 @@ body.prompt #foot{display:none}
 body.diag .it .lb{white-space:normal}
 body.diag .it .lb small{display:block;margin-left:0}
 
+/* 対応キュー (#01): the name on one line, the reason / last check under it (long names end with …; the full text is the row's tooltip) */
+body.queue .it .lb small{display:block;margin-left:0;overflow:hidden;text-overflow:ellipsis}
+
 #bc-text,#bc-foot{display:none}
 body.bc #q{display:none} body.bc #foot{display:none}
 body.bc #bc-text{display:block;width:calc(100% - 28px);margin:10px 14px 4px;min-height:110px;max-height:40vh;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--ctl);color:var(--text);font:14px var(--font);padding:8px 10px;outline:none}

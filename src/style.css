@@ -46,6 +46,14 @@ body.mac #tl-space{width:68px}
 #unread-sum{display:none;align-items:center;gap:6px;font-size:11.5px;color:var(--glow);font-weight:600;padding:3px 8px;border-radius:7px;cursor:pointer;flex:none}
 #unread-sum.show{display:flex}
 #unread-sum:hover{background:var(--ctl)}
+/* (#01) 対応 n: opens the 対応キュー; the dot is the colour of the first item's kind (要返信 / 未確認の新着 / 観測異常 / 待機) */
+#queue-sum{display:none;align-items:center;gap:6px;font-size:11.5px;color:var(--text);font-weight:600;padding:3px 8px;border-radius:7px;cursor:pointer;flex:none}
+#queue-sum.show{display:flex}
+#queue-sum:hover{background:var(--ctl)}
+#queue-sum .dot{width:7px;height:7px;border-radius:50%;background:#30d158}
+#queue-sum[data-k="REPLY"] .dot{background:var(--glow)}
+#queue-sum[data-k="UNOPENED"] .dot{background:#64d2ff}
+#queue-sum[data-k="ISSUE"] .dot{background:#ff453a}
 #unread-sum .dot{width:7px;height:7px;border-radius:50%;background:var(--glow);box-shadow:0 0 8px var(--glow);animation:pulse 1.6s ease-in-out infinite}
 .icon-btn{width:28px;height:28px;border-radius:7px;border:0;background:var(--ctl);font-size:16px;line-height:1;color:var(--text);flex:none;transition:background .15s}
 .icon-btn:hover{background:var(--ctl-hi)} .icon-btn:disabled{opacity:.35}
