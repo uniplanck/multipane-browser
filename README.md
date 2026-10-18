@@ -46,6 +46,9 @@ npm run check:preload    # 生成物が最新か確認（変更しない。古�
 - IPC: main が受け取る全チャンネルは `src/ipc-policy.js` の表にあり、受信は `src/main.js` の `ipcOn` / `ipcHandle` だけ。main が作った画面（ウィンドウUI・overlay・ペイン・裏の新着確認・承認Bot）を役割つきで登録し、登録済みの送信元・トップフレーム・同梱画面（file: は index.html / overlay.html と一致するときだけ）または許可origin・そのウィンドウにある対象・引数の型と範囲をすべて満たす送信だけを処理する。満たさない送信は何もせずに捨て、デバッグログには固定コード（`E_ROLE` など）だけを残す（内容・URLは出さない）。チャンネルや引数を変えたら `src/ipc-policy.js` も直し、`node test/ipc-policy.test.js` で確認する（実際の preload / renderer / overlay の送信が通ることも検査）
 - テスト: `for f in test/*.test.js; do node "$f"; done`
 デバッグログ: `MPB_DEBUG=1 npm start` → `~/Library/Application Support/MultiPane Browser/pane-debug.log`
+- 診断（設定 > 診断… / コマンドパレット「診断」）: バージョン・主な設定・この起動からの件数・保存状態（panes.json と診断ログ）を表示。「summaryをクリップボードにコピー…」は内容を確認ダイアログで見せてからクリップボードにだけコピーする（外部送信はしない）
+  - 記録するのは時刻・固定のevent/結果コード・所要ms・試行数・起動ごとのペイン番号だけ（`src/diagnostics.js` の表にない値は保存前に捨てる。会話・Bot名・引用・入力・URL・パス・ヘッダー・エラー文は記録しない。未知のエラーは `UNKNOWN` として数える）。対象はページ読込・Bot表示の補正・再読み込み・スリープ/新着確認・採用しなかった件数/IPC・構成の読込/保存失敗
+  - 普段はメモリに最新1000件だけ（終了で消える）。設定 >「診断ログをファイルにも保存」か `MPB_DEBUG` のときだけ `userData/diagnostics/diag-0〜2.jsonl`（フォルダ0700・ファイル0600、1ファイル2MiB・3世代・7日）に非同期でまとめて書く。書けない（満杯・権限）ときも記録とアプリは止まらず、失敗は1回だけ記録して間隔をあけて再試行。オフにしてもファイルは消さず、整理するのはこのフォルダの `diag-N.jsonl` だけ（`pane-debug.log` は別物で、URLなどを含むことがある）
 
 ## English
 MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, subscription usage readout, and a workaround for grok.com bot deep links. Run with `npm install && npm start`. Not affiliated with xAI or X Corp.

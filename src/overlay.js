@@ -28,6 +28,14 @@ function build() {
       { sec: 'そのほか', label: '新しい構成で始める（元のファイルは別名で残す）', icon: '＋', act: { type: 'recovery-fresh' } },
       { sec: 'そのほか', label: 'あとで決める（保存は止めたまま・上部の「⚠ 構成を復旧」から再表示）', icon: '✕', act: { type: 'close' } }];
   }
+  if (mode === 'diag') {                         // 診断: main builds the rows from fixed codes / numbers only; copying asks again in main
+    const d = ctx.diag || {};
+    return [{ sec: '操作', label: 'summaryをクリップボードにコピー…', sub: '内容を確認してから・外部には送りません', icon: '📋', act: { type: 'diag-copy' } },
+      { sec: '操作', label: d.persist ? 'ファイル保存をオフにする' : 'ファイルにも保存する（userData/diagnostics・2MiB×3・7日）', sub: d.forced ? 'MPB_DEBUG で起動中は設定に関係なく保存します' : d.persist ? '保存済みのファイルは消しません' : '', icon: '💾', act: { type: 'diag-persist', on: !d.persist } },
+      { sec: '操作', label: '表示を更新', icon: '↻', act: { type: 'diag-open' } },
+      { sec: '操作', label: '閉じる', icon: '✕', act: { type: 'close' } },
+      ...(d.rows || []).map(r => ({ sec: r.sec, label: r.label, sub: r.sub, icon: '·', act: null }))];
+  }
   if (v && looksUrl(v)) {
     const g = grokBot(v);
     out.push({ sec: '開く', label: `${g ? 'Grok Botを' : ''}新しいペインで開く`, sub: v, icon: g ? '✦' : '＋', act: { type: 'open-new', url: v }, key: `${MOD}↵` });
@@ -59,6 +67,7 @@ function build() {
     ['すべての未読をクリア', '✓', { type: 'clear-unread' }],
     ['新しい空のペイン', '＋', { type: 'open-new', url: '' }, `${MOD}T`],
     ['Grok を新しいペインで開く', '✦', { type: 'open-new', url: 'https://grok.com/' }],
+    ['診断（バージョン・設定・件数・保存状態）', '🩺', { type: 'diag-open' }],
   ];
   LAYOUTS.forEach((k, i) => cmds.push([`レイアウト: ${k.replace('x', '×')}`, '▦', { type: 'layout', layout: k }, `${MOD}${i + 1}`]));
   (S?.workspaces || []).forEach(n => { cmds.push([`ワークスペースを開く: ${n}`, '⧉', { type: 'ws-load', name: n }]); if (n !== S.activeWs) cmds.push([`ワークスペースを上書き保存: ${n}`, '⧉', { type: 'ws-overwrite', name: n, confirm: true }]); cmds.push([`ワークスペースの名前を変更: ${n}`, '✎', { type: 'ws-rename-prompt', name: n }]); cmds.push([`ワークスペースを削除: ${n}`, '🗑', { type: 'ws-delete', name: n }]); });
@@ -107,14 +116,16 @@ mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
   document.body.classList.toggle('approve', mode === 'approve');
+  document.body.classList.toggle('diag', mode === 'diag');
   if (mode === 'approve') { apRect(o.rect); return; }
   document.body.classList.toggle('bc', mode === 'broadcast');
   if (mode === 'broadcast') { bcSel.clear(); bcText.value = ''; $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
-  q.value = o.value || ''; q.readOnly = mode === 'recovery';
+  q.value = o.value || ''; q.readOnly = mode === 'recovery' || mode === 'diag';
   q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
-    : mode === 'recovery' ? '構成の復旧（↑↓で選んで ↵・選んだあとに確認があります）' : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';
-  $('#icon').textContent = mode === 'palette' ? '⌕' : mode === 'recovery' ? '⚠' : '✎';
+    : mode === 'recovery' ? '構成の復旧（↑↓で選んで ↵・選んだあとに確認があります）' : mode === 'diag' ? '診断（会話・名前・URLは記録していません）'
+    : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';
+  $('#icon').textContent = mode === 'palette' ? '⌕' : mode === 'recovery' ? '⚠' : mode === 'diag' ? '🩺' : '✎';
   // restart pop animation
   const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
   render();

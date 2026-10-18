@@ -69,6 +69,8 @@ const ACTIONS = {
   'new-window': { shape: x => str(x.url, URL_MAX) },
   maximize: {}, 'clear-unread': {}, 'reload-all': {}, 'rename-prompt': {}, 'ws-save-prompt': {}, 'approve-open': {},
   'broadcast-prompt': {}, 'toggle-notifications': {}, close: {}, 'fav-add-current': {}, 'recovery-fresh': {},
+  'diag-open': {}, 'diag-copy': {},                         // 診断 screen; main builds the summary itself (nothing of it comes from the page)
+  'diag-persist': { shape: x => bool(x.on) },
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },

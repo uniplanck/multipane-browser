@@ -30,6 +30,10 @@ kbd{font:10.5px var(--font);color:var(--dim);background:var(--ctl);border:1px so
 #foot{display:flex;gap:14px;padding:8px 14px;border-top:1px solid var(--line);color:var(--dim);font-size:11px}
 body.prompt #foot{display:none}
 
+/* 診断: rows wrap (version / settings / counts are longer than a palette item) */
+body.diag .it .lb{white-space:normal}
+body.diag .it .lb small{display:block;margin-left:0}
+
 #bc-text,#bc-foot{display:none}
 body.bc #q{display:none} body.bc #foot{display:none}
 body.bc #bc-text{display:block;width:calc(100% - 28px);margin:10px 14px 4px;min-height:110px;max-height:40vh;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--ctl);color:var(--text);font:14px var(--font);padding:8px 10px;outline:none}

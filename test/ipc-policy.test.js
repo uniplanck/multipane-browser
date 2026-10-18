@@ -135,6 +135,7 @@ const RUNS = [
   { type: 'ws-save-prompt' }, { type: 'approve-open' }, { type: 'broadcast-prompt' }, { type: 'fav-add-current' }, { type: 'reload-all' }, { type: 'clear-unread' },
   { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
   { type: 'broadcast', text: 'こんにちは', ids: [1, 3] }, { type: 'toggle-notifications' },
+  { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },
 ];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
 t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(a => a.type === k)));
@@ -151,6 +152,8 @@ t('workspaces: existing names only (own keys), no "__proto__" as a new name', ru
   && run('overlay', { type: 'ws-save', value: '__proto__' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: ' __proto__ ' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-rename', name: 'A', value: '__proto__' }) === 'E_PAYLOAD'
   && run('overlay', { type: 'ws-overwrite', name: 'A', confirm: 'yes' }) === 'E_PAYLOAD' && run('overlay', { type: 'ws-save', value: 'x'.repeat(P.TEXT_MAX + 1) }) === 'E_PAYLOAD');
 t('favorites: existing ids only', run('overlay', { type: 'fav-open', id: 3, where: 'here' }) === 'E_TARGET' && run('overlay', { type: 'fav-rename', id: 9, value: 'x' }) === 'E_TARGET' && run('overlay', { type: 'fav-open', id: 1, where: 'top' }) === 'E_PAYLOAD');
+t('diag-persist: boolean only (the summary itself is built in main, never sent by a page)', ['true', 1, null, undefined].every(v => run('overlay', { type: 'diag-persist', on: v }) === 'E_PAYLOAD')
+  && ['diag-open', 'diag-copy', 'diag-persist'].every(k => run('pane', { type: k, on: true }) === 'E_ROLE'));
 t('open / fav-add URLs bounded', run('overlay', { type: 'open-new', url: 'x'.repeat(P.URL_MAX + 1) }) === 'E_PAYLOAD' && run('overlay', { type: 'open-here' }) === 'E_PAYLOAD' && run('overlay', { type: 'fav-add', url: 'u', label: 5 }) === 'E_PAYLOAD');
 
 // ---- target: exists, and belongs to the sender's window ----

@@ -48,6 +48,12 @@ function dlog(...a) {
   try { fs.appendFileSync(path.join(app.getPath('userData'), 'pane-debug.log'), line); } catch {}
   if (process.env.MPB_DEBUG) process.stdout.write(line);
 }
+// ---- diagnostics (#73, diagnostics.js): fixed event / result codes, ms, attempts and per-launch pane numbers only; never page content, names,
+// URLs, paths or error text. Always a memory ring; files only with 設定 > 診断ログをファイルにも保存 or MPB_DEBUG, in userData/diagnostics
+// (pane-debug.log above is separate and unchanged). diag.rec never throws and a failing disk never stops anything.
+const DIAG = require('./diagnostics');
+const diag = DIAG.createDiag();
+function diagSync() { const forced = !!process.env.MPB_DEBUG; diag.setDisk(settings.diagPersist === true || forced ? path.join(app.getPath('userData'), 'diagnostics') : null, forced && settings.diagPersist !== true); }
 
 // Clean Chrome UA (no "Electron/x" or app name) so sites don't treat us as an unknown embedder.
 function chromeUA() {
@@ -66,6 +72,7 @@ const { emptyDoc } = require('./state-schema');
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
 const QUIT_FLUSH_MS = 3000;                                // a normal quit waits at most this long for the last save
 let store = null;                                          // created in startup()
+let saveFails = 0;                                         // failed save attempts in a row (diagnostics)
 const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
 function stateDoc() {
   const wins = ctxs.map(c => c.snapshot());
@@ -139,6 +146,7 @@ function ipcGate(ch, e, args) {                            // -> the sender's re
   const { reg, sender } = ipcSender(e);
   const code = IPC.check(ch, sender, args, ipcWorld(reg));
   if (!code) return reg;
+  diag.rec('ipc.reject', code, { p: reg?.pane?.id }, 60000);
   const k = `${code} ${ch} ${sender.role}`;
   if (debugOn() && Date.now() - (ipcLogAt.get(k) || 0) > 60000) { ipcLogAt.set(k, Date.now()); dlog('ipc reject', code, IPC.REJECT[code], ch, sender.role || '-'); }
   return null;
@@ -567,8 +575,8 @@ function markActivity(p, reason) {
   lightUp(p, reason);
 }
 function onMsgCount(p, c) {
-  if (p.sleeping) return;                                   // a sleeping pane keeps its remembered state
-  if (!isBotUrl(p.view.webContents.getURL())) { resetCounts(p); return; }
+  if (p.sleeping) { diag.rec('count.drop', 'SLEEPING', { p: p.id }, 600000); return; }   // a sleeping pane keeps its remembered state
+  if (!isBotUrl(p.view.webContents.getURL())) { diag.rec('count.drop', 'NOT_BOT', { p: p.id }, 600000); resetCounts(p); return; }
   const prev = p.msgMode ? p.unread : null;
   p.msgMode = true;
   const same = p.lastMsg && p.lastMsg.user === c.user && p.lastMsg.bot === c.bot && p.lastMsg.botSince === c.botSince;
@@ -663,11 +671,11 @@ async function grokFix(p, target, id, viaHome) {
   for (let k = 0; k < 70 && alive(); k++) {
     await sleep(k === 0 ? 120 : 350);
     const pr = await grokProbe(wc, id);
-    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr, pushes ? `after ${pushes} push(es)` : ''); p.loadedAt = Date.now(); p.grokToken = null; p.hardTries = 0; p.wdTries = 0; applyThrottling(); return; }
+    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr, pushes ? `after ${pushes} push(es)` : ''); diag.rec('grokfix', pr === 'rendered' ? 'FAST_RENDERED' : 'FAST_NOTFOUND', { p: p.id, ms: Date.now() - t0, n: pushes }); p.loadedAt = Date.now(); p.grokToken = null; p.hardTries = 0; p.wdTries = 0; applyThrottling(); return; }
     if (pushes >= 2 && Date.now() - lastPush > PUSH_GAP && (p.hardTries || 0) < 3) {
       // the router hop keeps missing: start over with a fresh load of the bot URL (bounded) instead of pushing forever
       p.hardTries = (p.hardTries || 0) + 1; p.grokToken = null;
-      dlog(`pane${p.id}`, 'grokfix: hop failed twice -> hard reload', p.hardTries);
+      dlog(`pane${p.id}`, 'grokfix: hop failed twice -> hard reload', p.hardTries); diag.rec('grokfix', 'HARD_RELOAD', { p: p.id, ms: Date.now() - t0, n: p.hardTries });
       wc.loadURL(target).catch(() => {}); return;
     }
     if (pushes < 6 && Date.now() - lastPush > PUSH_GAP && Date.now() - t0 > PUSH_FIRST) {
@@ -681,7 +689,7 @@ async function grokFix(p, target, id, viaHome) {
     if (!alive()) return;
     const r = await grokProbe(wc, id);
     dlog(`pane${p.id}`, 'grokfix try', i + 1, r);
-    if (r === 'rendered' || r === 'notfound') { p.loadedAt = Date.now(); p.grokToken = null; return; }   // logged out or bad id: leave as is
+    if (r === 'rendered' || r === 'notfound') { diag.rec('grokfix', r === 'rendered' ? 'RENDERED' : 'NOTFOUND', { p: p.id, ms: Date.now() - t0, n: i + 1 }); p.loadedAt = Date.now(); p.grokToken = null; return; }   // logged out or bad id: leave as is
     if (r === 'nolink' && (i === 2 || i === 5)) {
       // No sidebar link (e.g. collapsed icon sidebar): ask Next.js' client router to navigate.
       const path = '/bot/' + id;
@@ -695,7 +703,7 @@ async function grokFix(p, target, id, viaHome) {
       if (String(rr).startsWith('router.push')) {
         for (let j = 0; j < 5 && alive(); j++) {
           await sleep(1000);
-          if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'grokfix ok (router)'); p.loadedAt = Date.now(); p.grokToken = null; return; }
+          if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'grokfix ok (router)'); diag.rec('grokfix', 'OK_ROUTER', { p: p.id, ms: Date.now() - t0, n: i + 1 }); p.loadedAt = Date.now(); p.grokToken = null; return; }
         }
       }
     }
@@ -703,7 +711,7 @@ async function grokFix(p, target, id, viaHome) {
       for (let j = 0; j < 5 && alive(); j++) {
         await sleep(1000);
         const r2 = await grokProbe(wc, id);
-        if (r2 === 'rendered') { dlog(`pane${p.id}`, 'grokfix ok'); p.loadedAt = Date.now(); p.grokToken = null; return; }
+        if (r2 === 'rendered') { dlog(`pane${p.id}`, 'grokfix ok'); diag.rec('grokfix', 'OK_CLICK', { p: p.id, ms: Date.now() - t0, n: i + 1 }); p.loadedAt = Date.now(); p.grokToken = null; return; }
         if (r2 === 'clicked') continue;           // clicked again, keep waiting
       }
     }
@@ -711,11 +719,11 @@ async function grokFix(p, target, id, viaHome) {
   if (!alive()) return;
   p.grokToken = null; p.loadedAt = Date.now(); applyThrottling();
   if (!viaHome) {                                  // fallback: go home, then click the bot link
-    dlog(`pane${p.id}`, 'grokfix fallback: load grok.com/ then navigate');
+    dlog(`pane${p.id}`, 'grokfix fallback: load grok.com/ then navigate'); diag.rec('grokfix', 'FALLBACK_HOME', { p: p.id, ms: Date.now() - t0 });
     p.grokPending = { target, id };
     wc.loadURL('https://grok.com/').catch(() => {});
   } else {
-    dlog(`pane${p.id}`, 'grokfix gave up; leaving page as is', target);
+    dlog(`pane${p.id}`, 'grokfix gave up; leaving page as is', target); diag.rec('grokfix', 'GAVE_UP', { p: p.id, ms: Date.now() - t0 });
   }
 }
 // Watchdog: a bot pane that is on screen, finished its fix routine, and still shows no chat box (blank / landing page) is reloaded
@@ -737,7 +745,7 @@ setInterval(async () => {
       if (await wc.executeJavaScript(GROK_RENDERED(id)).catch(() => true)) { p.wdTries = 0; continue; }
       if ((p.wdTries || 0) >= 3 || Date.now() - (p.wdAt || 0) < 30000) continue;
       p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now();
-      dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries);
+      dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries); diag.rec('watchdog', 'RELOAD', { p: p.id, n: p.wdTries });
       reloadPane(p);
     } catch {}
   }
@@ -760,7 +768,7 @@ function onGrokLoad(p) {
 // (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
 async function reloadPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
-  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); abortProbe(p); p.sleeping = false; p.sleepSnap = null; p.sleepFp = undefined; p.unopened = false; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep (clears 'unopened')
+  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; p.sleepFp = undefined; p.unopened = false; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep (clears 'unopened')
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
   const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
@@ -770,11 +778,11 @@ async function reloadPane(p) {
   const target = m ? cu : (remembered && (!cu || /^(?:about:blank|chrome-error:|https:\/\/grok\.com\/)/.test(cu)) ? remembered : null);   // a pane that gave up sits on grok.com home: use its remembered bot link
   const id = target && target.match(GROK_BOT_RE)?.[1];
   if (!id || !settings.grokFix) {
-    p.grokToken = null;
+    p.grokToken = null; diag.rec('reload', 'PLAIN', { p: p.id });
     if (isBlankUrl(cu) && !isBlankUrl(p.url) && p.url !== NEWTAB) wc.loadURL(p.url).catch(() => {}); else wc.reload();   // blank pane: reload its own URL, not about:blank
     return;
   }
-  if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); wc.loadURL(target).catch(() => {}); return; }   // nothing to hop from (woken / blank pane)
+  if (isBlankUrl(cu)) { p.grokToken = null; p.loadedAt = Date.now(); dlog(`pane${p.id}`, 'reload from blank: hard load', target); diag.rec('reload', 'BLANK_LOAD', { p: p.id }); wc.loadURL(target).catch(() => {}); return; }   // nothing to hop from (woken / blank pane)
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
   if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
@@ -788,16 +796,17 @@ async function reloadPane(p) {
       dlog(`pane${p.id}`, 'reload router push at', Date.now() - t0, 'ms');
       for (let j = 0; j < 20 && !wc.isDestroyed() && p.grokToken === token; j++) {
         await sleep(200);
-        if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'reload ok (router)'); p.grokToken = null; p.loadedAt = Date.now(); return; }
+        if (await grokProbe(wc, id) === 'rendered') { dlog(`pane${p.id}`, 'reload ok (router)'); diag.rec('reload', 'ROUTER_OK', { p: p.id, ms: Date.now() - t0 }); p.grokToken = null; p.loadedAt = Date.now(); return; }
       }
       if (wc.isDestroyed() || p.grokToken !== token) return;
+      diag.rec('reload', 'ROUTER_MISS', { p: p.id, ms: Date.now() - t0 });
       p.grokToken = null; grokFix(p, target, id, false); return;     // router hop did not land: normal verified retries
     }
     await sleep(100);
   }
   if (wc.isDestroyed() || p.grokToken !== token) return;
   p.grokToken = null;
-  dlog(`pane${p.id}`, 'reload: router not ready, hard load', target);
+  dlog(`pane${p.id}`, 'reload: router not ready, hard load', target); diag.rec('reload', 'HARD_LOAD', { p: p.id, ms: Date.now() - t0 });
   wc.loadURL(target).catch(() => {});        // did-finish-load -> onGrokLoad -> grokFix
 }
 
@@ -824,14 +833,17 @@ function sleepPane(p) {
   p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
   const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
   p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, done: !!lm.done, asks: !!lm.asks } : null;
-  dlog(`pane${p.id}`, 'sleep', paneUrl(p));
+  dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
   applyThrottling(); sendState(); save();
 }
 // Final live check right before discarding the page: a draft (or a failed check) means: do not sleep.
 const { DRAFT_JS } = require('./pane-rules');                // composerDraft() from the shared rules: the same code the pane preload has built in
-async function liveDraft(p) { try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); return d === false ? false : true; } catch { return true; } }
+async function liveDraft(p) {
+  try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); diag.rec('draft', d === false ? 'EMPTY' : d === true ? 'PRESENT' : 'UNKNOWN', { p: p.id }, 600000); return d === false ? false : true; }
+  catch { diag.rec('draft', 'UNKNOWN', { p: p.id }, 600000); return true; }
+}
 async function trySleep(p) {
   if (p.sleepChecking) return; p.sleepChecking = true;
   try { const d = await liveDraft(p); p.hasDraft = d; if (!d && canSleep(p, panes.indexOf(p))) sleepPane(p); } finally { p.sleepChecking = false; }
@@ -876,7 +888,7 @@ async function probePane(p) {
   const bw = new BrowserWindow({ show: false, width: 1000, height: 720, skipTaskbar: true, focusable: false, webPreferences: {      // hidden window: same session, same preload, own 1000x720 viewport
     preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
   const wc = bw.webContents, pr = probe = { p, abort: false };
-  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout';
+  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false;
   regWc(wc, 'probe', { ctx, pane: p, onCount: c => { last = c; lastAt = Date.now(); } });   // its preload's count comes here (never to the live pane)
   try {
     wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -900,15 +912,16 @@ async function probePane(p) {
         if (rr === 'ok') { lastPush = Date.now(); pushes++; }
       }
     }
-  } catch (e) { dlog(`pane${p.id}`, 'probe error', String(e)); }
+  } catch (e) { failed = true; dlog(`pane${p.id}`, 'probe error', String(e)); }
   finally {
     unregWc(r => r.wc === wc); probe = null;
     try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
   }
   const ms = Date.now() - t0;
-  if (!last || !p.sleeping) { dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
+  if (!last || !p.sleeping) { diag.rec('probe', failed ? 'ERROR' : !p.sleeping ? 'WOKE' : why.toUpperCase(), { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
   const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
   const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
+  diag.rec('probe', changed ? 'CHANGED' : old ? 'SAME' : 'BASELINE', { p: p.id, ms, n: pushes + hard });
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   p.sleepFp = nf;
   if (last.hn) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
@@ -979,7 +992,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   guardNavigation(wc);
   const upd = () => { sendState(); save(); };
   ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading'].forEach(e => wc.on(e, upd));
-  wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
+  wc.on('did-start-loading', () => { p.loadedAt = p.loadT0 = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
   wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
@@ -992,10 +1005,12 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     if (!debugOn()) return;
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
   });
-  wc.on('did-fail-load', (e, code, desc, url, isMain) => dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'));
-  wc.on('render-process-gone', (e, d) => dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)));
-  wc.on('unresponsive', () => dlog(`pane${p.id}`, 'unresponsive'));
+  const loadMs = () => p.loadT0 ? Date.now() - p.loadT0 : undefined;
+  wc.on('did-fail-load', (e, code, desc, url, isMain) => { if (isMain && !p.sleeping) diag.rec('pane.load', DIAG.netCode(code), { p: p.id, ms: loadMs() }); dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'); });
+  wc.on('render-process-gone', (e, d) => { diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); });
+  wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); });
   wc.on('did-finish-load', () => {
+    if (!p.sleeping) diag.rec('pane.load', 'OK', { p: p.id, ms: loadMs() });   // a sleeping pane loading about:blank is not a page load
     onGrokLoad(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
@@ -1274,6 +1289,9 @@ function runAction(a) {
     case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: [{ url: String(a.url || '') }] }); break;
     case 'recovery-restore': closeOverlay(); recoveryRestore(win, String(a.id || '')); break;
     case 'recovery-fresh': closeOverlay(); recoveryFresh(win); break;
+    case 'diag-open': openOverlay('diag', { diag: diagView() }); break;
+    case 'diag-copy': closeOverlay(); diagCopy(win).catch(() => {}); break;
+    case 'diag-persist': settings.diagPersist = a.on === true; diagSync(); save(); buildMenu(); openOverlay('diag', { diag: diagView() }); break;
   }
 }
 function clearAll() { panes.forEach(p => { p.glow = false; if (!p.msgMode) p.unread = 0; }); updateBadge(); sendState(); }
@@ -1582,6 +1600,8 @@ function buildMenu() {
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
+      { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },
+      { label: '診断ログをファイルにも保存（userData/diagnostics・2MiB×3・7日。会話・名前・URLは記録しない）', type: 'checkbox', checked: settings.diagPersist === true, click: m => { settings.diagPersist = m.checked; diagSync(); save(); } },
       { label: 'grok.com/bot を開き直す補正（直接読み込みで真っ黒になる対策）', type: 'checkbox', checked: settings.grokFix, click: m => { settings.grokFix = m.checked; save(); } },
       { label: 'すべての未読をクリア', click: () => ctxs.forEach(k => k.clearAll()) } ] },
     { role: 'windowMenu', label: 'ウィンドウ' } ]));
@@ -1624,8 +1644,32 @@ async function recoveryFresh(win) {
   saveNow(); broadcast();
 }
 
+// ---- 診断 screen / summary: main hands over versions, effective settings, counts and the save state; diagnostics.js keeps only the
+// fields and values it knows (safeEnv) and adds its own counts. The summary goes to the clipboard only, after the user saw it in the dialog.
+function diagEnv() {
+  const all = ctxs.flatMap(c => c.panes), si = store ? store.info() : null;
+  return { versions: { app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, os: process.getSystemVersion?.() },
+    platform: process.platform, arch: process.arch, packaged: app.isPackaged,
+    settings: { notifications: !!settings.notifications, ecoMode: !!settings.ecoMode, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
+      autoPc: settings.autoPc !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
+      globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin },
+    counts: { windows: ctxs.length, panes: all.length, bots: all.filter(p => p.msgMode).length, sleeping: all.filter(p => p.sleeping).length },
+    store: si && { status: si.status, saveError: si.saveError, frozen: si.frozen } };
+}
+const diagView = () => diag.view(diagEnv());
+async function diagCopy(w) {
+  const text = diag.summary(diagEnv());
+  const { response } = await dialog.showMessageBox(w, { type: 'info', message: '診断summaryをクリップボードにコピーしますか？',
+    detail: `次の内容をコピーします（外部には送りません。会話・Bot名・URL・パスは含みません）。\n\n${text}`, buttons: ['コピー', 'キャンセル'], defaultId: 0, cancelId: 1, noLink: true });
+  if (response === 0) clipboard.writeText(text);
+}
+
 function startup() {
-  store = createStore({ file: stateFile(), onChange: i => { if (i.saveError) dlog('state', 'save failed', i.saveError); broadcast(); } });
+  diag.rec('app', 'START');
+  store = createStore({ file: stateFile(), onChange: i => {
+    if (i.saveError) { dlog('state', 'save failed', i.saveError); diag.rec('state.save', DIAG.errCode(i.saveError), { n: ++saveFails }, 60000); }
+    else if (saveFails) { diag.rec('state.save', 'RECOVERED', { n: saveFails }); saveFails = 0; }
+    broadcast(); } });
   const ld = store.load();
   // keep the last few distinct panes.json versions (undo for a bad overwrite); only readable ones, so a broken file never pushes a good backup out
   if (ld.status === 'ready' && ld.exists) { try { rotateBackup(stateFile()); } catch (e) { console.error('backup failed', e.code || ''); } }
@@ -1635,6 +1679,9 @@ function startup() {
   if (!settings.splits || typeof settings.splits !== 'object') settings.splits = {};
   if (ld.status !== 'ready') dlog('state', ld.status, ld.reason, ld.errors.slice(0, 5).join('; '));
   else if (ld.fixes.length) dlog('state', 'repaired on load:', ld.fixes.join('; '));
+  const loaded = ld.status === 'ready' ? (ld.fixes.length ? 'REPAIRED' : 'READY') : ld.status === 'unsupportedVersion' ? 'NEWER' : `RECOVERY_${String(ld.reason).toUpperCase()}`;   // reason: read / json / invalid
+  diag.rec('state.load', loaded, { n: ld.status === 'ready' ? ld.fixes.length : ld.errors.length });
+  diagSync();                                              // files only when asked (settings.diagPersist / MPB_DEBUG)
   workspaces = st.workspaces;
   favorites = st.favorites.slice(0, 100).map(f => ({ id: nextFavId++, url: f.url, label: String(f.label || '').slice(0, 60) || defaultFavLabel(f.url) }));
   let wins = st.windows;                                   // migrate() has already turned the old single-window format into windows[]
