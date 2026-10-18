@@ -19,6 +19,7 @@ const MAX = 10;
 const TOPBAR = 76;        // top bar (traffic lights + layout + pane strip) + favorites bar
 const PHEAD = 30;         // per-pane header
 const GAP = 6;            // gutter between pane cards
+const BOTTOM_GAP = 5;     // margin below the bottom row only (~20% under GAP; 4.8 rounds to whole px)
 const RADIUS = 8;
 const DEFAULT_URL = 'https://www.google.com';
 const NEWTAB = 'mpb:newtab';                        // internal marker, persisted as ''
@@ -296,7 +297,7 @@ const splitKey = () => { const l = getRows(); return `${Math.max(1, ...l)}x${Mat
 function cells() {
   const [w, h] = win.getContentSize();
   const n = panes.length; if (!n) return [];
-  const area = { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - 2 * GAP };
+  const area = { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP };
   if (maximizedId != null && byId(maximizedId))
     return panes.map(p => p.id === maximizedId ? { x: area.x, y: area.y, w: area.w, h: area.h } : null);
   const lens = getRows(), rows = lens.length, cols = Math.max(...lens);
@@ -328,10 +329,10 @@ function splitters() {
   if (g.sync) {
     for (let r = 0; r < g.rows; r++) {                      // one bar per run of consecutive full rows
       if (!full[r]) continue; let e = r; while (e + 1 < g.rows && full[e + 1]) e++;
-      for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[e + 1] - GAP - g.rE[r]) });
+      for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[e + 1] - GAP) - Math.round(g.rE[r]) });   // same rounding as cells()
       r = e;
     }
-  } else for (let r = 0; r < g.rows; r++) if (full[r]) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, row: r, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[r + 1] - GAP - g.rE[r]) });
+  } else for (let r = 0; r < g.rows; r++) if (full[r]) for (let i = 1; i < g.cols; i++) out.push({ axis: 'c', i, row: r, x: Math.round(g.cEs[r][i] - GAP), y: Math.round(g.rE[r]), w: GAP, h: Math.round(g.rE[r + 1] - GAP) - Math.round(g.rE[r]) });
   for (let i = 1; i < g.rows; i++) out.push({ axis: 'r', i, x: g.area.x, y: Math.round(g.rE[i] - GAP), w: g.area.w, h: GAP });
   return out;
 }
