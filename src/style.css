@@ -232,3 +232,18 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .ochip.unopened{border-color:color-mix(in srgb,var(--unop) 70%,transparent);background:color-mix(in srgb,var(--unop) 16%,transparent);color:var(--text)}
 .ochip.unopened .oc{background:var(--unop);color:#04323d}
 .badge.unop{background:var(--unop);color:#04323d}
+
+/* done = latest marker is 🟣 終了 (nothing left to do): purple ring / chip / count / dot. No glow, no notification. */
+:root{--done:#a855f7}
+.pane.done{outline:2px solid var(--done);box-shadow:0 0 0 1px var(--done),0 0 14px color-mix(in srgb,var(--done) 45%,transparent);animation:none}
+.pane.done .head{background:linear-gradient(90deg,color-mix(in srgb,var(--done) 20%,var(--head)),var(--head) 70%)}
+.chip.done{border-color:color-mix(in srgb,var(--done) 65%,transparent);background:color-mix(in srgb,var(--done) 14%,transparent);color:var(--text)}
+.chip.done .cicon.ccount{background:var(--done);color:#fff}
+.chip .wdot.done{background:var(--done);box-shadow:0 0 4px var(--done)}
+.badge.done{background:var(--done);color:#fff}
+.ochip.done{border-color:color-mix(in srgb,var(--done) 65%,transparent);background:color-mix(in srgb,var(--done) 14%,transparent);color:var(--text)}
+.ochip.done .oc{background:var(--done);color:#fff}
+.ochip .od.done{background:var(--done);box-shadow:0 0 4px var(--done)}
+/* unopened (cyan) stays on top of green / red / purple */
+.pane.unopened.done{outline:2px solid var(--unop);box-shadow:0 0 0 1px var(--unop),0 0 18px color-mix(in srgb,var(--unop) 55%,transparent)}
+.chip.unopened.done{border-color:color-mix(in srgb,var(--unop) 70%,transparent);background:color-mix(in srgb,var(--unop) 16%,transparent)}

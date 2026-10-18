@@ -254,7 +254,7 @@ const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.en
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
 const probeCbs = new Map();                                  // probe webContents id -> callback(msgcount)
-ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
+ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -465,7 +465,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -510,7 +510,7 @@ function lightUp(p, reason, always = false) {
   const first = !p.glow || always;
   p.glow = true;
   updateBadge(); sendState();
-  if (first && settings.notifications && !p.muted) showPaneNotification(p, p.msgMode ? (p.waiting ? `入力待ち（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります');
+  if (first && settings.notifications && !p.muted) showPaneNotification(p, p.msgMode ? (p.waiting ? `待機中（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります');
 }
 function showPaneNotification(p, body) {
   if (!Notification.isSupported()) return;
@@ -520,7 +520,7 @@ function showPaneNotification(p, body) {
   n.show();
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
-function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; if (had) { updateBadge(); sendState(); } }
+function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.done || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; p.done = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
   return;   // counts come ONLY from bot replies on grok.com/bot/* (onMsgCount); generic page changes never count
 
@@ -542,9 +542,12 @@ function onMsgCount(p, c) {
   const wasW = p.waiting; p.waiting = !!c.waiting;
   if (!wasW && p.waiting) p.waitSince = Date.now();
   if (wasW !== p.waiting) dlog(`pane${p.id}`, 'waiting', p.waiting);
+  const wasD = p.done; p.done = !!c.done && !p.waiting && !c.working && c.botSince > 0;   // purple: latest marker says '終了' (no glow / notification / badge)
+  if (!wasD && p.done) p.waitSince = Date.now();
+  if (wasD !== p.done) dlog(`pane${p.id}`, 'done', p.done);
   const wasK = p.working; p.working = !!c.working && !p.waiting && !userSent && c.botSince > 0;   // red: latest marker says '作業中' (UI only; no notification / badge)
   if (wasK !== p.working) dlog(`pane${p.id}`, 'working', p.working);
-  const wasAsk = p.needsReply; p.needsReply = !!(c.asks || c.waiting) && !c.working && c.botSince > 0;
+  const wasAsk = p.needsReply; p.needsReply = !!(c.asks || c.waiting) && !c.working && !c.done && c.botSince > 0;
   if (wasAsk !== p.needsReply) dlog(`pane${p.id}`, 'needsReply', p.needsReply);
   if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; p.needsReply = false; }
   else if (!p.needsReply) { p.glow = false; }                      // plain progress report: grey number only
@@ -758,14 +761,14 @@ async function reloadPane(p) {
   wc.loadURL(target).catch(() => {});        // did-finish-load -> onGrokLoad -> grokFix
 }
 
-// ---- sleep for 🟢 waiting panes (frees the page's memory; header / tab / green status / counts stay) ----
+// ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
 // A pane sleeps when its last output is the 🟢 marker and nobody touched it for N minutes. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
 const sleepMs = () => (Number(process.env.MPB_SLEEP_SEC) > 0 ? Number(process.env.MPB_SLEEP_SEC) * 1000 : (settings.sleepMinutes > 0 ? settings.sleepMinutes : 10) * 60000);
 function canSleep(p, i, force) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return false;
   if (!force && (settings.sleepWaiting === false || p.sleepOn === false)) return false;
-  if (!p.waiting || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
+  if (!(p.waiting || p.done) || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
   if (!force && Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < sleepMs()) return false;
   return true;
@@ -775,7 +778,7 @@ function sleepPane(p) {
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
   p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
   const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
-  p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, asks: !!lm.asks } : null;
+  p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, done: !!lm.done, asks: !!lm.asks } : null;
   dlog(`pane${p.id}`, 'sleep', paneUrl(p));
   p.view.setVisible(false);
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
@@ -844,16 +847,16 @@ async function probePane(p) {
   }
   const ms = Date.now() - t0;
   if (!last || !p.sleeping) { dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
-  const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, asks: last.asks };
+  const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
   const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   p.sleepFp = nf;
   if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
   p.unopened = true; p.msgMode = true; p.glow = false;
-  p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting;
-  p.needsReply = !!(nf.asks || nf.waiting) && !nf.working;
+  p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working;
+  p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
   updateBadge(); sendState();
-  if (p.needsReply && settings.notifications && !p.muted && canAlert(p)) showPaneNotification(p, `未開封の新着（入力待ち ${p.unread}件）`);
+  if (p.needsReply && settings.notifications && !p.muted && canAlert(p)) showPaneNotification(p, `未開封の新着（待機中 ${p.unread}件）`);
 }
 
 // ---- panes ----
@@ -916,7 +919,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1109,7 +1112,7 @@ function paneMenu(id) {
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || '' }) },
     { label: '色', submenu: Object.keys(COLORS).map(c => ({ label: COLOR_JA[c], type: 'radio', checked: (p.color || 'none') === c, click: () => { p.color = c; sendState(); save(); } })) },
     { label: 'このペインの通知をミュート', type: 'checkbox', checked: !!p.muted, click: m => { p.muted = m.checked; updateBadge(); sendState(); save(); } },
-    { label: '入力待機中にスリープ（メモリ節約）', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
+    { label: '待機中・終了にスリープ（メモリ節約）', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
     { label: '自動リロード', submenu: RELOAD_CHOICES.map(m => ({ label: m ? `${m}分ごと` : 'オフ', type: 'radio', checked: p.reloadMinutes === m,
       click: () => { p.reloadMinutes = m; p.lastReload = Date.now(); sendState(); save(); } })) },
     { label: `ズーム（${Math.round((p.zoom || 1) * 100)}%${p.zoomIndiv ? '・個別' : ''}）`, submenu: [
@@ -1270,8 +1273,8 @@ function chipMenu(id) {
   Menu.buildFromTemplate([
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || chipDefault(p) }) },
     { label: '再読み込み', click: () => reloadPane(p) },
-    { label: '入力待機中にスリープ', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
-    { label: '今すぐスリープ（入力待機中のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepPane(p) },
+    { label: '待機中・終了にスリープ', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
+    { label: '今すぐスリープ（待機中・終了のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepPane(p) },
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
@@ -1328,7 +1331,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
 });
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
@@ -1379,8 +1382,8 @@ const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { 
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   othersInfo(n) {
-    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.glow || p.unread || p.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
-      waiting: !!p.waiting, working: !!p.working, glow: !!p.glow, unopened: !!p.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
+    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.done || p.glow || p.unread || p.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
+      waiting: !!p.waiting, working: !!p.working, done: !!p.done, glow: !!p.glow, unopened: !!p.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
   } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
@@ -1485,7 +1488,7 @@ function buildMenu() {
           dialog.showMessageBox({ type: 'question', buttons: ['今すぐ再起動', 'あとで'], defaultId: 0, message: 'メモリ節約モードを変更しました', detail: '再起動すると反映されます。ペインの構成と状態は保存されています。' })
             .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
         } })) },
-      { label: '入力待機中（🟢）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
+      { label: '待機中（🟢）・終了（🟣）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
@@ -1539,7 +1542,7 @@ function startup() {
     const c = ctxs[0];
     if (process.env.MPB_PALETTE) { c.openOverlay('palette'); await sleep(1200); }
     if (process.env.MPB_SHOT_GLOW) { const p = c.panes[Number(process.env.MPB_SHOT_GLOW)]; if (p) { p.unread = 3; p.glow = true; c.sendState(); await sleep(400); } }
-    if (process.env.MPB_SHOT_STATE) { for (const it of process.env.MPB_SHOT_STATE.split(',')) { const [i, st] = it.split(':'); const p = c.panes[Number(i)]; if (!p) continue; p.msgMode = true; p.unread = 2; p.waiting = st === 'wait'; p.working = st === 'work'; } c.sendState(); await sleep(500); }   // dev only: preview the green / red states
+    if (process.env.MPB_SHOT_STATE) { for (const it of process.env.MPB_SHOT_STATE.split(',')) { const [i, st] = it.split(':'); const p = c.panes[Number(i)]; if (!p) continue; p.msgMode = true; p.unread = 2; p.waiting = st === 'wait'; p.working = st === 'work'; p.done = st === 'done'; } c.sendState(); await sleep(500); }   // dev only: preview the green / red states
     const { execFileSync } = require('child_process');
     try { execFileSync('sh', ['-c', `ffmpeg -y -loglevel error -f x11grab -video_size 1600x1000 -i "$DISPLAY" -frames:v 1 "${process.env.MPB_SCREENSHOT}"`]); }
     catch { const img = await c.win.webContents.capturePage(); fs.writeFileSync(process.env.MPB_SCREENSHOT, img.toPNG()); }

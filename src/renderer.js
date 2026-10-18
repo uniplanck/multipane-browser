@@ -35,11 +35,11 @@ mpb.onOthers(list => {
   othersEl.classList.toggle('show', has); othersSep.classList.toggle('show', has);
   if (!has) { othersEl.innerHTML = ''; return; }
   othersEl.innerHTML = list.map(w => `<span class="owin" title="ウィンドウ${w.n}">${w.n}</span>` + w.panes.map(p => {
-    const st = p.unopened ? 'unopened' : p.waiting ? 'waiting' : p.working ? 'working' : p.glow ? 'glow' : '';
+    const st = p.unopened ? 'unopened' : p.waiting ? 'waiting' : p.working ? 'working' : p.done ? 'done' : p.glow ? 'glow' : '';
     const ch = (Array.from(String(p.name || '•').trim())[0] || '•').toUpperCase();
-    const lab = p.unopened ? '未開封の新着' : p.waiting ? '入力待ち' : p.working ? '作業中' : '新着';
+    const lab = p.unopened ? '未開封の新着' : p.waiting ? '待機中' : p.working ? '作業中' : p.done ? '終了' : '新着';
     return `<button class="ochip ${st}" data-w="${w.wid}" data-p="${p.id}" title="ウィンドウ${w.n}: ${esc(p.name)}（${lab}${p.unread ? ' ' + p.unread : ''}）クリックで移動">` +
-      `<span class="oc">${p.unread ? (p.unread > 99 ? '99' : p.unread) : esc(ch)}</span>${p.waiting ? '<span class="od"></span>' : p.working ? '<span class="od work"></span>' : ''}</button>`;
+      `<span class="oc">${p.unread ? (p.unread > 99 ? '99' : p.unread) : esc(ch)}</span>${p.waiting ? '<span class="od"></span>' : p.working ? '<span class="od work"></span>' : p.done ? '<span class="od done"></span>' : ''}</button>`;
   }).join('')).join('');
 });
 othersEl.onclick = e => { const b = e.target.closest('.ochip'); if (b) mpb.focusOther(Number(b.dataset.w), Number(b.dataset.p)); };
@@ -70,11 +70,11 @@ function mk(id) {
       <button data-a="reload" title="再読み込み (${MOD}R)">↻</button>
       <button data-a="maximize" title="最大化 / 元に戻す (${MOD}\\・ダブルクリック)">⤢</button>
       <button data-a="paneMenu" title="名前・色・ミュート・自動リロード・ズームなど">⋯</button>
-      <button data-a="sleepToggle" class="slp" title="入力待機中にスリープ: ON">💤</button>
+      <button data-a="sleepToggle" class="slp" title="待機中・終了にスリープ: ON">💤</button>
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
   </div>
-  <div class="sleepph"><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><small>入力待機中のため休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
+  <div class="sleepph"><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><small>待機中・終了のため休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
@@ -164,6 +164,7 @@ const onS = s => {
     c.classList.toggle('focused', p.id === s.focusedId);
     c.classList.toggle('glow', p.glow);
     c.classList.toggle('waiting', !!p.waiting);
+    c.classList.toggle('done', !!p.done);
     c.classList.toggle('working', !!p.working);
     c.classList.toggle('unopened', !!p.unopened);
     c.classList.toggle('colored', !!color);
@@ -174,7 +175,7 @@ const onS = s => {
     const lbl = shortLabel(chars.slice(1).join(''));
     const justCopied = (copied.get(p.id) || 0) > Date.now();
     c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}${p.unopened ? ' unop' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
+      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? '<span class="wdot" title="待機中（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : p.done ? '<span class="wdot done" title="終了（紫）"></span>' : '');
   });
 
   syncBtn(s);
@@ -199,11 +200,12 @@ const onS = s => {
     d.classList.toggle('loading', p.loading);
     d.classList.toggle('unread', !!p.glow);
     d.classList.toggle('waiting', !!p.waiting);
+    d.classList.toggle('done', !!p.done);
     d.classList.toggle('working', !!p.working);
     d.classList.toggle('unopened', !!p.unopened);
     d.classList.toggle('maxed', p.id === s.maximizedId);
     d.classList.toggle('sleeping', !!p.sleeping);
-    { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `入力待機中にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
+    { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `待機中・終了にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
     const color = s.colors[p.color];
     d.style.setProperty('--pc', color || 'transparent');
     d.classList.toggle('colored', !!color);
@@ -223,7 +225,7 @@ const onS = s => {
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
     b.title = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
     b.classList.toggle('quiet', !p.glow);
-    b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working); b.classList.toggle('unop', !!p.unopened);
+    b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working); b.classList.toggle('done', !!p.done); b.classList.toggle('unop', !!p.unopened);
     d.querySelector('[data-a=back]').disabled = !p.canBack;
     d.querySelector('[data-a=forward]').disabled = !p.canForward;
     d.querySelector('[data-a=maximize]').textContent = p.id === s.maximizedId ? '⤡' : '⤢';

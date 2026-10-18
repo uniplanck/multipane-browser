@@ -39,7 +39,45 @@ const cases = [
   ['work fullwidth spaces', '本文\n🔴　━━　【　作業中　】　━━　🔴', 'work'],
   ['latest wins: work after wait', '🟢 ━━ 入力待機中 ━━ 🟢\n続けます\n🔴 ━━ 【 作業中 】 ━━ 🔴', 'work'],
   ['latest wins: wait after work', '🔴 ━━ 【 作業中 】 ━━ 🔴\n完了\n🟢 ━━ 入力待機中 ━━ 🟢', 'wait'],
+  // ---- new wording: 待機中 (waiting) / 終　了 (done) ----
+  ['new wait basic', '🟢 ━━ 《 待機中 》 ━━ 🟢', 'wait'],
+  ['new wait + datetime same line', `完了です。\n🟢 ━━ 《 待機中 》 ━━ 🟢 ${D}`, 'wait'],
+  ['new wait datetime next line', `本文\n🟢 ━━ 《 待機中 》 ━━ 🟢\n${D}`, 'wait'],
+  ['new wait + rules around + datetime', `本文\n---\n🟢 ━━ 《 待機中 》 ━━ 🟢\n${D}\n---`, 'wait'],
+  ['new wait no brackets', '本文\n🟢 ━━ 待機中 ━━ 🟢', 'wait'],
+  ['new wait tight brackets', '本文\n🟢 ━━ 《待機中》 ━━ 🟢', 'wait'],
+  ['new wait other brackets', '本文\n🟢 ━━ 【 待機中 】 ━━ 🟢', 'wait'],
+  ['new wait fullwidth spaces', '本文\n🟢　━━　《　待機中　》　━━　🟢', 'wait'],
+  ['new wait 30 follow-up', '本文\n🟢 ━━ 《 待機中30 》 ━━ 🟢\n◆ 2026-10-15 16:33 ◆', 'wait'],
+  ['new wait 60 follow-up', '本文\n🟢 ━━ 《 待機中60 》 ━━ 🟢 ' + D, 'wait'],
+  ['new wait bold', '本文\n**🟢 ━━ 《 待機中 》 ━━ 🟢**', 'wait'],
+  ['new wait ascii dashes', '本文\n🟢 --- 《 待機中 》 --- 🟢', 'wait'],
+  ['new wait ◆ variant', '本文\n◆ ━━ 待機中 ━━ ◆', 'wait'],
+  ['done basic', '🟣 ━━ ［ 終　了 ］ ━━ 🟣', 'done'],
+  ['done + datetime next line', `全て完了しました。\n🟣 ━━ ［ 終　了 ］ ━━ 🟣\n${D}`, 'done'],
+  ['done + datetime same line', `本文\n🟣 ━━ ［ 終　了 ］ ━━ 🟣 ${D}`, 'done'],
+  ['done + rules around + datetime', `本文\n---\n🟣 ━━ ［ 終　了 ］ ━━ 🟣\n${D}\n---`, 'done'],
+  ['done half-width space', '本文\n🟣 ━━ ［ 終 了 ］ ━━ 🟣', 'done'],
+  ['done no space', '本文\n🟣 ━━ ［終了］ ━━ 🟣', 'done'],
+  ['done ascii brackets', '本文\n🟣 ━━ [ 終　了 ] ━━ 🟣', 'done'],
+  ['done no brackets', '本文\n🟣 ━━ 終　了 ━━ 🟣', 'done'],
+  ['done fullwidth spaces all over', '本文\n🟣　━━　［　終　了　］　━━　🟣', 'done'],
+  ['done bold', '本文\n**🟣 ━━ ［ 終　了 ］ ━━ 🟣**', 'done'],
+  ['done ascii dashes', '本文\n🟣 --- ［ 終　了 ］ --- 🟣', 'done'],
+  ['latest wins: done after work', '🔴 ━━ 【 作業中 】 ━━ 🔴\n終わり\n🟣 ━━ ［ 終　了 ］ ━━ 🟣', 'done'],
+  ['latest wins: work after done', '🟣 ━━ ［ 終　了 ］ ━━ 🟣\n続き\n🔴 ━━ 【 作業中 】 ━━ 🔴', 'work'],
+  ['latest wins: wait after done', '🟣 ━━ ［ 終　了 ］ ━━ 🟣\n追加\n🟢 ━━ 《 待機中 》 ━━ 🟢', 'wait'],
+  ['latest wins: done after wait', '🟢 ━━ 《 待機中 》 ━━ 🟢\n追加\n🟣 ━━ ［ 終　了 ］ ━━ 🟣', 'done'],
+  ['old 入力待機中 still wait (fullwidth form)', '🟢　━━　【　入力待機中　】　━━　🟢', 'wait'],
+  ['old 入力待機中60 still wait', '🟢 ━━ 入力待機中60 ━━ 🟢', 'wait'],
+  ['work stays work (new look)', '🔴 ━━ 【 作業中 】 ━━ 🔴\n' + D, 'work'],
   // negatives
+  ['neg: done marker followed by body', '🟣 ━━ ［ 終　了 ］ ━━ 🟣\n追記です', null],
+  ['neg: new wait followed by body', '🟢 ━━ 《 待機中 》 ━━ 🟢\n追記です', null],
+  ['neg: prose 待機中です', '現在は待機中です。', null],
+  ['neg: prose 終了しました', '作業は終了しました', null],
+  ['neg: done mismatched emoji', '本文\n🟣 ━━ ［ 終　了 ］ ━━ 🟢', null],
+  ['neg: done half marker', '本文\n🟣 ━━ ［ 終　了', null],
   ['neg: wait marker followed by more body', '🟢 ━━ 入力待機中 ━━ 🟢\n追記です。まだ続きがあります', null],
   ['neg: work marker followed by body', '🔴 ━━ 【 作業中 】 ━━ 🔴\nその後の本文です', null],
   ['neg: prose 入力待機中です', '現在は入力待機中です。', null],
@@ -53,7 +91,7 @@ const cases = [
 let bad = 0;
 for (const [name, text, exp] of cases) { const r = markerOf(text); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
 // looksAsking: working marker must never ask; waiting marker must
-const asks = [['asks: wait', '本文\n🟢 ━━ 入力待機中 ━━ 🟢 ' + D, false, true], ['asks: work with question mark before', 'どちらにしますか？\n🔴 ━━ 【 作業中 】 ━━ 🔴', false, false], ['asks: plain', '進捗です', false, false]];
+const asks = [['asks: wait', '本文\n🟢 ━━ 入力待機中 ━━ 🟢 ' + D, false, true], ['asks: work with question mark before', 'どちらにしますか？\n🔴 ━━ 【 作業中 】 ━━ 🔴', false, false], ['asks: plain', '進捗です', false, false], ['asks: new wait', '本文\n🟢 ━━ 《 待機中 》 ━━ 🟢\n' + D, false, true], ['asks: done never asks', 'どうしますか？\n🟣 ━━ ［ 終　了 ］ ━━ 🟣\n' + D, false, false], ['asks: done with widget never asks', '本文\n🟣 ━━ ［ 終　了 ］ ━━ 🟣', true, false]];
 for (const [name, text, w, exp] of asks) { const r = looksAsking(text, w); const ok = r === exp; if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', name, '->', r); }
 console.log(`${cases.length + asks.length} cases, ${bad} failed`);
 process.exit(bad ? 1 : 0);

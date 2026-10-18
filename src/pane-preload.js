@@ -73,21 +73,23 @@ function geoRole(el, box) {
   return nearRight && farFromLeft && r.width < w * 0.8 ? 'user' : 'bot';
 }
 // MARK-BEGIN
-// Closing markers of the latest bot message. Text is whitespace-stripped; heavy bars -> '-'; bold/backticks/brackets are dropped.
-//   waiting (green): 🟢 ━━ 入力待機中(30|60) ━━ 🟢   and the older ◆ ━━ 入力待ち/出力待ち/入力待機中 ━━ ◆
-//   working (red)  : 🔴 ━━ 【 作業中 】 ━━ 🔴
+// Closing markers of the latest bot message. Text is whitespace-stripped (incl. full-width space); heavy bars -> '-'; bold/backticks/brackets are dropped.
+//   waiting (green) : 🟢 ━━ 《 待機中 》 ━━ 🟢   (+ 待機中30/60 follow-ups; old wordings 入力待機中 / 入力待ち / 出力待ち and the ◆ variants still count)
+//   done (purple)   : 🟣 ━━ ［ 終　了 ］ ━━ 🟣   (nothing left to do / phase finished)
+//   working (red)   : 🔴 ━━ 【 作業中 】 ━━ 🔴
 // Allowed after the marker (end of message only): --- rules, a ◆ yyyy-MM-dd hh:mm ◆ stamp (same line or separate lines).
-const normMark = t => String(t || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-').replace(/[*`_【】\[\]「」『』()（）]/g, '');
-const WAIT_CORE = '(?:◆-*(?:[入出]力待ち|入力待機中)(?:30|60)?-*◆|🟢-*入力待機中(?:30|60)?-*🟢)';
+const normMark = t => String(t || '').replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-').replace(/[*`_【】\[\]「」『』()（）《》〈〉［］｛｝{}<>]/g, '');
+const WAIT_CORE = '(?:◆-*(?:[入出]力待ち|(?:入力)?待機中)(?:30|60)?-*◆|🟢-*(?:入力)?待機中(?:30|60)?-*🟢)';
 const WORK_CORE = '🔴-*作業中-*🔴';
+const DONE_CORE = '🟣-*終了-*🟣';
 const MARK_TAIL = '(?:-+|◆[^◆]{0,40}◆)*';
-const WAIT_ANY = new RegExp(WAIT_CORE), WAIT_END = new RegExp(WAIT_CORE + MARK_TAIL + '$'), WORK_END = new RegExp(WORK_CORE + MARK_TAIL + '$');
-// -> 'wait' | 'work' | null, judged only at the very end (last ~300 chars) of the message
+const WAIT_ANY = new RegExp(WAIT_CORE), WAIT_END = new RegExp(WAIT_CORE + MARK_TAIL + '$'), WORK_END = new RegExp(WORK_CORE + MARK_TAIL + '$'), DONE_END = new RegExp(DONE_CORE + MARK_TAIL + '$');
+// -> 'wait' | 'work' | 'done' | null, judged only at the very end (last ~300 chars) of the message; the latest marker wins
 function markerOf(text) {
   const t = normMark(text).slice(-300);
-  const w = WAIT_END.exec(t), k = WORK_END.exec(t);
-  if (w && k) return k.index > w.index ? 'work' : 'wait';   // the later one wins
-  return w ? 'wait' : k ? 'work' : null;
+  let best = null, at = -1;
+  for (const [k, re] of [['wait', WAIT_END], ['work', WORK_END], ['done', DONE_END]]) { const m = re.exec(t); if (m && m.index > at) { at = m.index; best = k; } }
+  return best;
 }
 // MARK-END
 // ASK-BEGIN
@@ -96,7 +98,7 @@ function looksAsking(text, hasWidget) {
   const raw = String(text || '');
   const flat = raw.replace(/[\s\u3000]+/g, '').replace(/[ー－—–─━―]/g, '-');
   const mk = markerOf(raw);
-  if (mk === 'work') return false;       // latest marker says: still working
+  if (mk === 'work' || mk === 'done') return false;       // latest marker says: still working / finished (nothing to answer)
   if (mk === 'wait' || WAIT_ANY.test(flat.slice(-300))) return true;
   if (hasWidget) return true;
   const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
@@ -120,7 +122,7 @@ function scanMessages() {
     const mk = botSince > 0 ? markerOf(le.textContent) : null;
     // fingerprint of the latest entry (tail of its text) so the app can tell whether a sleeping pane got something new
     let h = 5381; const tail = t.slice(-400); for (let i = 0; i < tail.length; i++) h = ((h * 33) ^ tail.charCodeAt(i)) >>> 0;
-    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', asks: asks && mk !== 'work', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
+    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', done: mk === 'done', asks: asks && mk !== 'work' && mk !== 'done', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -146,11 +148,11 @@ function scanMessages() {
   }
   const lastEl = els[els.length - 1];
   const mk = lastEl && botSince > 0 ? markerOf(lastEl.textContent) : null, waiting = mk === 'wait';
-  return { user, bot, botSince, waiting, working: mk === 'work', asks: waiting, method };
+  return { user, bot, botSince, waiting, working: mk === 'work', done: mk === 'done', asks: waiting, method };
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}/${c.fp || ''}`;
+  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}`;
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -163,7 +165,7 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     const c = scanMessages();
     if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}/${c.fp || ''}`;
+      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.done}/${c.asks}/${c.fp || ''}`;
       if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     }
     return;
