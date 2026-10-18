@@ -35,9 +35,9 @@ mpb.onOthers(list => {
   othersEl.classList.toggle('show', has); othersSep.classList.toggle('show', has);
   if (!has) { othersEl.innerHTML = ''; return; }
   othersEl.innerHTML = list.map(w => `<span class="owin" title="ウィンドウ${w.n}">${w.n}</span>` + w.panes.map(p => {
-    const st = p.waiting ? 'waiting' : p.working ? 'working' : p.glow ? 'glow' : '';
+    const st = p.unopened ? 'unopened' : p.waiting ? 'waiting' : p.working ? 'working' : p.glow ? 'glow' : '';
     const ch = (Array.from(String(p.name || '•').trim())[0] || '•').toUpperCase();
-    const lab = p.waiting ? '入力待ち' : p.working ? '作業中' : '新着';
+    const lab = p.unopened ? '未開封の新着' : p.waiting ? '入力待ち' : p.working ? '作業中' : '新着';
     return `<button class="ochip ${st}" data-w="${w.wid}" data-p="${p.id}" title="ウィンドウ${w.n}: ${esc(p.name)}（${lab}${p.unread ? ' ' + p.unread : ''}）クリックで移動">` +
       `<span class="oc">${p.unread ? (p.unread > 99 ? '99' : p.unread) : esc(ch)}</span>${p.waiting ? '<span class="od"></span>' : p.working ? '<span class="od work"></span>' : ''}</button>`;
   }).join('')).join('');
@@ -74,7 +74,7 @@ function mk(id) {
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
   </div>
-  <div class="sleepph"><span>💤 スリープ中 — クリックで復帰</span><small>入力待機中のため休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
+  <div class="sleepph"><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><small>入力待機中のため休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
@@ -165,6 +165,7 @@ const onS = s => {
     c.classList.toggle('glow', p.glow);
     c.classList.toggle('waiting', !!p.waiting);
     c.classList.toggle('working', !!p.working);
+    c.classList.toggle('unopened', !!p.unopened);
     c.classList.toggle('colored', !!color);
     c.title = `${p.name || p.title}（ダブルクリックで名前変更・右クリックでメニュー）\n${p.url || '新しいペイン'}${p.muted ? '\n🔕 通知ミュート' : ''}`;
     const n = p.unread || 0;
@@ -172,8 +173,8 @@ const onS = s => {
     const first = (chars[0] || '•').toUpperCase();
     const lbl = shortLabel(chars.slice(1).join(''));
     const justCopied = (copied.get(p.id) || 0) > Date.now();
-    c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? '<span class="zz" title="スリープ中">💤</span>' : '') + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
+    c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}${p.unopened ? ' unop' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
+      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? '<span class="wdot" title="入力待ち（緑）"></span>' : p.working ? '<span class="wdot work" title="作業中（赤）"></span>' : '');
   });
 
   syncBtn(s);
@@ -199,6 +200,7 @@ const onS = s => {
     d.classList.toggle('unread', !!p.glow);
     d.classList.toggle('waiting', !!p.waiting);
     d.classList.toggle('working', !!p.working);
+    d.classList.toggle('unopened', !!p.unopened);
     d.classList.toggle('maxed', p.id === s.maximizedId);
     d.classList.toggle('sleeping', !!p.sleeping);
     { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `入力待機中にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
@@ -211,7 +213,7 @@ const onS = s => {
     const inp = d.querySelector('.url'); if (document.activeElement !== inp) inp.value = p.url;
     inp.placeholder = 'URL・検索語を入力（Grok BotのURLを貼り付けてもOK）';
     const meta = [];
-    if (p.sleeping) meta.push('<span title="スリープ中（クリックで復帰）">💤</span>');
+    if (p.sleeping) meta.push(p.unopened ? '<span title="スリープ中に新着メッセージ（未開封）— クリックで開く">💤✉ 未開封</span>' : '<span title="スリープ中（クリックで復帰）">💤</span>');
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
     if (p.zoomIndiv) meta.push(`<span class="zind" title="ズームは個別設定（全体ズームの影響を受けません）">🔍個別 ${Math.round(p.zoom * 100)}%</span>`);
@@ -221,7 +223,7 @@ const onS = s => {
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
     b.title = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
     b.classList.toggle('quiet', !p.glow);
-    b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working);
+    b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working); b.classList.toggle('unop', !!p.unopened);
     d.querySelector('[data-a=back]').disabled = !p.canBack;
     d.querySelector('[data-a=forward]').disabled = !p.canForward;
     d.querySelector('[data-a=maximize]').textContent = p.id === s.maximizedId ? '⤡' : '⤢';

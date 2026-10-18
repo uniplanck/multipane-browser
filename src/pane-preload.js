@@ -118,7 +118,9 @@ function scanMessages() {
     const widget = !!le.querySelector('[role="radio"],[role="radiogroup"],[role="option"],[role="listbox"],[role="checkbox"],input[type="radio"],input[type="checkbox"]');
     const asks = botSince > 0 && looksAsking(le.innerText || le.textContent, widget);
     const mk = botSince > 0 ? markerOf(le.textContent) : null;
-    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', asks: asks && mk !== 'work', method: 'bot-entry' };
+    // fingerprint of the latest entry (tail of its text) so the app can tell whether a sleeping pane got something new
+    let h = 5381; const tail = t.slice(-400); for (let i = 0; i < tail.length; i++) h = ((h * 33) ^ tail.charCodeAt(i)) >>> 0;
+    return { user, bot, botSince, waiting: mk === 'wait', working: mk === 'work', asks: asks && mk !== 'work', method: 'bot-entry', fp: h.toString(36) + '.' + t.length };
   }
   let els = [...document.querySelectorAll(MSG_SEL)].filter(e => (e.textContent || '').trim() || e.querySelector('img,video'));
   els = els.filter(e => !els.some(o => o !== e && o.contains(e)));  // outermost only => one per message
@@ -148,7 +150,7 @@ function scanMessages() {
 }
 let lastSent = null, pendingKey = null;
 function sendCount(c) {
-  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}`;
+  const key = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}/${c.fp || ''}`;
   if (key === lastSent) return;
   lastSent = key;
   ipcRenderer.send('pane:msgcount', c);
@@ -161,7 +163,7 @@ function check() {
     // (streaming, re-renders and question cards were causing phantom '1's).
     const c = scanMessages();
     if (c) {
-      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}`;
+      const k = `${c.user}/${c.bot}/${c.botSince}/${c.waiting}/${c.working}/${c.asks}/${c.fp || ''}`;
       if (k === pendingKey) sendCount(c); else { pendingKey = k; if (!timer) timer = setTimeout(check, 1200); }
     }
     return;

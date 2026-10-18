@@ -218,3 +218,17 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .pane.sleeping .sleepph{display:flex}
 .pane.sleeping .sleepph:hover{color:var(--text)}
 .chip .zz{font-size:9px;margin-left:2px;opacity:.8}
+
+/* unopened = a sleeping pane got a new bot message (found by the background check). Cyan, distinct from green / red / orange / grey */
+:root{--unop:#32d4f5}
+.pane.unopened,.pane.unopened.waiting,.pane.unopened.working{outline:2px solid var(--unop);box-shadow:0 0 0 1px var(--unop),0 0 18px color-mix(in srgb,var(--unop) 55%,transparent);animation:none}
+.pane.unopened .head{background:linear-gradient(90deg,color-mix(in srgb,var(--unop) 26%,var(--head)),var(--head) 70%)}
+.pane .sleepph .sp2{display:none;color:var(--unop)}
+.pane.unopened .sleepph .sp1{display:none}
+.pane.unopened .sleepph .sp2{display:block}
+.pane.unopened .sleepph{color:var(--unop)}
+.chip.unopened{border-color:color-mix(in srgb,var(--unop) 70%,transparent);background:color-mix(in srgb,var(--unop) 16%,transparent);color:var(--text)}
+.chip.unopened .cicon.ccount,.chip .cicon.ccount.unop{background:var(--unop);color:#04323d}
+.ochip.unopened{border-color:color-mix(in srgb,var(--unop) 70%,transparent);background:color-mix(in srgb,var(--unop) 16%,transparent);color:var(--text)}
+.ochip.unopened .oc{background:var(--unop);color:#04323d}
+.badge.unop{background:var(--unop);color:#04323d}

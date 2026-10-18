@@ -162,6 +162,12 @@ function syncColsApply(on) {
 }
 
 setInterval(() => ctxs.forEach(c => { try { c.sleepTick(); } catch {} }), 30000);
+setInterval(async () => {                                    // one background check at a time, never while the Mac sleeps / is locked
+  if (probeBusy || sysBlocked || Date.now() - resumeAt < 20000) { if (debugOn() && Date.now() - probeDbgAt > 60000) { probeDbgAt = Date.now(); dlog('probe tick skipped:', probeBusy ? 'busy' : sysBlocked ? 'system asleep/locked' : 'just resumed'); } return; }
+  probeBusy = true; if (debugOn()) dlog('probe tick');
+  try { for (const c of ctxs) if (await c.probeNext()) break; } catch (e) { dlog('probe tick error', String(e)); }
+  probeBusy = false;
+}, 15000);
 // ---- app memory meter (top-left) ----
 // Sum of every Electron process. On macOS privateBytes ~ the process "footprint", which is what Activity Monitor's Memory column shows.
 // Sent every 2.5 s to visible windows, and only while the app is focused (zero work in the background).
@@ -242,6 +248,13 @@ function guardNavigation(wc) {
     e.preventDefault(); openExt(url, 'external-browser (same-frame link)');
   });
 }
+
+// ---- background check of sleeping panes (new bot message while asleep => "unopened") ----
+const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
+const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
+let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
+const probeCbs = new Map();                                  // probe webContents id -> callback(msgcount)
+ipcMain.on('pane:msgcount', (e, c) => { const cb = probeCbs.get(e.sender.id); if (cb && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) cb({ user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' }); });
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -452,7 +465,7 @@ function sendState(cs = cells()) {
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.unopened, sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
     }),
   };
   win.webContents.send('state', state);
@@ -497,12 +510,14 @@ function lightUp(p, reason, always = false) {
   const first = !p.glow || always;
   p.glow = true;
   updateBadge(); sendState();
-  if (first && settings.notifications && !p.muted && Notification.isSupported()) {
-    const n = new Notification({ title: p.name || displayTitle(p), body: p.msgMode ? (p.waiting ? `入力待ち（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります', silent: false });
-    n.on('click', () => { if (win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.show(); app.focus({ steal: true }); win.focus(); const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); });
-    dlog(`pane${p.id}`, 'notify', p.unread);
-    n.show();
-  }
+  if (first && settings.notifications && !p.muted) showPaneNotification(p, p.msgMode ? (p.waiting ? `入力待ち（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります');
+}
+function showPaneNotification(p, body) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title: p.name || displayTitle(p), body, silent: false });
+  n.on('click', () => { if (win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.show(); app.focus({ steal: true }); win.focus(); const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); });
+  dlog(`pane${p.id}`, 'notify', p.unread);
+  n.show();
 }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
 function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.needsReply; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; if (had) { updateBadge(); sendState(); } }
@@ -702,7 +717,7 @@ function onGrokLoad(p) {
 // (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
 async function reloadPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
-  if (p.sleeping) { p.sleeping = false; p.sleepSnap = null; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep
+  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); abortProbe(p); p.sleeping = false; p.sleepSnap = null; p.sleepFp = undefined; p.unopened = false; p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep (clears 'unopened')
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
   const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
@@ -758,13 +773,89 @@ function canSleep(p, i, force) {
 function sleepPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
-  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null;
+  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.unopened = false; p.lastCheck = 0;
+  const lm = p.lastMsg;                                      // what the pane showed when it fell asleep: the background check compares against this
+  p.sleepFp = lm ? { user: lm.user, bot: lm.bot, botSince: lm.botSince, fp: lm.fp || '', waiting: !!lm.waiting, working: !!lm.working, asks: !!lm.asks } : null;
+  if (process.env.MPB_FAKE_FP && p.sleepFp) p.sleepFp.fp = 'fake';   // dev only: force the next check to see a change
   dlog(`pane${p.id}`, 'sleep', paneUrl(p));
   p.view.setVisible(false);
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
   applyThrottling(); sendState(); save();
 }
 function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) sleepPane(p); }); }
+
+// Background check: a temporary hidden window (same session / preload) opens the stored bot URL, the preload reports the same stable
+// message scan it gives a live pane, then the view is destroyed again (the pane stays asleep). Changed fingerprint => 'unopened'.
+let probe = null, lastReloadAll = 0;
+function abortProbe(p) { if (probe && (!p || probe.p === p)) probe.abort = true; }
+function probeSelect() {
+  const now = Date.now();
+  if (settings.sleepCheck === false || !win || win.isDestroyed() || quitting) return null;
+  const dbg = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at2 || 0) > 60000) { probeSelect.at2 = now; dlog('probe: no check now -', r); } };
+  const hold = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at || 0) > 60000) { probeSelect.at = now; dlog('probe held:', r); } return null; };
+  if (loadQ.length || now - lastReloadAll < 30000) return hold('startup / reload-all');                      // startup / reload-all in progress
+  { const busy = panes.find(q => !q.sleeping && (q.grokToken || q.grokPending || (q.loadStartedAt && !q.loadDone) || now - (q.loadedAt || 0) < 15000)); if (busy) return hold(`pane${busy.id} still loading`); }
+  let best = null;
+  panes.forEach((q, i) => {
+    if (!q.sleeping || q.view.webContents.isDestroyed() || i === focused || maximizedId === q.id) return;
+    const due = Math.max(q.lastCheck || 0, q.sleepAt || 0) + SLEEP_CHECK_MS;
+    if (due <= now && (!best || due < best.due)) best = { q, due };
+  });
+  if (!best) dbg('none due (' + panes.filter(q => q.sleeping).map(q => `pane${q.id}:${Math.round((Math.max(q.lastCheck || 0, q.sleepAt || 0) + SLEEP_CHECK_MS - now) / 1000)}s`).join(' ') + `, focused=${panes[focused]?.id})`);
+  return best && best.q;
+}
+async function probeNext() { const q = probeSelect(); if (!q) return false; await probePane(q); return true; }
+async function probePane(p) {
+  const target = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
+  const id = target && target.match(GROK_BOT_RE)?.[1];
+  p.lastCheck = Date.now();
+  if (!id) return;
+  const t0 = Date.now(), m0 = debugOn() ? appMemBytes() : 0; let peak = m0;
+  const bw = new BrowserWindow({ show: false, width: 1000, height: 720, skipTaskbar: true, focusable: false, webPreferences: {      // hidden window: same session, same preload, own 1000x720 viewport
+    preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
+  const wc = bw.webContents, pr = probe = { p, abort: false };
+  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout';
+  probeCbs.set(wc.id, c => { last = c; lastAt = Date.now(); });
+  try {
+    wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.loadURL(target).catch(() => {});
+    while (Date.now() - t0 < PROBE_MAX_MS) {
+      await sleep(400);
+      if (pr.abort || wc.isDestroyed() || !p.sleeping || quitting) { why = 'abort'; last = null; break; }
+      if (debugOn()) peak = Math.max(peak, appMemBytes());
+      if (last && Date.now() - lastAt > 2500) { why = 'ok'; break; }                  // stable count, no change for 2.5 s
+      if (last) continue;
+      if (!/^https:\/\/grok\.com\//.test(wc.getURL()) && !wc.isLoading()) { why = 'offsite'; break; }   // login redirect etc.
+      const r = await grokProbe(wc, id);
+      if (r === 'notfound') { why = 'notfound'; break; }
+      if (r === 'rendered') continue;                                                  // chat is up: wait for the preload's stable scan
+      if (r === 'clicked') { lastPush = Date.now(); continue; }                          // clicked the sidebar link: give it a moment
+      // recovery like a live pane (direct loads of /bot/<id> often stay black): in-site router hops (patient: one every 4 s), one hard reload late
+      if (pushes >= 3 && hard < 1 && Date.now() - lastPush > 4000 && Date.now() - t0 > 14000) { hard++; pushes = 0; lastPush = Date.now(); wc.loadURL(target).catch(() => {}); continue; }
+      if (pushes < 3 && Date.now() - lastPush > 4000 && Date.now() - t0 > 1500) {
+        const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
+          if (r && typeof r.push === 'function') { r.push('/'); setTimeout(() => r.push(${JSON.stringify('/bot/' + id)}), 350); return 'ok'; } return 'no'; })()`).catch(() => 'no');
+        if (rr === 'ok') { lastPush = Date.now(); pushes++; }
+      }
+    }
+  } catch (e) { dlog(`pane${p.id}`, 'probe error', String(e)); }
+  finally {
+    probeCbs.delete(wc.id); probe = null;
+    try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
+  }
+  const ms = Date.now() - t0;
+  if (!last || !p.sleeping) { dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
+  const old = p.sleepFp, nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, asks: last.asks };
+  const changed = !!old && (old.fp !== nf.fp || old.user !== nf.user || old.bot !== nf.bot);
+  dlog(`pane${p.id}`, 'probe', why, ms + 'ms', changed ? 'CHANGED' : (old ? 'same' : 'baseline'), `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
+  p.sleepFp = nf;
+  if (!changed || nf.botSince === 0) return;                                              // nothing new, or the user spoke last
+  p.unopened = true; p.msgMode = true; p.glow = false;
+  p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting;
+  p.needsReply = !!(nf.asks || nf.waiting) && !nf.working;
+  updateBadge(); sendState();
+  if (p.needsReply && settings.notifications && !p.muted && canAlert(p)) showPaneNotification(p, `未開封の新着（入力待ち ${p.unread}件）`);
+}
 
 // ---- panes ----
 // Startup / workspace loads are staggered: focused pane first, then the rest with at most LOAD_CONC loading at a time
@@ -843,7 +934,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     onGrokLoad(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
-  wc.on('focus', () => setFocused(panes.indexOf(p)));
+  wc.on('focus', () => { if (!p.sleeping) setFocused(panes.indexOf(p)); });   // a hidden sleeping view can fire a stray focus event right after it is hidden: that must not wake it
   wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && !input.meta && !input.control) clearUnread(p); if (handleKey(input, p)) e.preventDefault(); });
   wc.on('context-menu', (e, params) => {
     const items = [];
@@ -1144,7 +1235,7 @@ function wsMenu() {
 // Panes are already warm (cookies / cache), so 8 in parallel is fine; reloadPane clears all retry state and the CPU throttle
 // stays off while reloading (applyThrottling re-enables it once a pane has been settled for 3 s).
 function reloadAll() {
-  loadQ.length = 0;
+  loadQ.length = 0; lastReloadAll = Date.now(); abortProbe();
   for (const p of [...panes]) {
     if (p.view.webContents.isDestroyed()) continue;
     reloadPane(p).catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e)));
@@ -1238,7 +1329,7 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 // from web content (pane-preload): only trusted when the sender is one of our panes
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
-  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, method: String(c.method).slice(0, 40) });
+  if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, asks: c.asks === true, method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
 });
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
@@ -1285,12 +1376,12 @@ function snapshot() {
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
-  sleepTick, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   othersInfo(n) {
-    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.glow || p.unread).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
-      waiting: !!p.waiting, working: !!p.working, glow: !!p.glow, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
+    return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.glow || p.unread || p.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
+      waiting: !!p.waiting, working: !!p.working, glow: !!p.glow, unopened: !!p.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
   } };
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
@@ -1396,6 +1487,7 @@ function buildMenu() {
             .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
         } })) },
       { label: '入力待機中（🟢）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
+      { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: 'grok.com/bot を開き直す補正（直接読み込みで真っ黒になる対策）', type: 'checkbox', checked: settings.grokFix, click: m => { settings.grokFix = m.checked; save(); } },
@@ -1459,7 +1551,9 @@ function startup() {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 app.userAgentFallback = chromeUA();
 app.whenReady().then(() => {
-  const { session } = require('electron');
+  const { session, powerMonitor } = require('electron');
+  powerMonitor.on('suspend', () => { sysBlocked = true; }); powerMonitor.on('lock-screen', () => { sysBlocked = true; });
+  powerMonitor.on('resume', () => { sysBlocked = false; resumeAt = Date.now(); }); powerMonitor.on('unlock-screen', () => { sysBlocked = false; resumeAt = Date.now(); });
   session.defaultSession.setUserAgent(chromeUA());
   const allowed = new Set(['notifications', 'clipboard-sanitized-write', 'clipboard-read', 'fullscreen', 'media', 'storage-access', 'top-level-storage-access', 'persistent-storage']);
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => { dlog('permission', perm, allowed.has(perm) ? 'allow' : 'deny'); cb(allowed.has(perm)); });
