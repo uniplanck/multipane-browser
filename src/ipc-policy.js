@@ -106,6 +106,7 @@ const CHANNELS = {
   back: { roles: CHROME, ...P1 }, forward: { roles: CHROME, ...P1 }, 'copy-pane-url': { roles: CHROME, ...P1 },
   reload: { roles: CHROME, ...P1 }, close: { roles: CHROME, ...P1 }, 'focus-pane': { roles: CHROME, ...P1 }, 'activate-pane': { roles: CHROME, ...P1 },
   maximize: { roles: CHROME, ...P1 }, 'sleep-toggle': { roles: CHROME, ...P1 }, 'wake-pane': { roles: CHROME, ...P1 }, 'sleep-now': { roles: CHROME, ...P1 },
+  'load-cancel': { roles: CHROME, ...P1 },                    // 取消 on a pane waiting for a load slot (#31)
   'pane-menu': { roles: CHROME, ...P1 }, 'chip-menu': { roles: CHROME, ...P1 }, 'rename-pane': { roles: CHROME, ...P1 },
   'set-reload': { roles: CHROME, shape: a => id(a[0]) && RELOAD_CHOICES.includes(a[1]), target: P1.target },
   swap: { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.pane(a[0]) && w.pane(a[1]) },

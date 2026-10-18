@@ -77,8 +77,12 @@ function mk(id) {
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
   </div>
-  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><blockquote class="sleepq"></blockquote><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>`;
+  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
+  <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは2枚まで。順番が来ると自動で読み込みます</small></div>`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
+  d.querySelector('.loadph').onclick = () => { if (d.classList.contains('idle')) mpb.wakePane(id); };
+  // 取消 of a pane waiting for a load slot (placeholder / sleeping placeholder / header): only the wait ends, the click goes nowhere else
+  d.addEventListener('click', e => { if (e.target.closest('.lqx')) { e.stopPropagation(); mpb.loadCancel(id); } }, true);
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
   head.onmousedown = e => { if (!e.target.closest('button,input')) mpb.focusPane(id); };
@@ -216,6 +220,9 @@ const onS = s => {
     d.classList.toggle('unopened', !!p.unopened);
     d.classList.toggle('maxed', p.id === s.maximizedId);
     d.classList.toggle('sleeping', !!p.sleeping);
+    const lqWait = p.lq === 'wait';                                 // waiting for a load slot (#31); held: nothing to show yet, the placeholder instead of the page
+    d.classList.toggle('lqwait', lqWait); d.classList.toggle('held', !!p.held); d.classList.toggle('idle', !!p.idle);
+    d.querySelectorAll('.lpn').forEach(b => { b.textContent = lqWait && p.lqPos ? `（${p.lqPos}番目）` : ''; });
     const lastOnly = p.obs === 'last' && !!(p.waiting || p.working || p.done);
     d.classList.toggle('stale', lastOnly);
     { const sn = d.querySelector('.sleepid .sn'), sg = d.querySelector('.sleepid .sg'); sn.textContent = p.sname || ''; sg.textContent = p.sgroup || ''; sg.style.display = p.sgroup ? '' : 'none'; }
@@ -231,6 +238,7 @@ const onS = s => {
     inp.placeholder = 'URL・検索語を入力（Grok BotのURLを貼り付けてもOK）';
     const meta = [];
     if (p.sleeping) meta.push(p.unopened ? '<span title="スリープ中に新着メッセージ（未開封）— クリックで開く">💤✉ 未開封</span>' : '<span title="スリープ中（クリックで復帰）">💤</span>');
+    if (lqWait && !p.held && !p.sleeping) meta.push(`<span class="lqw" title="同時に読み込むのは2枚まで。順番が来ると自動で読み込みます（それまで表示中のページはそのまま）">⏳ 読み込み待ち${p.lqPos ? ` ${p.lqPos}番目` : ''}</span><button class="lqx" title="この読み込み待ちを取り消す">取消</button>`);
     if (lastOnly) meta.push('<span class="lastok" title="表示中の待機中・作業中・終了は最後に確認できた状態です（再読み込み・移動・返信の生成中などで、今の状態はまだ確認できていません）。確認できるまで自動スリープしません">最終確認</span>');
     if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
     if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);

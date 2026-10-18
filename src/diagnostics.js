@@ -42,6 +42,9 @@ const GEN_CODES = ['CLOSED', 'OTHER_PANE', 'NO_TOKEN', 'STALE_GEN', 'STALE_SEQ',
 // input guard (#11, draft-guard.js; checked by the test): why an automatic operation was refused / why a confirmation no longer held
 const GUARD_AUTO_CODES = ['PRESENT', 'ATTACH', 'UPLOAD', 'IME', 'UNKNOWN', 'BUSY', 'CHANGED', 'STALE'];
 const GUARD_EXPIRE_CODES = ['GONE', 'NEW', 'CHANGED', 'STALE', 'PANE', 'INPUT'];
+// shared load queue (#31, load-queue.js CODES; checked by test/load-queue.test.js): queued / merged / replaced / a check stopped for the user's load,
+// how a load ended (settled / released at the cap / stopped after a cancel / view gone / input check refused / error) and why it was cancelled
+const LOAD_CODES = ['WAIT', 'MERGED', 'SUPERSEDED', 'PREEMPT', 'DONE', 'CAP', 'STOPPED', 'GONE', 'GUARD', 'ERROR', 'USER', 'CLOSED', 'URL', 'WINDOW', 'ABORT'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -67,6 +70,7 @@ const EVENTS = {
   grokfix: { ja: 'Bot表示の補正', r: ['FAST_RENDERED', 'FAST_NOTFOUND', 'HARD_RELOAD', 'OK_ROUTER', 'OK_CLICK', 'RENDERED', 'NOTFOUND', 'FALLBACK_HOME', 'GAVE_UP'] },
   reload: { ja: '再読み込み', r: ['PLAIN', 'BLANK_LOAD', 'ROUTER_OK', 'ROUTER_MISS', 'HARD_LOAD'] },
   watchdog: { ja: '真っ白なBotの再読込', r: ['RELOAD'] },
+  'load.queue': { ja: '読み込みの順番待ち', r: LOAD_CODES },
   probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR'] },
   sleep: { ja: 'スリープ', r: ['SLEPT', 'WAKE'] },
   draft: { ja: '操作前の入力欄の確認', r: ['EMPTY', 'PRESENT', 'NOINPUT'] },
@@ -332,5 +336,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

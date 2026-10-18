@@ -314,6 +314,45 @@ const nextNo = () => ++worldNo;
 // the composer live and the guard decides: automatic operations only when the page clearly holds nothing, manual ones ask (makeWindow: guardRun)
 const GUARD = require('./draft-guard');
 const { COMPOSER_JS } = require('./pane-rules');             // composerState() from the shared rules: the same code the pane preload has built in
+// ---- shared load queue (#31, load-queue.js): every load main starts - startup / workspace, a new pane, reload / reload-all / automatic reloads,
+// wake, another URL / back / forward / a grok link in the pane, the bot-page fixes and the background check - waits for one of LQ.LIMIT slots in
+// all windows (a background check takes at most one). The user's own wake / reload / URL first, then startup / reload-all / automatic reloads,
+// background checks last; the focused pane first within a class. A task keeps its slot until its load has settled, or - cancelled (pane closed,
+// window closed, 取消, the new-tab page) - until the load has really stopped / its view or check window is gone (lqPoll / probePane).
+// Not loads of a pane, never waiting: the local new-tab page, a sleep's about:blank (an unload; canSleep refuses while the pane has a task) and
+// the 承認Bot popup. Memory only.
+const LQ = require('./load-queue');
+const lqRuns = new Map();                                    // running / stopping view load: task id -> { t, p, wc, t0, began, resolve }
+let lqUiTimer = null, lqPollTimer = null;
+const lq = LQ.createLoadQueue({ nextId: nextNo, limit: Number(process.env.MPB_LOAD_CONC) > 0 ? Number(process.env.MPB_LOAD_CONC) : LQ.LIMIT,   // dev override: MPB_LOAD_CONC
+  rank: t => t.data && t.data.rank ? t.data.rank() : 1, onChange: lqChanged });
+function lqChanged(e) {                                      // fixed codes, the pane's per-launch number and ms only
+  const no = e.t.data && e.t.data.no;
+  if (e.type === 'wait') diag.rec('load.queue', 'WAIT', { p: no, n: lq.stats().wait }, 60000);
+  else if (e.type === 'merge') diag.rec('load.queue', 'MERGED', { p: no }, 60000);
+  else if (e.type === 'stop' && e.code === 'PREEMPT') diag.rec('load.queue', 'PREEMPT', { p: no });
+  else if (e.type === 'end') diag.rec('load.queue', e.code, { p: no, ms: Date.now() - e.t.at });
+  if (debugOn() && e.type !== 'start') dlog(`pane${no || '-'}`, 'load', e.t.purpose, e.t.cls, e.type, e.code || '', `run=${lq.stats().used}`);
+  if (lqUiTimer) return;                                     // the windows show wait / start / end (placeholder, header) a moment later, once per burst
+  lqUiTimer = setTimeout(() => { lqUiTimer = null; ctxs.forEach(c => { try { c.showViews(); } catch {} }); }, 30);
+}
+// running view loads: settled -> the slot goes back; cancelled -> once the load has stopped / the view is gone. Polled while there are any
+function lqPoll() {
+  for (const run of [...lqRuns.values()]) {
+    const { t, p, wc } = run;
+    if (t.state === 'end') { lqRuns.delete(t.id); continue; }
+    const gone = wc.isDestroyed();
+    if (t.state === 'stop') { if (gone || !wc.isLoading()) lqEnd(run, 'STOPPED'); continue; }
+    if (!run.began) continue;                                // still reading the input right before it starts
+    if (gone) { lqEnd(run, 'GONE'); continue; }
+    const code = LQ.settle({ now: Date.now(), t0: run.t0, quiet: p.loadedAt, loading: wc.isLoading(), fixing: !!(p.grokToken || p.grokPending) });
+    if (code === 'STOP') { if (!run.hard) { run.hard = true; dlog(`pane${p.id}`, 'load still going after', LQ.HARD_MS, 'ms: stopped'); } try { wc.stop(); } catch {} }   // given back once it has stopped
+    else if (code) lqEnd(run, code);
+  }
+  if (!lqRuns.size) { clearInterval(lqPollTimer); lqPollTimer = null; }
+}
+const lqPollOn = () => { if (!lqPollTimer) lqPollTimer = setInterval(lqPoll, 300); };
+function lqEnd(run, code) { lqRuns.delete(run.t.id); run.resolve(code); }   // -> the task's promise: the queue gives the slot back
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -444,7 +483,7 @@ function relayout(animate = false) {
   const targets = cs.map(c => c && viewRect(c));
   panes.forEach((p, i) => {
     const t = targets[i];
-    p.view.setVisible(!!t && !p.sleeping);
+    p.view.setVisible(!!t && !p.sleeping && !viewHeld(p));
     if (!t) return;
     if (!animate || !p.bounds) { p.view.setBounds(t); p.bounds = t; }
   });
@@ -523,8 +562,9 @@ function sendState(cs = cells()) {
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
     canReopen: closedStack.length > 0 && panes.length < MAX, globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(),
     panes: panes.map((p, i) => {
-      const wc = p.view.webContents;
+      const wc = p.view.webContents, lt = lqView(p);              // its load in the queue (#31): waiting (with its place) / running
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
+        lq: lt ? lt.state : '', lqPos: lt && lt.state === 'wait' ? lq.position(lt.id) : 0, held: viewHeld(p), idle: !!p.loadIdle && !lt,
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
         sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
@@ -594,6 +634,7 @@ function markActivity(p, reason) {
 // and never grounds an automatic action; name / quote / draft are judged on their own and do not affect the other items.
 const { snapOk, snapUsable, snapIssue } = require('./pane-rules');
 const botIdOf = u => (String(u || '').match(/^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)/) || [])[1] || '';   // = the preload's snap.cid for the same path
+const sameTarget = (a, b) => { const x = botIdOf(a), y = botIdOf(b); return x || y ? x === y : String(a).split('#')[0] === String(b).split('#')[0]; };   // the same bot / page (#31)
 // ---- generations (#02, pane-state.js): main owns the pane entity (p.obs.ent), its world generation and the background-check run ----
 // A load / reload / URL change / SPA move / sleep / wake / renderer gone starts a new generation and the page gets its number (mpb:gen, again on
 // dom-ready); a report counts only within the generation it was stamped with. p.obs is never saved.
@@ -719,7 +760,7 @@ async function grokFix(p, target, id, viaHome) {
       // the router hop keeps missing: start over with a fresh load of the bot URL (bounded) instead of pushing forever
       p.hardTries = (p.hardTries || 0) + 1; p.grokToken = null;
       dlog(`pane${p.id}`, 'grokfix: hop failed twice -> hard reload', p.hardTries); diag.rec('grokfix', 'HARD_RELOAD', { p: p.id, ms: Date.now() - t0, n: p.hardTries });
-      wc.loadURL(target).catch(() => {}); return;
+      fixLoad(p, target); return;
     }
     if (pushes < 6 && Date.now() - lastPush > PUSH_GAP && Date.now() - t0 > PUSH_FIRST) {
       const rr = await wc.executeJavaScript(`(() => { const r = window.next && window.next.router;
@@ -763,8 +804,7 @@ async function grokFix(p, target, id, viaHome) {
   p.grokToken = null; p.loadedAt = Date.now(); applyThrottling();
   if (!viaHome) {                                  // fallback: go home, then click the bot link
     dlog(`pane${p.id}`, 'grokfix fallback: load grok.com/ then navigate'); diag.rec('grokfix', 'FALLBACK_HOME', { p: p.id, ms: Date.now() - t0 });
-    p.grokPending = { target, id };
-    wc.loadURL('https://grok.com/').catch(() => {});
+    fixLoad(p, 'https://grok.com/', { target, id });
   } else {
     dlog(`pane${p.id}`, 'grokfix gave up; leaving page as is', target); diag.rec('grokfix', 'GAVE_UP', { p: p.id, ms: Date.now() - t0 });
   }
@@ -778,8 +818,8 @@ setInterval(async () => {
   for (const c of ctxs) for (const p of c.panes) {
     try {
       const wc = p.view.webContents;
-      if (wc.isDestroyed() || p.sleeping || p.grokToken || p.grokPending || wc.isLoading() || (p.loadStartedAt && !p.loadDone) || !settings.grokFix) continue;
-      if (loadQ.includes(p)) continue;                                  // still queued at startup: about:blank is expected
+      if (wc.isDestroyed() || p.sleeping || p.grokToken || p.grokPending || wc.isLoading() || !settings.grokFix) continue;
+      if (lqView(p, false) || p.loadIdle) continue;                     // waiting / loading in the queue, or its wait was cancelled (取消): about:blank is expected
       const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
       const own = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);   // the pane's own bot link
       const id = m ? m[1] : (own && (isBlankUrl(cu) || cu.startsWith('https://grok.com')) ? (own.match(GROK_BOT_RE) || [])[1] : null);
@@ -790,7 +830,7 @@ setInterval(async () => {
       if (!autoGate(p, await liveInput(p), 'watchdog')) continue;   // #11: a page that holds input is never reloaded by itself (tried again later)
       p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now();
       dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries); diag.rec('watchdog', 'RELOAD', { p: p.id, n: p.wdTries });
-      reloadPane(p);
+      reloadPane(p, 'BULK');
     } catch {}
   }
 }, 10000);
@@ -810,14 +850,19 @@ function onGrokLoad(p) {
 
 // Reload that works for grok.com/bot/<id>: cancel any pending retry / 'gave up' state, hop via the in-site router at once
 // (hard-load the URL if the router isn't ready within ~1 s), then let grokFix verify / retry. Other pages: plain reload.
-async function reloadPane(p) {
+// (#31) A pane's reload / wake is a task of the shared load queue (cls USER: the user's own, BULK: reload-all / automatic reloads); the body below
+// runs once that task has its slot (task). A sleeping pane stays asleep - its placeholder says it waits - until then. The 承認Bot popup: at once.
+async function reloadPane(p, cls = 'USER', task = null) {
   const wc = p.view.webContents; if (wc.isDestroyed()) return;
-  if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; if (p.obs) obsDo(p, { type: 'wake', gen: nextNo() }); p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep: a new generation, ends the sleep's check / baseline, clears 'unopened'
+  if (p.obs && !task) {
+    if (p.sleeping) { if (debugOn()) dlog(`pane${p.id}`, 'wake from', new Error().stack.split('\n').slice(2, 5).map(l => l.trim().replace(/\(.*[\/]/, '(')).join(' < ')); abortProbe(p); }   // waking ends the sleep's check now
+    viewLoad(p, p.sleeping ? 'WAKE' : 'RELOAD', cls, paneUrl(p), t => reloadPane(p, cls, t));
+    return;
+  }
+  if (p.sleeping) { diag.rec('sleep', 'WAKE', { p: p.id, ms: Date.now() - (p.sleepAt || Date.now()) }); abortProbe(p); p.sleeping = false; p.sleepSnap = null; if (p.obs) obsDo(p, { type: 'wake', gen: nextNo() }); p.lastInteract = Date.now(); relayout(); sendState(); }   // wake from sleep: a new generation, ends the sleep's check / baseline, clears 'unopened'
   else newGen(p, 'RELOAD');                                  // reports scanned before this reload no longer count
   p.lastReload = Date.now();
   p.grokPending = null; p.grokSkipOnce = false; p.hardTries = 0; p.wdTries = 0; p.wdAt = 0;       // forget every 'gave up' / retry counter
-  const qi = loadQ.indexOf(p); if (qi >= 0) loadQ.splice(qi, 1);                                // not waiting in the startup queue any more
-  p.loadStartedAt = 0; p.loadDone = true;
   const cu = wc.getURL(), m = cu.match(GROK_BOT_RE);
   const remembered = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
   const target = m ? cu : (remembered && (!cu || /^(?:about:blank|chrome-error:|https:\/\/grok\.com\/)/.test(cu)) ? remembered : null);   // a pane that gave up sits on grok.com home: use its remembered bot link
@@ -867,7 +912,8 @@ function canSleep(p, i, force) {
   if (!force && (settings.sleepWaiting === false || p.sleepOn === false)) return false;
   if (!(p.waiting || p.done) || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
-  if (!force && p.hasDraft) return false;                    // typed text / pending attachment in the composer
+  if (lqView(p, false)) return false;                        // a load of it waits / runs in the queue (#31)
+  if (!force && p.hasDraft) return false;                   // typed text / pending attachment in the composer
   if (!force && !(snapUsable(p.snap) && p.snap.cid === botIdOf(wc.getURL()))) return false;   // the latest scan of this very conversation must be sure: unknown / stale never puts a pane to sleep
   if (!force && !PS.sleepOk(p.obs)) return false;            // ...and of this very generation (#02): after a reload / URL or SPA move, a new turn, a reply being written or loading, an old 🟢 / 🟣 does not count
   if (!force) { const d = sleepDelay(p); if (d == null || Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < d) return false; }   // waitSince = when 待機中 / 終了 was first detected
@@ -881,7 +927,7 @@ function sleepPane(p) {
   obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
-  wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
+  wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget); an unload: no queue slot (#31)
   applyThrottling(); sendState(); save();
 }
 // ---- input guard (#11, draft-guard.js) ----
@@ -920,8 +966,8 @@ async function autoReload(p) {                                 // the per-pane �
   if (p.autoChecking) return; p.autoChecking = true;
   try {
     const r = await liveInput(p);
-    if (!autoGate(p, r, 'reload') || !panes.includes(p) || p.editing || p.view.webContents.isLoading()) return;
-    p.lastReload = Date.now(); reloadPane(p);
+    if (!autoGate(p, r, 'reload') || !panes.includes(p) || p.editing || p.view.webContents.isLoading() || lqView(p, false)) return;   // a load of it already queued / running: next tick
+    p.lastReload = Date.now(); reloadPane(p, 'BULK');
   } finally { p.autoChecking = false; }
 }
 // Manual operations that throw pages away. targets() = the panes it would drop right now (asked again right before acting), run(list) does it.
@@ -960,8 +1006,9 @@ async function guardOnce(op, targets, run, { skip = false } = {}) {
     const why = GUARD.unmoved(last, cur.map(p => ({ id: p.id, stamp: inStamp(p) })));   // right before acting: the same panes, nothing moved since read
     if (why) { diag.rec('guard.ask', why, { n: cur.length }); dlog('guard', op, 'changed before acting:', why); back(); return; }
     if (pl.ask.length) diag.rec('guard.ask', 'GO', { n: pl.ask.length });
+    cur.forEach(p => { const x = pl.ask.some(a => a.id === p.id) && last.find(y => y.id === p.id); p.guardOk = x ? x.r : null; });   // what the user confirmed: a load that has to wait for its slot is read again against it (#31)
     run(cur);
-  } finally { ts.forEach(p => { p.guardHold = false; }); }
+  } finally { ts.forEach(p => { p.guardHold = false; p.guardOk = null; }); }
 }
 const onlyPane = p => () => p && panes.includes(p) ? [p] : [];   // targets(): this pane while it is open
 function askClose(id) {                                        // ✕ / ⌘W / menus (no id: the pane focused when it runs)
@@ -971,15 +1018,20 @@ function askReload(id) {                                       // ↻ / ⌘R / m
   guardRun('RELOAD', () => { const p = id == null ? panes[focused] : byId(id); return p ? [p] : []; }, l => l.forEach(p => reloadPane(p)));
 }
 function openIn(p, url, op = 'NAVIGATE', then) {               // another URL in this pane (address bar, palette, favorite, ⌘T at the pane limit)
-  guardRun(op, onlyPane(p), l => l.forEach(q => { loadInto(q.view.webContents, url); then?.(q); }));
+  guardRun(op, onlyPane(p), l => l.forEach(q => { navTo(q, url); then?.(q); }));
+}
+function navTo(p, url) {                                       // (#31) a user's own load through the queue; the local new-tab page at once (its waiting / running load ends)
+  const u = url === NEWTAB ? NEWTAB : normalize(url);
+  if (u === NEWTAB) { lqDrop(p, 'URL'); loadInto(p.view.webContents, u); return; }
+  viewLoad(p, 'NAV', 'USER', u, () => loadInto(p.view.webContents, u));
 }
 function goHist(p, dir) {                                      // back / forward
   const h = p && p.view.webContents.navigationHistory; if (!h || !(dir < 0 ? h.canGoBack() : h.canGoForward())) return;
-  guardRun(dir < 0 ? 'BACK' : 'FORWARD', onlyPane(p), l => l.forEach(q => { const n = q.view.webContents.navigationHistory; dir < 0 ? n.goBack() : n.goForward(); }));
+  guardRun(dir < 0 ? 'BACK' : 'FORWARD', onlyPane(p), l => l.forEach(q => viewLoad(q, 'NAV', 'USER', '', () => { const n = q.view.webContents.navigationHistory; if (dir < 0 ? n.canGoBack() : n.canGoForward()) dir < 0 ? n.goBack() : n.goForward(); })));
 }
 function openLink(wc, url) {                                   // a grok.com link opened from the page into its own pane (linkOpen)
   const p = panes.find(q => q.view.webContents === wc); if (!p) return;
-  guardRun('LINK', onlyPane(p), l => l.forEach(q => q.view.webContents.loadURL(url).catch(() => {})));
+  guardRun('LINK', onlyPane(p), l => l.forEach(q => viewLoad(q, 'NAV', 'USER', url, () => q.view.webContents.loadURL(url).catch(() => {}))));
 }
 function sleepNowAsk(p) {                                      // manual 今すぐスリープ: asks when the page holds input (or cannot tell)
   if (!canSleep(p, panes.indexOf(p), true)) return;
@@ -987,17 +1039,88 @@ function sleepNowAsk(p) {                                      // manual 今す�
 }
 function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) trySleep(p); }); }
 
+// ---- this window's loads through the shared queue (#31; lq / lqPoll at the top) ----
+// The pane's view load in the queue: live = waiting / running (what the screen shows), else also one still stopping after a cancel
+const lqView = (p, live = true) => p.obs ? lq.find(t => t.ent === p.obs.ent && !t.probe && (!live || t.state !== 'stop')) : null;
+// nothing to show yet / any more and waiting for a load (startup / new pane / 取消): its view stays hidden behind the placeholder (no blank page)
+const viewHeld = p => !p.sleeping && !hasPage(p) && (!!p.loadIdle || lqView(p)?.state === 'wait');
+const lqDrop = (p, code) => p.obs && lq.cancel(t => t.ent === p.obs.ent && !t.probe, code);   // its waiting / running view load ends (a running one once it has stopped)
+// purpose: START / OPEN / WAKE / RELOAD / NAV / FIX; cls: USER / BULK; url: the page it is expected to load ('' = unknown); go(t): the load itself
+function viewLoad(p, purpose, cls, url, go) {
+  if (!p.obs) { go(null); return null; }                     // the 承認Bot popup: not a pane, loads at once as before
+  const { task, merged } = lq.request({ ent: p.obs.ent, gen: p.obs.gen, purpose, cls, win: ctx, url,
+    data: { no: p.id, ok: p.guardOk || null, rank: () => panes[focused] === p ? 0 : 1 },
+    onStart: t => startView(t, p, go), onStop: t => stopView(t, p), onEnd: (t, code) => endView(t, p, code) });
+  if (merged && p.guardOk) task.data.ok = p.guardOk;          // merged into a waiting load: the user's confirmation counts for it
+  return task;
+}
+// the task has its slot -> a promise that settles when its slot may go back (lqPoll: settled / stopped / view gone)
+function startView(t, p, go) {
+  return new Promise(resolve => {
+    const wc = p.view.webContents;
+    if (wc.isDestroyed() || !panes.includes(p)) { resolve('GONE'); return; }
+    const run = { t, p, wc, t0: Date.now(), began: false, resolve };
+    lqRuns.set(t.id, run); lqPollOn();
+    const begin = () => {
+      if (t.state !== 'run') { lqEnd(run, 'STOPPED'); return; }   // cancelled while its input was read: nothing was loaded
+      run.began = true; run.t0 = Date.now(); p.loadIdle = false; p.loadCls = t.cls;
+      try { Promise.resolve(go(t)).catch(e => dlog(`pane${p.id}`, 'load error', String(e))); } catch (e) { dlog(`pane${p.id}`, 'load error', String(e)); lqEnd(run, 'ERROR'); return; }
+      showViews();
+    };
+    if (!t.waited || !hasPage(p)) { begin(); return; }       // right after its request (its caller / the guard just decided), or no page to lose (new view, asleep, blank)
+    lqRecheck(t, p).then(ok => { if (ok) begin(); else lqEnd(run, 'GUARD'); });
+  });
+}
+// it waited: the input guard's answer (#11) was for then. Read again right before the page is replaced: what the user confirmed must be unchanged,
+// anything else must clearly hold nothing (as for an automatic operation). Otherwise the load is dropped and the page stays as it is
+async function lqRecheck(t, p) {
+  try {
+    const r = await liveInput(p), ok = t.data && t.data.ok;
+    if (t.state !== 'run') return false;
+    const code = ok ? GUARD.expired([{ id: p.id, r: ok }], [{ id: p.id, r }], Date.now()) : GUARD.autoRefusal(r, Date.now());
+    if (code && ok) diag.rec('guard.ask', code, { p: p.id }); else if (code) diag.rec('guard.auto', code, { p: p.id }, 600000);
+    if (code && debugOn()) dlog(`pane${p.id}`, 'queued load dropped before it started:', code);
+    return !code;
+  } catch { return false; }                                  // could not read: nothing is replaced
+}
+function stopView(t, p) {                                     // cancelled while running: stop the real load (and its bot-page fix); lqPoll gives the slot back once stopped
+  const run = lqRuns.get(t.id); if (!run) return;
+  if (!run.began) { lqEnd(run, 'STOPPED'); return; }         // still reading the input: nothing of it was loaded
+  p.grokToken = null; p.grokPending = null;
+  try { if (!run.wc.isDestroyed() && run.wc.isLoading()) run.wc.stop(); } catch {}
+  lqPollOn();
+}
+function endView(t, p, code) {
+  lqRuns.delete(t.id);                                       // (a load taken over by a newer one ends here; nothing of it is waited for any more)
+  if (code === 'USER' && panes.includes(p) && !p.sleeping && !hasPage(p)) p.loadIdle = true;   // 取消 before anything was shown: stays empty until clicked
+}
+// a bot-page fix's own load: part of the pane's running load when it has one, else a load of its own in the queue (the class of the pane's last
+// load). pending: the hop through the home page (grokPending) is set only when that load really starts
+function fixLoad(p, url, pending = null) {
+  const go = () => { if (pending) p.grokPending = pending; p.view.webContents.loadURL(url).catch(() => {}); };
+  if (!p.obs || lqView(p)?.state === 'run') { go(); return; }
+  viewLoad(p, 'FIX', p.loadCls || 'BULK', pending ? pending.target : url, go);
+}
+function showViews() {                                        // the queue moved: views on / off behind their placeholder, the screen updated
+  if (!win || win.isDestroyed()) return;
+  const cs = cells(); panes.forEach((p, i) => p.view.setVisible(!!cs[i] && !p.sleeping && !viewHeld(p))); sendState(cs);
+}
+
 // Background check: a temporary hidden window (same session / preload) opens the stored bot URL, the preload reports the same stable
 // message scan it gives a live pane, then the view is destroyed again (the pane stays asleep). Changed fingerprint => 'unopened'.
+// (#31) A check is a task of the shared load queue (BG: after every other load, at most one at a time); its slot goes back when its window is gone.
 let probe = null, lastReloadAll = 0;
-function abortProbe(p) { if (probe && (!p || probe.p === p)) probe.abort = true; }
+function abortProbe(p) {                                     // waiting -> dropped; running -> told to stop (the loop below ends, the window is destroyed)
+  lq.cancel(t => t.probe && t.win === ctx && (!p || t.ent === p.obs.ent), 'ABORT');
+  if (probe && (!p || probe.p === p)) probe.abort = true;
+}
 function probeSelect() {
   const now = Date.now();
   if (settings.sleepCheck === false || !win || win.isDestroyed() || quitting) return null;
   const dbg = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at2 || 0) > 60000) { probeSelect.at2 = now; dlog('probe: no check now -', r); } };
   const hold = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at || 0) > 60000) { probeSelect.at = now; dlog('probe held:', r); } return null; };
-  if (loadQ.length || now - lastReloadAll < 30000) return hold('startup / reload-all');                      // startup / reload-all in progress
-  { const busy = panes.find(q => !q.sleeping && (q.grokToken || q.grokPending || (q.loadStartedAt && !q.loadDone) || now - (q.loadedAt || 0) < 15000)); if (busy) return hold(`pane${busy.id} still loading`); }
+  if (lq.some(t => !t.probe) || now - lastReloadAll < 30000) return hold('loads queued / running (startup, reload-all ...)');   // any other load in the queue first (#31)
+  { const busy = panes.find(q => !q.sleeping && (q.grokToken || q.grokPending || now - (q.loadedAt || 0) < 15000)); if (busy) return hold(`pane${busy.id} still loading`); }
   let best = null;
   panes.forEach((q, i) => {
     if (!q.sleeping || q.view.webContents.isDestroyed() || i === focused || maximizedId === q.id) return;
@@ -1007,7 +1130,15 @@ function probeSelect() {
   if (!best) dbg('none due (' + panes.filter(q => q.sleeping).map(q => `pane${q.id}:${Math.round((Math.max(q.lastCheck || 0, q.sleepAt || 0) + SLEEP_CHECK_MS - now) / 1000)}s`).join(' ') + `, focused=${panes[focused]?.id})`);
   return best && best.q;
 }
-async function probeNext() { const q = probeSelect(); if (!q) return false; await probePane(q); return true; }
+async function probeNext() {                                 // one check through the queue; resolves when it is over (the top-level tick runs one at a time)
+  const q = probeSelect(); if (!q) return false;
+  await new Promise(done => {
+    const { merged } = lq.request({ ent: q.obs.ent, gen: q.obs.gen, purpose: 'PROBE', cls: 'BG', probe: true, win: ctx, url: q.botTarget || q.url || '', data: { no: q.id },
+      onStart: t => probePane(q, t), onStop: () => { if (probe && probe.p === q) probe.abort = true; }, onEnd: () => done() });
+    if (merged) done();
+  });
+  return true;
+}
 async function probePane(p) {
   const target = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
   const id = target && target.match(GROK_BOT_RE)?.[1];
@@ -1086,29 +1217,9 @@ async function probePane(p) {
 }
 
 // ---- panes ----
-// Startup / workspace loads are staggered: focused pane first, then the rest with at most LOAD_CONC loading at a time
-// (8 heavy grok.com pages at once starve each other, the router hop is missed and panes stay blank).
-const loadQ = []; let loadTimer = null;
-const LOAD_CONC = Number(process.env.MPB_LOAD_CONC) || 3;
-function pumpLoads() {
-  const step = () => {
-    const now = Date.now();
-    for (const p of panes) if (p.loadStartedAt && !p.loadDone) {
-      const wc = p.view.webContents;
-      if (wc.isDestroyed() || (!wc.isLoading() && !p.grokToken && !p.grokPending && now - p.loadStartedAt > 1500) || now - p.loadStartedAt > 25000) p.loadDone = true;
-    }
-    let act = panes.filter(p => p.loadStartedAt && !p.loadDone).length;
-    while (act < LOAD_CONC && loadQ.length) {
-      loadQ.sort((a, b) => (panes[focused] === b ? 1 : 0) - (panes[focused] === a ? 1 : 0));
-      const p = loadQ.shift();
-      if (!panes.includes(p) || p.view.webContents.isDestroyed()) continue;
-      p.loadStartedAt = now; dlog(`pane${p.id}`, 'start load', act + 1); loadInto(p.view.webContents, p.url); act++;
-    }
-    if (!loadQ.length && !panes.some(p => p.loadStartedAt && !p.loadDone)) { clearInterval(loadTimer); loadTimer = null; }
-  };
-  if (!loadTimer) loadTimer = setInterval(step, 300);
-  step();
-}
+// Startup / workspace loads are staggered through the shared load queue (#31): focused pane first, then the rest with at most LQ.LIMIT loading
+// at a time in all windows (8 heavy grok.com pages at once starve each other, the router hop is missed and panes stay blank).
+
 // New pane: while the rows are still the default grid it behaves as before (appended, grid re-fits); once the user has closed panes
 // (rows differ from the default) the new pane goes to the first row that has room (typically the row it was closed from), or opens a new row.
 function insertPane(p) {
@@ -1152,6 +1263,9 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = p.loadT0 = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
+  // the pane moved to another page by itself / by the user while a load of it waits (#31): that load was for the old page -> cancelled
+  const urlMoved = () => { const t = lqView(p), u = wc.getURL(); if (t && t.state === 'wait' && t.url && !isBlankUrl(u) && !sameTarget(t.url, u)) lq.cancel(t.id, 'URL'); };
+  wc.on('did-navigate', urlMoved); wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) urlMoved(); });
   wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
@@ -1185,7 +1299,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   insertPane(p);
-  if (defer && p.url && p.url !== NEWTAB) loadQ.push(p); else loadInto(wc, p.url);
+  if (p.url === NEWTAB) loadInto(wc, p.url);                 // the local new-tab page: at once (not a load of the queue)
+  else viewLoad(p, defer ? 'START' : 'OPEN', defer ? 'BULK' : 'USER', p.url, () => loadInto(wc, p.url));   // (#31) startup / workspace: BULK; a pane the user opens: USER
   if (focus) setFocused(panes.indexOf(p));
   relayout();
   return p;
@@ -1210,6 +1325,7 @@ function closePane(id, keepEmpty) {
   p.grokToken = null;
   unregWc(r => r.wc === p.view.webContents);                 // nothing from this page counts any more
   obsDo(p, { type: 'close' }); abortProbe(p);                // ...nor from its background check (#02)
+  lqDrop(p, 'CLOSED');                                       // its waiting / running load (#31): a running one gives its slot back once the view is gone
   win.contentView.removeChildView(p.view);
   p.view.webContents.close();
   if (maximizedId === id) maximizedId = null;
@@ -1408,14 +1524,17 @@ function loadWorkspace(name) {
   guardRun('WORKSPACE', () => panes.slice(), () => {           // every pane is replaced: asked first when one holds input (#11)
     const ws = workspaces[name]; if (!ws) return;
     maximizedId = null;
-    [...panes].forEach(p => closePane(p.id, true));
-    if (PRESETS[ws.layout]) layout = ws.layout;
-    if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
-    (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
-    if (!panes.length) addPane({ url: '' });
-    rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
-    activeWs = name;
-    setFocused(0); pumpLoads(); relayout(); save();
+    lq.batch(() => {                                         // (#31) every new pane requested before any starts: the focused one first
+      [...panes].forEach(p => closePane(p.id, true));
+      if (PRESETS[ws.layout]) layout = ws.layout;
+      if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
+      (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
+      if (!panes.length) addPane({ url: '' });
+      rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
+      activeWs = name;
+      setFocused(0);
+    });
+    relayout(); save();
   });
 }
 function runAction(a) {
@@ -1494,15 +1613,15 @@ function wsMenu() {
     { label: '削除', enabled: names.length > 0, submenu: names.length ? names.map(n => ({ label: n, click: () => { delete workspaces[n]; save(); buildMenu(); broadcast(); } })) : [{ label: '-', enabled: false }] },
   ]).popup({ window: win });
 }
-// Reload-all: every pane starts at the same moment (no queue, no stagger, no debounce, no focus requirement).
-// Panes are already warm (cookies / cache), so 8 in parallel is fine; reloadPane clears all retry state and the CPU throttle
-// stays off while reloading (applyThrottling re-enables it once a pane has been settled for 3 s).
-// #11: asked first when a pane holds input ('all but those' is offered when some do not).
+// Reload-all: every pane through the shared load queue (#31; BULK: LQ.LIMIT at a time in all windows, the focused pane first, after the user's own
+// loads; a pane already waiting is merged, not loaded twice). reloadPane clears all retry state and the CPU throttle stays off while reloading
+// (applyThrottling re-enables it once a pane has been settled for 3 s).
+// #11: asked first when a pane holds input ('all but those' is offered when some do not); a pane that waited is read again right before.
 function reloadAll() {
   guardRun('RELOAD_ALL', () => panes.filter(p => !p.view.webContents.isDestroyed()), list => {
-    loadQ.length = 0; lastReloadAll = Date.now(); abortProbe();
-    for (const p of list) reloadPane(p).catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e)));
-    dlog('reload-all started', list.length);
+    lastReloadAll = Date.now(); abortProbe();
+    lq.batch(() => { for (const p of list) reloadPane(p, 'BULK').catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e))); });
+    dlog('reload-all queued', list.length);
     setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
     fetchUsage();
   }, { skip: true });
@@ -1564,7 +1683,8 @@ on('set-reload', (id, m) => { const p = byId(id); if (p && RELOAD_CHOICES.includ
 on('swap', (a, b) => swapPanes(a, b));
 on('maximize', id => toggleMaximize(id));
 on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
-on('wake-pane', id => { const p = byId(id); if (p?.sleeping) { reloadPane(p); setFocused(panes.indexOf(p)); } });
+on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) { reloadPane(p); setFocused(panes.indexOf(p)); } });   // asleep, or its wait was cancelled (取消): load it now
+on('load-cancel', id => { const p = byId(id); if (p) lq.cancel(t => t.win === ctx && t.ent === p.obs.ent && !t.probe && t.state === 'wait', 'USER'); });
 on('sleep-now', id => { const p = byId(id); if (p) sleepNowAsk(p); });
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
@@ -1645,7 +1765,7 @@ function snapshot() {
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
-  sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
@@ -1671,6 +1791,7 @@ win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });
 win.on('close', () => {
   snapshot();
+  lq.cancel(t => t.win === ctx, 'WINDOW');                   // (#31) this window's loads / check: the slots go back once its views / check window are gone
   try { approveOpen = false; destroyApprove(); } catch {}
   if (quitting) return;
   if (ctxs.length === 1) { if (!quitting) saveNow(); return; }            // last window: remember it
@@ -1689,10 +1810,12 @@ overlay.webContents.loadFile(path.join(__dirname, 'overlay.html'));
 overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
 
 const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ url: '' }];
-specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
-rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
-setFocused(Math.min(spec.focused || 0, panes.length - 1));
-pumpLoads();
+// (#31) every pane requested before any starts: the focused one first, then the rest LQ.LIMIT at a time (shown as waiting meanwhile)
+lq.batch(() => {
+  specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
+  rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
+  setFocused(Math.min(spec.focused || 0, panes.length - 1));
+});
 relayout();
 broadcast();
 return ctx;
