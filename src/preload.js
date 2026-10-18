@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('mpb', {
   renamePane: id => send('rename-pane', id),
   chipMenu: id => send('chip-menu', id), wsMenu: () => send('ws-menu'),
   splitStart: (a, i, row) => send('split-start', a, i, row), syncCols: v => send('sync-cols', v), syncReset: () => send('sync-reset'), splitEnd: () => send('split-end'), splitReset: (a, row) => send('split-reset', a, row),
-  reloadAll: () => send('reload-all'),
+  reloadAll: () => send('reload-all'), reopenClosed: () => send('reopen-closed'),
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id),
   approveOpen: () => send('approve-open'), focusOther: (wid, pid) => send('focus-other', wid, pid),
   onMem: cb => ipcRenderer.on('mem', (_, b) => cb(b)), onOthers: cb => ipcRenderer.on('others', (_, l) => cb(l)),

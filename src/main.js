@@ -277,6 +277,7 @@ function grid(n) {
 }
 // ---- row structure: every pane belongs to a row (rowLens[r] = number of panes in row r, panes[] is kept in row-major order) ----
 // Closing a pane only shrinks ITS row (the row re-divides evenly); panes never move between rows. An empty row disappears.
+const closedStack = [];                                      // last closed panes (newest last), for 閉じたペインを開き直す
 let rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;
 const sumArr = a => a.reduce((x, y) => x + y, 0);
 function defRows(n) {                                  // rows as the preset / auto-fit would lay n panes out
@@ -459,7 +460,7 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length,
+    canReopen: closedStack.length > 0 && panes.length < MAX, globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length,
     panes: panes.map((p, i) => {
       const wc = p.view.webContents;
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -767,6 +768,7 @@ async function reloadPane(p) {
 // A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 30 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
 const { sleepDelayFor, sleepIdentity } = require('./sleep-rules');
+const { placeReopened } = require('./reopen-rules');
 const sleepDelay = p => Number(process.env.MPB_SLEEP_SEC) > 0 ? ((p.waiting || p.done) && !p.working ? Number(process.env.MPB_SLEEP_SEC) * 1000 : null)   // dev override: same delay for both
   : sleepDelayFor(p, settings.sleepMinutes > 0 ? settings.sleepMinutes * 60000 : undefined);
 function canSleep(p, i, force) {
@@ -991,9 +993,21 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   relayout();
   return p;
 }
+function reopenClosed() {
+  if (!closedStack.length || panes.length >= MAX) return;
+  const e = closedStack.pop(), before = [...getRows()];
+  const p = addPane({ ...e.spec }, { focus: false });
+  if (!p) { closedStack.push(e); return; }
+  const pl = placeReopened(before, e);                        // back into the row it was closed from (if there is room)
+  panes.splice(panes.indexOf(p), 1); panes.splice(pl.index, 0, p); rowLens = pl.rows;
+  maximizedId = null; setFocused(pl.index); relayout(true); save(); sendState();
+  setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
+}
 function closePane(id, keepEmpty) {
   const i = panes.findIndex(p => p.id === id); if (i < 0) return;
   { const lens = getRows(); let r = 0, st = 0; while (r < lens.length - 1 && i >= st + lens[r]) { st += lens[r]; r++; }
+    const cu = paneUrl(panes[i]);
+    if (!keepEmpty && cu && cu !== NEWTAB) { closedStack.push({ spec: paneSpec(panes[i]), row: r, col: i - st, rowGone: lens[r] === 1, cols: Math.max(...lens) }); if (closedStack.length > 10) closedStack.shift(); }   // for ⌘⇧T
     lens[r]--; if (lens[r] <= 0) lens.splice(r, 1); }          // only this pane's row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
   p.grokToken = null;
@@ -1046,6 +1060,7 @@ function handleKey(input, pane) {
   if (k === 'b' && input.shift) { openOverlay('broadcast'); return true; }
   if (k === 'p' && input.shift) { togglePc(); return true; }
   if (k === 'k') { overlayOpen ? closeOverlay() : openOverlay('palette'); return true; }
+  if (k === 't' && input.shift) { closeOverlay(); reopenClosed(); return true; }
   if (k === 't') { closeOverlay(); newPane(''); return true; }
   if (k === 'w' && !input.shift) { if (fp) closePane(fp.id); return true; }
   if (k === 'l') { closeOverlay(); focusUrlBar(); return true; }
@@ -1331,6 +1346,7 @@ on('copy-pane-url', id => { const p = byId(id); if (p) { const u = paneUrl(p) ||
 on('reload', id => { const p = byId(id); if (p) reloadPane(p); });
 on('close', id => closePane(id));
 on('add', () => newPane(''));
+on('reopen-closed', () => reopenClosed());
 on('layout', l => applyPreset(l));
 on('focus-pane', id => { const i = panes.findIndex(p => p.id === id); setFocused(i); clearUnread(panes[i]); });
 on('activate-pane', id => focusPane(panes.findIndex(p => p.id === id)));
@@ -1368,6 +1384,10 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 paneOn('pane:msgcount', (e, c) => {
   const p = byWc(e.sender);
   if (p && c && [c.user, c.bot, c.botSince].every(n => Number.isInteger(n) && n >= 0 && n < 100000)) onMsgCount(p, { user: c.user, bot: c.bot, botSince: c.botSince, waiting: c.waiting === true, working: c.working === true, done: c.done === true, asks: c.asks === true, q: typeof c.q === 'string' ? c.q.slice(0, 320) : '', hn: typeof c.hn === 'string' ? c.hn.slice(0, 80) : '', hh: typeof c.hh === 'string' ? c.hh.slice(0, 80) : '', method: String(c.method).slice(0, 40), fp: typeof c.fp === 'string' ? c.fp.slice(0, 24) : '' });
+});
+paneOn('pane:pc-opened', e => {                              // the page's computer view appeared (user clicked 'コンピュータを表示')
+  const p = byWc(e.sender); if (!p || p.pcMax || p.sleeping || !isBotUrl(p.view.webContents.getURL())) return;
+  if (maximizedId === p.id || settings.autoPc !== false) setPcMax(p, true);   // already maximised: just relax the size caps (no maximize / restore dance)
 });
 paneOn('pane:pc-closed', e => { const p = byWc(e.sender); if (p?.pcMax) setPcMax(p, false); });
 paneOn('pane:msgmode-off', e => { const p = byWc(e.sender); if (p) resetCounts(p); });
@@ -1414,7 +1434,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
@@ -1472,6 +1492,7 @@ function buildMenu() {
     ...(isMac ? [{ role: 'appMenu' }] : []),
     { label: 'ファイル', submenu: [
       acc('CmdOrCtrl+T', () => cur()?.newPane(''), '新しいペイン'),
+      acc('CmdOrCtrl+Shift+T', () => cur()?.reopenClosed(), '閉じたペインを開き直す'),
       { label: '新しいウィンドウ', accelerator: 'CmdOrCtrl+N', click: () => makeWindow({ layout: '2x2', panes: [{ url: '' }] }) },
       acc('CmdOrCtrl+W', () => { const k = cur(); k?.focusedPane && k.closePane(k.focusedPane.id); }, 'ペインを閉じる'),
       acc('CmdOrCtrl+L', () => cur()?.focusUrlBar(), 'アドレスを編集'),
@@ -1489,6 +1510,7 @@ function buildMenu() {
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),
+      { label: 'クラウドPCを開いたら自動で最大化', type: 'checkbox', checked: settings.autoPc !== false, click: m => { settings.autoPc = m.checked; save(); } },
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, 'ペインズーム 拡大（このペインだけ・個別になります）'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, 'ペインズーム 縮小'),
       acc('CmdOrCtrl+0', () => { const k = cur(); k?.resetPaneZoom(k.focusedPane); }, 'ペインズーム リセット（個別のペインのみ）'),

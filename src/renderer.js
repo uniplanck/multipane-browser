@@ -19,6 +19,7 @@ PK.forEach((k, i) => {
   b.onclick = () => mpb.layout(k); $('#presets').appendChild(b);
 });
 $('#add').onclick = () => mpb.add();
+$('#reopen').onclick = () => { if (S && S.canReopen) mpb.reopenClosed(); };
 $('#reload-all').onclick = () => mpb.reloadAll();
 $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
@@ -151,6 +152,7 @@ const onS = s => {
   us.innerHTML = glowN || unreadN ? `<span class="dot"></span>${glowN ? `新着 ${glowN}ペイン` : `未返信 ${unreadN}`}<kbd>${MOD}J</kbd>` : '';
   us.classList.toggle('show', !!(glowN || unreadN));
   $('#add').disabled = s.panes.length >= s.max;
+  $('#reopen').disabled = !s.canReopen; $('#reopen').style.opacity = s.canReopen ? '' : '.4';
   { const wb = $('#ws-btn'); if (!wb.classList.contains('saved')) wb.title = s.activeWs ? `レイアウト保存・切替（現在: 「${s.activeWs}」— クリックで上書き保存／新規保存／切替）` : 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; wb.classList.toggle('active-ws', !!s.activeWs); }
 
   // strip

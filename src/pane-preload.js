@@ -281,6 +281,17 @@ ipcRenderer.on('mpb:pc', (_e, on) => {
   }, 400);
 });
 
+// The user opened the computer view themselves ('コンピュータを表示' button): tell main so it can enlarge the pane (only grok.com/bot/*).
+let pcWasOpen = false, pcObsT = null;
+function pcCheck() {
+  pcObsT = null;
+  if (location.hostname !== 'grok.com' && !/\.grok\.com$/.test(location.hostname) || !location.pathname.startsWith('/bot/')) { pcWasOpen = false; return; }
+  const o = !!document.querySelector('[data-bot-computer-vnc]');
+  if (o && !pcWasOpen) { pcWasOpen = true; if (pcCss == null) ipcRenderer.send('pane:pc-opened'); } else if (!o) pcWasOpen = false;
+}
+function startPcObs() { try { new MutationObserver(() => { if (!pcObsT) pcObsT = setTimeout(pcCheck, 300); }).observe(document.documentElement, { childList: true, subtree: true }); } catch {} }
+if (document.documentElement) startPcObs(); else window.addEventListener('DOMContentLoaded', startPcObs);
+
 // ---- per-pane zoom (main sends the zoom for THIS page; the site-wide zoom level stays at 100% so panes on the same site don't affect each other) ----
 let paneZoom = 1;
 const applyPaneZoom = () => { try { webFrame.setZoomFactor(paneZoom); } catch {} };
