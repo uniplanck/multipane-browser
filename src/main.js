@@ -55,6 +55,7 @@ function chromeUA() {
 }
 
 // ---- persistence (backward compatible: layout/focused/urls are always written and read) ----
+const { rotateBackup } = require('./state-backup');
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
 const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
 function saveNow() {
@@ -72,7 +73,7 @@ function saveNow() {
 }
 let lastClosedSnapshot = null;
 let quitting = false;
-function save() { if (quitting) return; clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 500); }
+function save() { if (quitting) return; clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 200); }
 function load() { try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return null; } }
 // A pane that is still waiting in the startup queue, mid-redirect or on an error page reports about:blank / '' / chrome-error:.
 // That must never be saved, reopened or reloaded: fall back to the pane's own intended URL (p.url follows the last real page).
@@ -1567,6 +1568,7 @@ function restoreBounds(ws) {
 }
 
 function startup() {
+  try { rotateBackup(stateFile()); } catch (e) { console.error('backup failed', e); }                 // keep the last few distinct panes.json versions (undo for a bad overwrite)
   const st = load();
   if (st?.settings) settings = { ...settings, ...st.settings };
   if (!settings.notifV2) { settings.notifications = true; settings.notifV2 = true; }
