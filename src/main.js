@@ -451,6 +451,9 @@ const CP = require('./closed-panes');
 // the list is shown in the overlay and counted in the bar (対応 n). Looking at it changes nothing; only a choice from the open list focuses / wakes
 // that pane (makeWindow: queueOpen / queuePick). Memory: the list and p.qSince only (never in panes.json)
 const AQ = require('./attention-queue');
+// ---- キーボードでのペイン移動 (#51, pane-navigation.js): ⌘⌥←→↑↓ by position, ⌘⇧J to the next item of the 対応キュー; the same focus / wake as a
+// click (makeWindow: navKey / moveFocus / queueNext / navGo). Memory only (a pending move: navWait)
+const PN = require('./pane-navigation');
 // ---- 一斉送信 (#12, broadcast-state.js): a preview of every chosen pane (read live), then one confirmed batch: per target the same pane /
 // generation / conversation / keys typed as previewed and an empty composer right before it, input, a check, the send, then page evidence
 // (makeWindow: bc*). Memory only (never in panes.json, never resumed after a restart); the text is never logged.
@@ -533,6 +536,8 @@ setInterval(() => {
 function makeWindow(spec = {}, { restore = false } = {}) {
 let win, overlay, overlayOpen = false, overlayMode = '';
 let queueNote = '';                        // (#01) why the last choice from the 対応キュー was not carried out (shown in the open list until the next one)
+let queueNow = [];                         // (#01) the list the last sendState built
+let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane not on screen yet (pane-navigation.js mayFocus / holds)
 let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null;
@@ -566,11 +571,11 @@ function getRows() {                                   // validated; falls back 
 }
 const sameArr = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const splitKey = () => { const l = getRows(); return `${Math.max(1, ...l)}x${Math.max(1, l.length)}`; };
-function cells() {
+function cells(grid = false) {                         // grid: the rows' layout even while a pane is maximized (#51 keyboard moves)
   const [w, h] = win.getContentSize();
   const n = panes.length; if (!n) return [];
   const area = { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP };
-  if (maximizedId != null && byId(maximizedId))
+  if (!grid && maximizedId != null && byId(maximizedId))
     return panes.map(p => p.id === maximizedId ? { x: area.x, y: area.y, w: area.w, h: area.h } : null);
   const lens = getRows(), rows = lens.length, cols = Math.max(...lens);
   const sp = settings.splits?.[`${cols}x${rows}`] || {};
@@ -681,6 +686,7 @@ function relayout(animate = false) {
   if (overlayOpen) overlay.setBounds({ x: 0, y: 0, width: win.getContentSize()[0], height: win.getContentSize()[1] });
   if (approveOpen && approve) { const r = approveRect(); approve.setBounds(r); overlay.webContents.send('approve-rect', r); }
   sendState(cs);
+  navSettle();                                               // (#51) a keyboard move waiting for its pane to be shown (woken)
 }
 function applyPreset(key) {
   if (!PRESETS[key]) return;
@@ -750,6 +756,7 @@ function sendState(cs = cells()) {
     }),
   };
   state.queue = queueBuild(state.panes);                      // (#01) 対応キュー: the bar's count and the open list
+  queueNow = state.queue;                                    // (#51) ⌘⇧J reads it right after
   state.qNote = overlayOpen && overlayMode === 'queue' ? queueNote : '';
   win.webContents.send('state', state);
   scheduleOthers();
@@ -773,6 +780,7 @@ function queueBuild(rows, now = Date.now()) {
 // ---- focus / activity ----
 function setFocused(i) {
   if (i < 0 || i >= panes.length) return;
+  if (navWait && navWait.id !== panes[i].id) navEnd('DROP');        // (#51) the user went elsewhere: the waiting keyboard move is dropped
   focused = i;
   if (panes[i].sleeping) reloadPane(panes[i]);                      // focusing a sleeping pane wakes it
   applyThrottling();
@@ -886,15 +894,69 @@ function nextUnread() {
     if (panes[i].glow || panes[i].needsReply) { focusPane(i, { clear: false }); return; }
   }
 }
+// ---- keyboard moves (#51, pane-navigation.js) ----
+// the ペイン menu and handleKey: nothing while a prompt / the palette / another overlay is open (the 対応キュー overlay is closed by the move)
+function navKey(id) {
+  if (overlayOpen && overlayMode !== 'queue') return;
+  if (id === 'next') queueNext(); else moveFocus(id);
+}
+// the pane next to the focused one by position (the grid's rows / rectangles, also while one pane is maximized); none that way: nothing
 function moveFocus(dir) {
-  const lens = getRows(), n = panes.length;
-  let i = focused, r = 0, st = 0; while (r < lens.length - 1 && focused >= st + lens[r]) { st += lens[r]; r++; }
-  const c = focused - st, startOf = k => sumArr(lens.slice(0, k));
-  if (dir === 'left') i = i - 1; else if (dir === 'right') i = i + 1;
-  else if (dir === 'up') { if (r === 0) return; i = startOf(r - 1) + Math.min(c, lens[r - 1] - 1); }
-  else if (dir === 'down') { if (r >= lens.length - 1) return; i = startOf(r + 1) + Math.min(c, lens[r + 1] - 1); }
-  if (i < 0 || i >= n) return;
+  const i = PN.pick(cells(true), getRows(), focused, dir);
+  if (i < 0) { diag.rec('nav', 'EDGE', { p: panes[focused]?.id }, 60000); return; }
+  navGo(i, 'MOVE');
+}
+// the next item of the 対応キュー as it is now; none / only this pane listed: nothing. Marked read only when the user sees it (inView), as a choice
+// from the list (queuePick)
+function queueNext() {
+  sendState();                                               // builds queueNow from the panes as they are now
+  const cur = panes[focused], p = byId(PN.nextInQueue(queueNow, cur && cur.id));
+  if (!p) { diag.rec('nav', 'NONE', { p: cur?.id }, 60000); return; }
+  navGo(panes.indexOf(p), 'QUEUE');
+  if (inView(p)) clearUnread(p);
+}
+// like a click on it: focusPane (maximized: the maximize follows; asleep: woken through the load queue). A pane not on screen yet gets the
+// keyboard once it is shown (navSettle); meanwhile a key typed into the pane that kept the keyboard is not passed to its page (navHolds)
+function navGo(i, code) {
+  const p = panes[i]; if (!p) return;
+  navEnd();                                                  // a newer move: the older one is dropped
+  if (overlayOpen) closeOverlay();                           // only the 対応キュー overlay gets here (navKey)
+  const from = panes[focused];
   focusPane(i, { clear: false });
+  diag.rec('nav', code, { p: p.id });
+  if (navShown(p) || !(p.sleeping || lqView(p))) return;     // on screen (the keyboard is there) / no load coming: nothing to wait for
+  const fw = wcId(require('electron').webContents.getFocusedWebContents());
+  const held = from && from !== p && fw && fw === wcId(from.view.webContents) ? from : null;   // the hidden view did not take the keyboard
+  const w = navWait = { seq: ++navSeq, id: p.id, tw: wcId(p.view.webContents), fw, from: held ? held.id : 0, until: Date.now() + PN.WAIT_MS };
+  if (held) {                                                // a click into that pane: the user stays there (its view had the keyboard all along)
+    const wc = held.view.webContents;
+    const onMouse = (e, m) => { if (m.type !== 'mouseDown' || navWait?.seq !== w.seq) return; navEnd('DROP'); const j = panes.indexOf(held); if (j >= 0) setFocused(j); };
+    wc.on('before-mouse-event', onMouse); w.off = () => { try { wc.off('before-mouse-event', onMouse); } catch {} };
+  }
+  diag.rec('nav', 'WAIT', { p: p.id });
+}
+const navShown = p => panes.includes(p) && !p.sleeping && !viewHeld(p) && !!cells()[panes.indexOf(p)];
+function navEnd(code) {
+  const w = navWait; if (!w) return;
+  navWait = null; if (w.off) w.off();
+  if (code) diag.rec('nav', code, { p: w.id });
+}
+// relayout / showViews: the waiting move's pane is shown now (woken / its load started): the keyboard goes there only if nothing moved meanwhile
+function navSettle() {
+  const w = navWait; if (!w) return;
+  const p = byId(w.id), now = Date.now();
+  if (p && !navShown(p) && now <= w.until) return;           // not yet
+  const ok = !!p && PN.mayFocus(w, { focusedId: panes[focused]?.id, overlay: overlayOpen, active: windowActive(), fw: wcId(require('electron').webContents.getFocusedWebContents()), t: now });
+  navEnd(ok ? 'FOCUS' : 'DROP');
+  if (ok) p.view.webContents.focus();
+}
+// a key reaching pane p: held back while a move waits and p kept the keyboard (the header already shows the other pane)
+function navHolds(p, input) {
+  if (!navWait || input.type !== 'keyDown') return false;
+  const now = { pane: p.id, focusedId: panes[focused]?.id, t: Date.now() };
+  if (PN.holds(navWait, now)) return true;
+  if (now.focusedId !== navWait.id || now.t > navWait.until) navEnd('DROP');   // it no longer applies anywhere
+  return false;
 }
 
 // ---- load reduction ----
@@ -1401,6 +1463,7 @@ function fixLoad(p, url, pending = null) {
 function showViews() {                                        // the queue moved: views on / off behind their placeholder, the screen updated
   if (!win || win.isDestroyed()) return;
   const cs = cells(); panes.forEach((p, i) => p.view.setVisible(!!cs[i] && !p.sleeping && !viewHeld(p))); sendState(cs);
+  navSettle();                                               // (#51) its load started: the view is shown now
 }
 
 // Background check: a temporary hidden window (same session / preload) opens the stored bot URL, the preload reports the same stable
@@ -1601,7 +1664,10 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
   wc.on('focus', () => { if (!p.sleeping) setFocused(panes.indexOf(p)); });   // a hidden sleeping view can fire a stray focus event right after it is hidden: that must not wake it
-  wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault(); });   // a key typed: the input revision moves (#11)
+  wc.on('before-input-event', (e, input) => {
+    if (navHolds(p, input)) { if (!handleKey(input, p)) diag.rec('nav', 'HELD', { p: p.id }, 60000); e.preventDefault(); return; }   // (#51) meant for the pane being woken: not typed here
+    if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault();   // a key typed: the input revision moves (#11)
+  });
   wc.on('context-menu', (e, params) => {
     const items = [];
     if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX && !NAV.appLoad(params.linkURL), click: () => addPane({ url: params.linkURL }) },   // (#72) web links only
@@ -1725,6 +1791,9 @@ function setZoomIndiv(p, on) { if (!p) return; p.zoomIndiv = !!on; if (!on) appl
 function focusUrlBar() { win.webContents.focus(); win.webContents.send('focus-url', panes[focused]?.id); }
 function handleKey(input, pane) {
   if (input.type !== 'keyDown') return false;
+  // (#51) ⌘⌥←→↑↓ / ⌘⇧J first (⌘⇧J before ⌘J). An IME composition / a modal overlay: left to the page or field as it is; a held key: one move only
+  const nk = PN.match(input, { mac: isMac, modal: overlayOpen && overlayMode !== 'queue', ime: !!pane?.ime });
+  if (nk.id) { if (nk.act === 'go') navKey(nk.id); return nk.act !== 'pass'; }
   const k = input.key.toLowerCase();
   const mod = isMac ? input.meta : input.control;
   if (k === 'escape' && !mod && !input.alt && !input.shift) {
@@ -1734,7 +1803,6 @@ function handleKey(input, pane) {
     return false;
   }
   if (!mod) return false;
-  if (input.alt && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(k)) { moveFocus(k.slice(5)); return true; }
   if (input.alt && !input.shift && ['Equal', 'Minus', 'Digit0'].includes(input.code)) { setGlobalZoom(input.code === 'Digit0' ? 1 : gZoom() + (input.code === 'Equal' ? 0.1 : -0.1)); return true; }   // ⌘⌥= / ⌘⌥- / ⌘⌥0: global zoom
   if (input.alt) return false;
   const fp = panes[focused];
@@ -2308,7 +2376,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
@@ -2410,10 +2478,7 @@ function buildMenu() {
       { label: 'アプリUIの開発者ツール', click: () => cur()?.win.webContents.openDevTools({ mode: 'detach' }) } ] },
     { label: 'ペイン', submenu: [
       acc('CmdOrCtrl+J', () => cur()?.nextUnread(), '次の未読ペインへ'),
-      acc('CmdOrCtrl+Alt+Left', () => cur()?.moveFocus('left'), '左のペインへ'),
-      acc('CmdOrCtrl+Alt+Right', () => cur()?.moveFocus('right'), '右のペインへ'),
-      acc('CmdOrCtrl+Alt+Up', () => cur()?.moveFocus('up'), '上のペインへ'),
-      acc('CmdOrCtrl+Alt+Down', () => cur()?.moveFocus('down'), '下のペインへ'),
+      ...PN.KEYS.map(k => acc(k.accel, () => cur()?.navKey(k.id), k.ja)),   // (#51) ←→↑↓ by position, 次の要対応へ (handleKey does the keys)
       { type: 'separator' },
       { label: '名前を変更…', click: () => { const k = cur(); k?.openOverlay('rename', { id: k.focusedPane?.id, value: k.focusedPane?.name || '' }); } },
       { label: 'お気に入りに追加', click: () => { const k = cur(), p = k?.focusedPane; if (p && paneUrl(p)) addFavorite(paneUrl(p), p.name || p.view.webContents.getTitle()); } },

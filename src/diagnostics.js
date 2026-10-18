@@ -71,6 +71,10 @@ const RESTORE_CODES = ['ASLEEP', 'OLD', 'IGNORED'];
 // (#01, attention-queue.js CODES; checked by test/attention-queue.test.js) 対応キュー: the list opened (n = items), a choice carried out (p), a
 // choice refused because the pane is closed / shows another conversation now (p). Never a name / reason text / URL
 const QUEUE_CODES = ['OPEN', 'PICK', 'GONE', 'MOVED'];
+// (#51, pane-navigation.js CODES; checked by test/pane-navigation.test.js) キーボードでのペイン移動: moved by position / to the next 対応キュー item (p =
+// the pane), nothing that way / nothing listed, a pane not on screen yet waited for, given the keyboard once shown / the wait dropped (the user
+// moved / too late), a key held back from the pane that kept the keyboard. Never a name / URL / key typed
+const PANE_NAV_CODES = ['MOVE', 'EDGE', 'QUEUE', 'NONE', 'WAIT', 'FOCUS', 'DROP', 'HELD'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -115,6 +119,7 @@ const EVENTS = {
   reopen: { ja: '閉じたペインを開き直す', r: REOPEN_CODES },
   bcast: { ja: '一斉送信', r: BCAST_CODES },
   queue: { ja: '対応キュー', r: QUEUE_CODES },
+  nav: { ja: 'キーボードでのペイン移動', r: PANE_NAV_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -372,5 +377,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };
