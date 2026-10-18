@@ -277,6 +277,16 @@ setInterval(async () => {                                    // one background c
   try { for (const c of ctxs) if (await c.probeNext()) break; } catch (e) { dlog('probe tick error', String(e)); }
   probeBusy = false;
 }, 15000);
+// (#33) 確認を再開 after a sign-in page stopped the checks: manual only, once (pressing again does nothing). The pane that saw the sign-in page is
+// due again; every check still goes through the tick above (one at a time, the same holds and budget)
+function probeResume() {
+  if (!probeAuthHold) return;
+  probeAuthHold = false;
+  const now = Date.now();
+  ctxs.forEach(c => c.panes.forEach(p => { if (p.sleeping && p.pb) p.pb = PB.resume(p.pb, now); }));
+  diag.rec('probe', 'RESUME'); dlog('probe: checks resumed');
+  buildMenu(); broadcast();
+}
 // ---- app memory meter (top-left) ----
 // Sum of every Electron process. On macOS privateBytes ~ the process "footprint", which is what Activity Monitor's Memory column shows.
 // Sent every 2.5 s to visible windows, and only while the app is focused (zero work in the background).
@@ -407,6 +417,10 @@ function guardUi(wc) {                                       // the window's own
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
 let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // one check at a time, none while the Mac sleeps / is locked
+// (#33, probe-policy.js) per sleeping pane p.pb: last attempt / success, failures in a row, the next check (backoff 5/10/20/40/60 min). Memory only.
+// probeAuthHold: a check clearly saw a sign-in page -> no check of the shared session in any window until 確認を再開 (probeResume)
+const PB = require('./probe-policy');
+let probeAuthHold = false;
 // ---- generations (#02, pane-state.js): one per-launch counter (all windows) numbers every pane entity, world generation and background-check
 // run, so a number is never reused. Kept in memory only (never in panes.json): after a restart everything starts with new numbers.
 const PS = require('./pane-state');
@@ -692,14 +706,15 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(),
+    canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
     panes: panes.map((p, i) => {
       const wc = p.view.webContents, lt = lqView(p);              // its load in the queue (#31): waiting (with its place) / running
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
         lq: lt ? lt.state : '', lqPos: lt && lt.state === 'wait' ? lq.position(lt.id) : 0, held: viewHeld(p), idle: !!p.loadIdle && !lt,
         favicon: p.favicon || '', loading: wc.isLoading(), muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, isGrok: !!p.msgMode,
         canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(),
-        sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i] };
+        sleeping: !!p.sleeping, unopened: !!p.obs.unopened, obs: PS.shown(p.obs), sleepOn: p.sleepOn !== false, unread: p.unread, glow: !!p.glow, waiting: !!p.waiting, working: !!p.working, done: !!p.done, sname: p.sleeping && p.sleepSnap ? p.sleepSnap.name || '' : '', sgroup: p.sleeping && p.sleepSnap ? p.sleepSnap.group || '' : '', quote: p.sleeping && p.waiting && !p.done ? (p.reqQuote || '') : '', needsReply: !!p.needsReply, reloadMinutes: p.reloadMinutes, rect: cs[i],
+        chk: p.sleeping ? PB.label(p.pb, { hold: probeAuthHold, off: settings.sleepCheck === false }) : '' };   // (#33) last success / next check / failures / stopped
     }),
   };
   win.webContents.send('state', state);
@@ -1052,7 +1067,7 @@ function sleepPane(p) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return;
   p.sleepSnap = { title: displayTitle(p), favicon: p.favicon || '' };
   Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title }));   // bot name + group name shown in the placeholder (falls back to the tab title)
-  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.lastCheck = 0;
+  p.sleeping = true; p.sleepAt = Date.now(); p.grokToken = null; p.grokPending = null; p.pb = PB.init(p.sleepAt, SLEEP_CHECK_MS);   // (#33) a new sleep: its first check one interval later
   obsDo(p, { type: 'sleep', gen: nextNo() });                // a sleep generation: the background check compares against the stable fingerprint confirmed in the generation that fell asleep (none -> its first result is only a baseline)
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
@@ -1250,16 +1265,15 @@ function probeSelect() {
   if (settings.sleepCheck === false || !win || win.isDestroyed() || quitting) return null;
   const dbg = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at2 || 0) > 60000) { probeSelect.at2 = now; dlog('probe: no check now -', r); } };
   const hold = r => { if (debugOn() && panes.some(q => q.sleeping) && now - (probeSelect.at || 0) > 60000) { probeSelect.at = now; dlog('probe held:', r); } return null; };
+  if (probeAuthHold) return hold('sign-in page seen: stopped until 確認を再開');   // (#33) the shared session: no window checks
   if (lq.some(t => !t.probe) || now - lastReloadAll < 30000) return hold('loads queued / running (startup, reload-all ...)');   // any other load in the queue first (#31)
   { const busy = panes.find(q => !q.sleeping && (q.grokToken || q.grokPending || now - (q.loadedAt || 0) < 15000)); if (busy) return hold(`pane${busy.id} still loading`); }
-  let best = null;
-  panes.forEach((q, i) => {
-    if (!q.sleeping || q.view.webContents.isDestroyed() || i === focused || maximizedId === q.id) return;
-    const due = Math.max(q.lastCheck || 0, q.sleepAt || 0) + SLEEP_CHECK_MS;
-    if (due <= now && (!best || due < best.due)) best = { q, due };
-  });
-  if (!best) dbg('none due (' + panes.filter(q => q.sleeping).map(q => `pane${q.id}:${Math.round((Math.max(q.lastCheck || 0, q.sleepAt || 0) + SLEEP_CHECK_MS - now) / 1000)}s`).join(' ') + `, focused=${panes[focused]?.id})`);
-  return best && best.q;
+  // (#33) the one due longest (its own backoff); the clock set back never pushes a check further than its wait
+  const cands = panes.filter((q, i) => q.sleeping && !q.view.webContents.isDestroyed() && i !== focused && maximizedId !== q.id);
+  cands.forEach(q => { q.pb = PB.settle(q.pb, now, SLEEP_CHECK_MS); });
+  const best = PB.pick(cands, now);
+  if (!best) dbg('none due (' + panes.filter(q => q.sleeping).map(q => `pane${q.id}:${Math.round(((q.pb && q.pb.nextEligibleAt) - now) / 1000)}s/f${q.pb ? q.pb.failureCount : 0}`).join(' ') + `, focused=${panes[focused]?.id})`);
+  return best;
 }
 async function probeNext() {                                 // one check through the queue; resolves when it is over (the top-level tick runs one at a time)
   const q = probeSelect(); if (!q) return false;
@@ -1273,7 +1287,7 @@ async function probeNext() {                                 // one check throug
 async function probePane(p) {
   const target = p.botTarget || (GROK_BOT_RE.test(p.url || '') ? p.url : null);
   const id = target && target.match(GROK_BOT_RE)?.[1];
-  p.lastCheck = Date.now();
+  p.pb = PB.start(p.pb, Date.now(), SLEEP_CHECK_MS);         // (#33) an attempt now; the result below sets the next one (none: the same wait again)
   if (!id) return;
   const run = nextNo();                                      // this check's run (#02): bound to the sleep generation it starts in
   if (obsDo(p, { type: 'probe-start', run }).code) return;
@@ -1282,7 +1296,7 @@ async function probePane(p) {
   const bw = new BrowserWindow({ show: false, width: 1000, height: 720, skipTaskbar: true, focusable: false, webPreferences: {      // hidden window: same session, same preload, own 1000x720 viewport
     preload: path.join(__dirname, 'pane-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
   const wc = bw.webContents, pr = probe = { p, abort: false };
-  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false, unsure = '';
+  let last = null, lastAt = 0, pushes = 0, hard = 0, lastPush = 0, why = 'timeout', failed = false, unsure = '', atAuth = false;
   // the check's page is numbered like a live pane's: a new number per page / SPA move of this window, sent again on dom-ready
   const runTok = () => p.obs.sleep && p.obs.sleep.run && p.obs.sleep.run.id === run ? p.obs.sleep.run.tok : 0;
   const sendTok = () => { try { if (runTok() && !wc.isDestroyed()) wc.send('mpb:gen', runTok()); } catch {} };
@@ -1319,32 +1333,44 @@ async function probePane(p) {
     }
   } catch (e) { failed = true; dlog(`pane${p.id}`, 'probe error', String(e)); }
   finally {
+    try { if (!last && !wc.isDestroyed()) atAuth = PB.authPage(wc.getURL()); } catch {}   // (#33) no count: did it end on a sign-in page? (the URL is not kept)
     unregWc(r => r.wc === wc); probe = null;
     obsDo(p, { type: 'probe-stop', run });                   // the run is over: nothing of it is taken any more
     try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
   }
   const ms = Date.now() - t0;
-  if (!last || !p.sleeping) { diag.rec('probe', failed ? 'ERROR' : !p.sleeping ? 'WOKE' : why.toUpperCase(), { p: p.id, ms, n: pushes + hard }); if (unsure && !last) diag.rec('dom', unsure, { p: p.id }, 600000); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count'); return; }
+  if (!last || !p.sleeping) { diag.rec('probe', failed ? 'ERROR' : !p.sleeping ? 'WOKE' : why.toUpperCase(), { p: p.id, ms, n: pushes + hard }); if (unsure && !last) diag.rec('dom', unsure, { p: p.id }, 600000); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'no count');
+    probeEnd(p, sid, PB.kindOf({ error: failed, woke: !p.sleeping, why, issue: unsure, auth: atAuth })); return; }   // (#33) a failure (backoff) / cut short / a sign-in page
   if (!snapUsable(last.snap) || last.snap.cid !== id) {     // not sure what the page shows (partial latest turn / another bot): neither 'new' nor 'nothing new'; the remembered state stays
     const issue = snapIssue(last.snap) || 'OTHER_CONV';
     diag.rec('probe', 'UNSURE', { p: p.id, ms, n: pushes + hard }); diag.rec('dom', issue, { p: p.id }, 600000);
-    dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'unsure', issue); return;
+    dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'unsure', issue); probeEnd(p, sid, 'unsure'); return;   // (#33) a failure: never 'nothing new', the last success stays
   }
   const base0 = p.obs.sleep && p.obs.sleep.base;            // (debug log only) the baseline it is compared with, before the result replaces it
   const res = obsDo(p, { type: 'probe-result', sleep: sid, c: last });   // compared with the baseline of the sleep it was started in; becomes the new baseline
-  if (res.code) { diag.rec('probe', 'STALE', { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'stale run'); return; }   // woke / slept again / closed meanwhile: not this sleep's result
+  if (res.code) { diag.rec('probe', 'STALE', { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'stale run'); probeEnd(p, sid, 'aborted'); return; }   // woke / slept again / closed meanwhile: not this sleep's result
   const nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
   diag.rec('probe', res.verdict, { p: p.id, ms, n: pushes + hard });
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', res.verdict, `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
   if (res.verdict === 'CHANGED' && debugOn()) dlog(`pane${p.id}`, 'probe changed:', PS.fpDiff(base0, last));   // which field differed: names and numbers only
   if (last.hn && snapOk(last.snap, 'name')) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
   if (nf.waiting && last.q && snapOk(last.snap, 'quote')) p.reqQuote = last.q;              // refresh the quote shown while asleep
+  probeEnd(p, sid, 'ok');                                                                 // (#33) the only success: a usable, stable scan of this bot became this sleep's result
   if (!res.fresh) return;                                                                 // nothing new (or only a baseline), or the user spoke last
   p.msgMode = true; p.glow = false;                                                       // 'unopened' is set by the result (p.obs)
   p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
   p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
   updateBadge(); sendState();
   if (p.needsReply && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(nf) }).code) notifyPane(p, 'probe', PS.alertKey(nf), `未開封の新着（待機中 ${p.unread}件）`);   // off / muted / quiet: consumed in noticeOffer (#61)
+}
+// (#33) a check's outcome -> the pane's freshness / backoff, only for the sleep it was started in. A clear sign-in page stops every check of the
+// shared session (all windows) until 確認を再開; nothing else stops them. Never touches unopened / counts / notifications
+function probeEnd(p, sid, kind) {
+  if (!p.sleeping || !p.obs.sleep || p.obs.sleep.id !== sid) return;   // woke / slept again meanwhile: that sleep has its own state
+  p.pb = PB.record(p.pb, kind, Date.now(), SLEEP_CHECK_MS);
+  if (PB.failed(kind)) { diag.rec('probe', 'BACKOFF', { p: p.id, n: p.pb.failureCount }); dlog(`pane${p.id}`, 'probe backoff', kind, p.pb.failureCount, Math.round((p.pb.nextEligibleAt - Date.now()) / 1000) + 's'); }
+  if (kind === 'auth' && !probeAuthHold) { probeAuthHold = true; diag.rec('probe', 'AUTH_HOLD', { p: p.id }); dlog(`pane${p.id}`, 'probe: sign-in page - every check stopped until 確認を再開'); buildMenu(); broadcast(); return; }
+  sendState();
 }
 
 // ---- panes ----
@@ -2009,6 +2035,7 @@ on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sle
 on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) { reloadPane(p); setFocused(panes.indexOf(p)); } });   // asleep, or its wait was cancelled (取消): load it now
 on('load-cancel', id => { const p = byId(id); if (p) lq.cancel(t => t.win === ctx && t.ent === p.obs.ent && !t.probe && t.state === 'wait', 'USER'); });
 on('sleep-now', id => { const p = byId(id); if (p) sleepNowAsk(p); });
+on('probe-resume', () => probeResume());                     // (#33) 確認を再開 in a sleeping pane's placeholder (after a sign-in page)
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
 on('reload-all', () => reloadAll());
@@ -2212,7 +2239,8 @@ function buildMenu() {
             .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
         } })) },
       { label: '終了（🟣）は1分後・待機中（🟢）は30分後に自動スリープ（入力欄に下書きがあれば眠らない）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
-      { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
+      { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示。失敗が続くと最長60分ごと）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); broadcast(); } },
+      { label: '新着確認を再開（ログイン要確認で停止中）', enabled: probeAuthHold, click: () => probeResume() },   // (#33) the same as the placeholder's 確認を再開
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },

@@ -77,12 +77,15 @@ function mk(id) {
       <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
   </div>
-  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
+  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" title="このペインを開いてログイン状態を確認します">ログインを確認</button><button class="pbx pbr" title="スリープ中の新着確認を再開します（1枚ずつ順番に確認）">確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
   <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは2枚まで。順番が来ると自動で読み込みます</small></div>`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
   d.querySelector('.loadph').onclick = () => { if (d.classList.contains('idle')) mpb.wakePane(id); };
   // 取消 of a pane waiting for a load slot (placeholder / sleeping placeholder / header): only the wait ends, the click goes nowhere else
   d.addEventListener('click', e => { if (e.target.closest('.lqx')) { e.stopPropagation(); mpb.loadCancel(id); } }, true);
+  // (#33) stopped after a sign-in page: ログインを確認 opens this pane (the page shows the sign-in), 確認を再開 only resumes the checks
+  d.querySelector('.pbl').onclick = e => { e.stopPropagation(); mpb.wakePane(id); };
+  d.querySelector('.pbr').onclick = e => { e.stopPropagation(); mpb.probeResume(); };
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
   head.onmousedown = e => { if (!e.target.closest('button,input')) mpb.focusPane(id); };
@@ -227,6 +230,7 @@ const onS = s => {
     d.classList.toggle('stale', lastOnly);
     { const sn = d.querySelector('.sleepid .sn'), sg = d.querySelector('.sleepid .sg'); sn.textContent = p.sname || ''; sg.textContent = p.sgroup || ''; sg.style.display = p.sgroup ? '' : 'none'; }
     { const q = d.querySelector('.sleepq'); q.textContent = p.quote || ''; q.classList.toggle('on', !!p.quote); }
+    { const c = d.querySelector('.chk'); c.querySelector('.chkt').textContent = p.chk || ''; c.classList.toggle('on', !!p.chk); c.classList.toggle('hold', !!(p.chk && s.chkHold)); }   // (#33) main's line: last success / next / failures / stopped
     { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `待機中・終了にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
     const color = s.colors[p.color];
     d.style.setProperty('--pc', color || 'transparent');

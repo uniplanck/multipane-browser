@@ -87,7 +87,8 @@ const EVENTS = {
   reload: { ja: '再読み込み', r: ['PLAIN', 'BLANK_LOAD', 'ROUTER_OK', 'ROUTER_MISS', 'HARD_LOAD'] },
   watchdog: { ja: '真っ白なBotの再読込', r: ['RELOAD'] },
   'load.queue': { ja: '読み込みの順番待ち', r: LOAD_CODES },
-  probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR'] },
+  // (#33, probe-policy.js CODES; checked by test/probe-policy.test.js) + a failure backed off (n = failures in a row), the sign-in stop, 確認を再開
+  probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR', 'BACKOFF', 'AUTH_HOLD', 'RESUME'] },
   sleep: { ja: 'スリープ', r: ['SLEPT', 'WAKE'] },
   draft: { ja: '操作前の入力欄の確認', r: ['EMPTY', 'PRESENT', 'NOINPUT'] },
   'guard.auto': { ja: '入力があるため止めた自動操作', r: GUARD_AUTO_CODES },
