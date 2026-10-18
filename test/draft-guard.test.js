@@ -112,7 +112,13 @@ t('stamp: a key typed -> INPUT', G.stampDiff(ST(), ST({ rev: 1 })) === 'INPUT');
   t('dialog: long name clipped, empty name / unknown reason still readable', long.detail.split('\n')[0] === `・${'x'.repeat(39)}…：入力欄の状態を確認できませんでした` && long.detail.split('\n')[1] === '・（名前なし）：入力欄の状態を確認できませんでした');
   t('dialog: unknown operation falls back to the close wording', G.dialogText('NOPE', []).message.startsWith('このペインを閉じると'));
   t('dialog: every operation has its wording and button; every risk its own reason', Object.values(G.OPS).every(o => /と$/.test(o.when) && o.go)
-    && new Set(G.RISKS.map(c => G.dialogText('CLOSE', [{ label: 'a', codes: [c] }]).detail.split('\n')[0])).size === G.RISKS.length); }
+    && new Set(G.RISKS.map(c => G.dialogText('CLOSE', [{ label: 'a', codes: [c] }]).detail.split('\n')[0])).size === G.RISKS.length);
+  // (#23) closing one pane puts it into the 閉じたペインを開き直す history: the dialog says its input does not come back (the やめる line stays last)
+  const NOTE = '閉じたペインを元に戻しても、下書き・添付は復元できません。', tail = x => x.detail.split('\n').slice(-2);
+  t('dialog: close says reopening does not bring the draft / attachment back', J(tail(d)) === J([NOTE, '「やめる」を選ぶと、入力内容と添付はそのまま残ります。']));
+  t('dialog: closing many at once / other operations (not in the history) do not mention it', ['CLOSE_OTHERS', 'LAYOUT', 'WORKSPACE', 'RELOAD', 'RELOAD_ALL', 'SLEEP', 'NAVIGATE']
+    .every(op => !G.dialogText(op, [{ label: 'a', codes: ['PRESENT'] }]).detail.includes(NOTE))
+    && Object.keys(G.OPS).filter(op => G.OPS[op].reopen).join() === 'CLOSE'); }
 
 // ---- the shared composer reading (src/pane-rules.js composerState) ----
 const pre = loadPreload();

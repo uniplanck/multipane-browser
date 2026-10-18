@@ -66,6 +66,7 @@ function build() {
     ['すべてのペインを再読み込み（一括更新）', '↻', { type: 'reload-all' }, `${MOD}⇧R`],
     ['すべての未読をクリア', '✓', { type: 'clear-unread' }],
     ['新しい空のペイン', '＋', { type: 'open-new', url: '' }, `${MOD}T`],
+    ...(S?.canReopen ? [['閉じたペインを開き直す（下書き・添付は戻りません）', '↩', { type: 'reopen-closed' }, `${MOD}⇧T`]] : []),   // nothing closed / 10 panes: not offered
     ['Grok を新しいペインで開く', '✦', { type: 'open-new', url: 'https://grok.com/' }],
     ['診断（バージョン・設定・件数・保存状態）', '🩺', { type: 'diag-open' }],
   ];

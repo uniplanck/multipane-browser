@@ -78,7 +78,7 @@ const ACTIONS = {
   'open-new': { shape: x => str(x.url, URL_MAX) },
   'open-here': { shape: x => str(x.url, URL_MAX) },
   'new-window': { shape: x => str(x.url, URL_MAX) },
-  maximize: {}, 'clear-unread': {}, 'reload-all': {}, 'rename-prompt': {}, 'ws-save-prompt': {}, 'approve-open': {},
+  maximize: {}, 'clear-unread': {}, 'reload-all': {}, 'reopen-closed': {}, 'rename-prompt': {}, 'ws-save-prompt': {}, 'approve-open': {},
   'broadcast-prompt': {}, 'toggle-notifications': {}, close: {}, 'fav-add-current': {}, 'recovery-fresh': {},
   'diag-open': {}, 'diag-copy': {},                         // 診断 screen; main builds the summary itself (nothing of it comes from the page)
   'diag-persist': { shape: x => bool(x.on) },

@@ -416,6 +416,9 @@ const nextNo = () => ++worldNo;
 // the composer live and the guard decides: automatic operations only when the page clearly holds nothing, manual ones ask (makeWindow: guardRun)
 const GUARD = require('./draft-guard');
 const { COMPOSER_JS } = require('./pane-rules');             // composerState() from the shared rules: the same code the pane preload has built in
+// ---- 閉じたペインを開き直す (#23, closed-panes.js): what a closed pane leaves in its window's history, when an entry is taken, the focus after
+// (makeWindow: closePane / reopenClosed). Memory only: never in panes.json, gone after a restart; a draft / attachment never comes back.
+const CP = require('./closed-panes');
 // ---- shared load queue (#31, load-queue.js): every load main starts - startup / workspace, a new pane, reload / reload-all / automatic reloads,
 // wake, another URL / back / forward / a grok link in the pane, the bot-page fixes and the background check - waits for one of LQ.LIMIT slots in
 // all windows (a background check takes at most one). The user's own wake / reload / URL first, then startup / reload-all / automatic reloads,
@@ -477,7 +480,7 @@ function grid(n) {
 }
 // ---- row structure: every pane belongs to a row (rowLens[r] = number of panes in row r, panes[] is kept in row-major order) ----
 // Closing a pane only shrinks ITS row (the row re-divides evenly); panes never move between rows. An empty row disappears.
-const closedStack = [];                                      // last closed panes (newest last), for 閉じたペインを開き直す
+const closedStack = [];                                      // last CP.LIMIT closed panes (newest last), for 閉じたペインを開き直す (#23: this window, memory only)
 let rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;
 const sumArr = a => a.reduce((x, y) => x + y, 0);
 function defRows(n) {                                  // rows as the preset / auto-fit would lay n panes out
@@ -662,7 +665,7 @@ function sendState(cs = cells()) {
   const state = {
     layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
-    canReopen: closedStack.length > 0 && panes.length < MAX, globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(),
+    canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(),
     panes: panes.map((p, i) => {
       const wc = p.view.webContents, lt = lqView(p);              // its load in the queue (#31): waiting (with its place) / running
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -1405,22 +1408,36 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   relayout();
   return p;
 }
+// (#23) a new pane (new id / generation, its load through the queue) from the newest entry; the entry is taken only once the pane exists, so a
+// full window, a second ⌘⇧T while one runs or a pane that could not be made leave the history as it was. The keyboard follows a moment later
+// only if nothing moved meanwhile (another pane clicked / typed into, the address bar, the palette).
+let reopening = false;
+const wcId = wc => wc && !wc.isDestroyed() ? wc.id : 0;
+const focusNow = () => ({ focusedId: panes[focused]?.id, overlay: overlayOpen, fw: wcId(require('electron').webContents.getFocusedWebContents()), revs: panes.map(q => [q.id, q.inputRev]) });
 function reopenClosed() {
-  if (!closedStack.length || panes.length >= MAX) return;
-  const e = closedStack.pop(), before = [...getRows()];
-  const p = addPane({ ...e.spec }, { focus: false });
-  if (!p) { closedStack.push(e); return; }
-  const pl = placeReopened(before, e);                        // back into the row it was closed from (if there is room)
-  panes.splice(panes.indexOf(p), 1); panes.splice(pl.index, 0, p); rowLens = pl.rows;
-  maximizedId = null; setFocused(pl.index); relayout(true); save(); sendState();
-  setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
+  const pre = CP.plan(closedStack, panes.length, MAX, reopening);
+  if (pre.code) { diag.rec('reopen', pre.code, { n: closedStack.length }); return; }
+  reopening = true;
+  try {
+    const e = pre.e, before = [...getRows()], had = new Set(panes), prev = panes[focused];
+    let p = null;
+    try { p = addPane({ ...e.spec }, { focus: false }); } catch { p = panes.find(q => !had.has(q)) || null; dlog('reopen', 'addPane threw'); }   // made after all: it counts
+    if (!p) { diag.rec('reopen', 'FAIL', { n: closedStack.length }); sendState(); return; }
+    CP.take(closedStack, e);
+    const pl = placeReopened(before, e);                        // back into the row it was closed from (if there is room)
+    panes.splice(panes.indexOf(p), 1); panes.splice(pl.index, 0, p); rowLens = pl.rows;
+    maximizedId = null; setFocused(pl.index); relayout(true); save(); sendState();
+    diag.rec('reopen', 'OK', { p: p.id, n: closedStack.length });
+    const at = { ...focusNow(), id: p.id };                     // the keyboard may still be where ⌘⇧T / ↩ / the palette left it: that pane, the bar, the new one
+    at.fws = [at.fw, wcId(prev && prev.view.webContents), wcId(p.view.webContents)];
+    setTimeout(() => { if (panes.includes(p) && !p.view.webContents.isDestroyed() && CP.mayFocus(at, focusNow())) p.view.webContents.focus(); }, 50);
+  } finally { reopening = false; }
 }
 function closePane(id, keepEmpty) {
   const i = panes.findIndex(p => p.id === id); if (i < 0) return;
-  { const lens = getRows(); let r = 0, st = 0; while (r < lens.length - 1 && i >= st + lens[r]) { st += lens[r]; r++; }
-    const cu = paneUrl(panes[i]);
-    if (!keepEmpty && cu && cu !== NEWTAB) { closedStack.push({ spec: paneSpec(panes[i]), row: r, col: i - st, rowGone: lens[r] === 1, cols: Math.max(...lens) }); if (closedStack.length > 10) closedStack.shift(); }   // for ⌘⇧T
-    lens[r]--; if (lens[r] <= 0) lens.splice(r, 1); }          // only this pane's row shrinks; an empty row disappears
+  { const lens = getRows(), w = CP.where(lens, i);
+    if (!keepEmpty) CP.push(closedStack, CP.entry(paneSpec(panes[i]), w, NEWTAB));   // for ⌘⇧T (a blank / new-tab pane: nothing to reopen; closing many at once: not kept)
+    lens[w.row]--; if (lens[w.row] <= 0) lens.splice(w.row, 1); }   // only this pane's row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
   p.grokToken = null;
   unregWc(r => r.wc === p.view.webContents);                 // nothing from this page counts any more
@@ -1673,6 +1690,7 @@ function runAction(a) {
     case 'maximize': closeOverlay(); toggleMaximize(); break;
     case 'clear-unread': closeOverlay(); clearAll(); break;
     case 'reload-all': closeOverlay(); reloadAll(); break;
+    case 'reopen-closed': closeOverlay(); reopenClosed(); break;   // (#23) the palette's 閉じたペインを開き直す (= ⌘⇧T / ↩)
     case 'rename': { const p = byId(a.id); if (p) { p.name = String(a.value || '').slice(0, 60); sendState(); save(); } closeOverlay(); break; }
     case 'rename-prompt': openOverlay('rename', { id: panes[focused]?.id, value: panes[focused]?.name || '' }); break;
     case 'ws-save-prompt': openOverlay('ws-save'); break;

@@ -102,8 +102,9 @@ function unmoved(last, now) {
 }
 
 // ---- the dialog (Japanese, the same style as main's other confirmations; default and Esc = やめる) ----
+// reopen: the closed pane goes into the 閉じたペインを開き直す history (#23; closing many at once does not): say that its input does not come back
 const OPS = {
-  CLOSE: { when: 'このペインを閉じると', go: '閉じる' },
+  CLOSE: { when: 'このペインを閉じると', go: '閉じる', reopen: true },
   CLOSE_OTHERS: { when: '他のペインをすべて閉じると', go: 'すべて閉じる' },
   RELOAD: { when: '再読み込みすると', go: '再読み込み' },
   RELOAD_ALL: { when: 'すべてのペインを再読み込みすると', go: 'すべて再読み込み', skip: '入力のあるペインを除いて再読み込み' },
@@ -130,7 +131,8 @@ function dialogText(op, items, { skip = false } = {}) {
   });
   const actions = ['go', ...(skip && o.skip ? ['skip'] : []), 'cancel'];
   const buttons = actions.map(a => a === 'go' ? o.go : a === 'skip' ? o.skip : 'やめる');
-  return { message: `${o.when}、入力中の内容が失われる可能性があります`, detail: [...lines, '', '「やめる」を選ぶと、入力内容と添付はそのまま残ります。'].join('\n'),
+  const note = o.reopen ? ['閉じたペインを元に戻しても、下書き・添付は復元できません。'] : [];
+  return { message: `${o.when}、入力中の内容が失われる可能性があります`, detail: [...lines, '', ...note, '「やめる」を選ぶと、入力内容と添付はそのまま残ります。'].join('\n'),
     buttons, defaultId: actions.length - 1, cancelId: actions.length - 1, actions };
 }
 

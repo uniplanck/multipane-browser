@@ -6,6 +6,7 @@ const D = require('../src/diagnostics');
 const IPC = require('../src/ipc-policy');
 const NAV = require('../src/navigation-policy'), PERM = require('../src/permission-policy');
 const NP = require('../src/notification-policy');
+const CP = require('../src/closed-panes');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mpb-diag-'));
 let dirs = 0; const box = () => path.join(root, String(++dirs), 'diagnostics');
@@ -50,6 +51,7 @@ const onlyKeys = e => Object.keys(e).every(k => KEYS.includes(k));
     t('navigation / permission reject codes = navigation-policy.js / permission-policy.js REJECT (#72)', J([...D.NAV_CODES].sort()) === J(Object.keys(NAV.REJECT).sort()) && J([...D.PERM_CODES].sort()) === J(Object.keys(PERM.REJECT).sort())
       && D.NAV_CODES.every(c => D.EVENTS['nav.block'].r.includes(c)) && D.PERM_CODES.every(c => D.EVENTS['perm.deny'].r.includes(c)));
     t('notification codes = notification-policy.js CODES (#61)', J([...D.NOTIFY_CODES].sort()) === J([...NP.CODES].sort()) && D.NOTIFY_CODES.every(c => D.EVENTS.notify.r.includes(c)));
+    t('reopen codes = closed-panes.js CODES (#23)', J([...D.REOPEN_CODES].sort()) === J([...CP.CODES].sort()) && D.REOPEN_CODES.every(c => D.EVENTS.reopen.r.includes(c)));
   }
 
   // ---- ring ----
