@@ -33,12 +33,13 @@ eq('clip adds ellipsis', clipQuote(long).endsWith('…'), true);
 eq('long quote clipped via requestQuote', requestQuote(`> ${long}\n${M}`, [long]).length, 300);
 eq('short not clipped', clipQuote('短い'), '短い');
 }
-// composerDraft has one copy (src/pane-rules.js): the preload has it built in, main runs its source (DRAFT_JS) in the live page before a pane sleeps
+// the composer reading has one copy (src/pane-rules.js composerState; composerDraft follows it): the preload has it built in, main runs its
+// source (COMPOSER_JS) in the live page right before a page is thrown away (#11 input guard)
 check('preload has the shared composerDraft', pre.composerDraft.toString(), rules.composerDraft.toString());
-check('DRAFT_JS is the shared composerDraft', rules.DRAFT_JS, `(${rules.composerDraft})()`);
-check('main has no draft check of its own', /function composerDraft|DRAFT_FN/.test(main), false);
-check('main takes DRAFT_JS from the shared rules', /const \{ DRAFT_JS \} = require\('\.\/pane-rules'\)/.test(main), true);
-// the draft protection itself, on both: main's DRAFT_JS (run in a fresh context, like executeJavaScript) and the preload's function
+check('COMPOSER_JS is the shared composerState', rules.COMPOSER_JS, `(${rules.composerState})()`);
+check('main has no draft check of its own', /function composer(Draft|State)|DRAFT_FN|DRAFT_JS/.test(main), false);
+check('main takes COMPOSER_JS from the shared rules', /const \{ COMPOSER_JS \} = require\('\.\/pane-rules'\)/.test(main), true);
+// the draft protection itself, on both: main's COMPOSER_JS (run in a fresh context, like executeJavaScript) and the preload's function
 const field = ({ tag = 'TEXTAREA', value = '', text = '', hidden = false, tabIndex = 0, attachment = false } = {}) => {
   const box = { querySelector: s => (attachment && s.includes('img[src^="blob:"]') ? {} : null) };
   return { tagName: tag, value, innerText: text, textContent: text, tabIndex, getAttribute: a => (a === 'aria-hidden' && hidden ? 'true' : null), closest: s => (s === 'form' ? box : null), parentElement: { parentElement: box } };
@@ -56,7 +57,7 @@ const drafts = [
 ];
 for (const [n, els, exp] of drafts) {
   const doc = { querySelectorAll: () => els };
-  check('main draft: ' + n, vm.runInNewContext(rules.DRAFT_JS, { document: doc }), exp);
+  check('main draft: ' + n, vm.runInNewContext(rules.COMPOSER_JS, { document: doc }).d === 'present', exp);
   pre.ctx.document = doc; check('preload draft: ' + n, pre.composerDraft(), exp);
 }
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

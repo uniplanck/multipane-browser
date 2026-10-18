@@ -204,7 +204,8 @@ t('dom: the bot id is taken from the path', page({ blocks: [block({ text: 'x' })
   t('main: background check counts only confirmed conversations and compares only usable ones', /if \(snapOk\(c\.snap, 'conv'\) && snapOk\(c\.snap, 'roles'\)\) \{ last = c; lastAt = Date\.now\(\); \} else \{ last = null;/.test(pp)
     && /if \(!snapUsable\(last\.snap\) \|\| last\.snap\.cid !== id\) \{/.test(pp) && pp.indexOf("diag.rec('probe', 'UNSURE'") > 0 && pp.indexOf("diag.rec('probe', 'UNSURE'") < pp.indexOf("type: 'probe-result'"));
   t('main: the snapshot is forgotten on navigation and reset (never carried to a new page)', /wc\.on\('did-navigate', \(\) => \{ if \(p\.sleeping\) return; p\.snap = null;/.test(main) && /p\.snap = null;/.test(rc));
-  t('main: the draft guard is unchanged (final live check before sleep)', /if \(!force && p\.hasDraft\) return false;/.test(cs) && /const d = await liveDraft\(p\); p\.hasDraft = d; if \(!d && canSleep\(p, panes\.indexOf\(p\)\)\) sleepPane\(p\);/.test(main));
+  t('main: the draft guard holds (reported draft blocks auto-sleep; final live check through the #11 input guard before sleep)', /if \(!force && p\.hasDraft\) return false;/.test(cs)
+    && /const r = await liveInput\(p\);[\s\S]{0,300}if \(autoGate\(p, r, 'sleep'\) && canSleep\(p, panes\.indexOf\(p\)\)\) sleepPane\(p\);/.test(main));
   const lit = [...main.matchAll(/diag\.rec\('dom', '([A-Z_]+)'/g)].map(m => m[1]);
   t(`main: literal dom codes are known (${lit.join(' ')})`, lit.length >= 2 && lit.every(c => DG.DOM_CODES.includes(c)) && DG.EVENTS.probe.r.includes('UNSURE'));
   t('main: the snapshot is not saved to panes.json', !/snap:/.test(fn('paneSpec') || main.slice(main.indexOf('const paneSpec'), main.indexOf('\n', main.indexOf('const paneSpec')))));

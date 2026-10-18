@@ -60,19 +60,29 @@ function looksAsking(text, hasWidget) {
   const tail = raw.replace(/\s+/g, '').slice(-200);
   return /教えてください|どちら|確認してください|よろしいですか/.test(tail);
 }
-// Composer holds typed text / a pending attachment? (blocks auto-sleep). Also run by main in the live page right before a pane sleeps,
-// as source text (DRAFT_JS below), so it must only use the page's globals - nothing else declared in this file.
-function composerDraft() {
+// What the composer holds (#11). Read by the preload (draft report / snapshot) and by main in the live page right before an operation that
+// throws the page away (sleep / reload / close / another URL ...), as source text (COMPOSER_JS below), so it must only use the page's
+// globals - nothing else declared in this file.
+// -> { d: 'present' (typed text or a pending attachment) | 'empty' | 'none' (no composer on the page), text, att: an attachment preview,
+//      up: an upload progress indicator next to an attachment, n: composers, fp: a short hash of what they hold (never the text itself) }
+function composerState() {
   const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
+  let n = 0, text = false, att = false, up = false, h = 5381;
   for (const e of els) {
     if (e.getAttribute('aria-hidden') === 'true' || e.tabIndex < 0 && e.tagName === 'TEXTAREA') continue;   // autosize mirror textarea (value 'x')
-    const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
-    if (String(txt).trim().length > 0) return true;
+    n++;
+    const txt = String((e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '')) || '');
+    if (txt.trim().length > 0) text = true;
     const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
-    if (box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')) return true;
+    const a = !!(box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]'));
+    if (a) { att = true; if (box.querySelector('[role="progressbar"], progress')) up = true; }
+    const s = n + '|' + txt + '|' + (a ? 1 : 0);
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
   }
-  return false;
+  return { d: text || att ? 'present' : n ? 'empty' : 'none', text, att, up, n, fp: h.toString(36) };
 }
+// Composer holds typed text / a pending attachment? (blocks auto-sleep)
+function composerDraft() { return composerState().d === 'present'; }
 // ---- conversation snapshot (#03): what one scan of the page is sure about, item by item ----
 // Each item is one fixed code; SNAP says whether that code is a valid reading (true) or unknown (false), and the code is the reason.
 // No scores: a reading comes from a confirmed structure of the page, or it is unknown.
@@ -146,5 +156,5 @@ function readConversation(f) {
 const msgKey = c => [c.user, c.bot, c.botSince, c.waiting, c.working, c.done, c.asks, c.fp || '', c.q || '',
   c.snap ? Object.keys(SNAP).filter(k => k !== 'stable').map(k => c.snap[k]).join(',') + ',' + c.snap.cid : ''].join('/');
 // SHARED-END
-const DRAFT_JS = `(${composerDraft})()`;
-module.exports = { QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerDraft, DRAFT_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };
+const COMPOSER_JS = `(${composerState})()`;
+module.exports = { QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerState, composerDraft, COMPOSER_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };

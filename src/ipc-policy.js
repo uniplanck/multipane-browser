@@ -142,6 +142,7 @@ const CHANNELS = {
   'pane:interact': { roles: PANE }, 'pane:mouseup': { roles: PANE }, 'pane:typing': { roles: PANE },
   'pane:draft': { roles: PANE, shape: a => bool(a[0]) },
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
+  'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored

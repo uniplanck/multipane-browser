@@ -134,19 +134,29 @@ function looksAsking(text, hasWidget) {
   const tail = raw.replace(/\s+/g, '').slice(-200);
   return /教えてください|どちら|確認してください|よろしいですか/.test(tail);
 }
-// Composer holds typed text / a pending attachment? (blocks auto-sleep). Also run by main in the live page right before a pane sleeps,
-// as source text (DRAFT_JS below), so it must only use the page's globals - nothing else declared in this file.
-function composerDraft() {
+// What the composer holds (#11). Read by the preload (draft report / snapshot) and by main in the live page right before an operation that
+// throws the page away (sleep / reload / close / another URL ...), as source text (COMPOSER_JS below), so it must only use the page's
+// globals - nothing else declared in this file.
+// -> { d: 'present' (typed text or a pending attachment) | 'empty' | 'none' (no composer on the page), text, att: an attachment preview,
+//      up: an upload progress indicator next to an attachment, n: composers, fp: a short hash of what they hold (never the text itself) }
+function composerState() {
   const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]'));
+  let n = 0, text = false, att = false, up = false, h = 5381;
   for (const e of els) {
     if (e.getAttribute('aria-hidden') === 'true' || e.tabIndex < 0 && e.tagName === 'TEXTAREA') continue;   // autosize mirror textarea (value 'x')
-    const txt = e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '');
-    if (String(txt).trim().length > 0) return true;
+    n++;
+    const txt = String((e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent || '')) || '');
+    if (txt.trim().length > 0) text = true;
     const box = e.closest('form') || (e.parentElement && e.parentElement.parentElement);
-    if (box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')) return true;
+    const a = !!(box && box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]'));
+    if (a) { att = true; if (box.querySelector('[role="progressbar"], progress')) up = true; }
+    const s = n + '|' + txt + '|' + (a ? 1 : 0);
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
   }
-  return false;
+  return { d: text || att ? 'present' : n ? 'empty' : 'none', text, att, up, n, fp: h.toString(36) };
 }
+// Composer holds typed text / a pending attachment? (blocks auto-sleep)
+function composerDraft() { return composerState().d === 'present'; }
 // ---- conversation snapshot (#03): what one scan of the page is sure about, item by item ----
 // Each item is one fixed code; SNAP says whether that code is a valid reading (true) or unknown (false), and the code is the reason.
 // No scores: a reading comes from a confirmed structure of the page, or it is unknown.
@@ -222,13 +232,8 @@ const msgKey = c => [c.user, c.bot, c.botSince, c.waiting, c.working, c.done, c.
 // SHARED-END
 // page heading (bot name / group room name) + header text (participants in a group room) for the sleeping placeholder
 const headText = e => e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
-// composer for the snapshot: 'present' / 'empty' (composerDraft of the shared rules decides) / 'none' (no composer on the page: cannot tell) / 'error'
-function draftState() {
-  try {
-    if (composerDraft()) return 'present';
-    return [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(e => e.getAttribute('aria-hidden') !== 'true' && !(e.tabIndex < 0 && e.tagName === 'TEXTAREA')) ? 'empty' : 'none';
-  } catch { return 'error'; }
-}
+// composer for the snapshot: 'present' / 'empty' / 'none' (no composer on the page: cannot tell) - composerState of the shared rules decides - / 'error'
+function draftState() { try { return composerState().d; } catch { return 'error'; } }
 // Reads the page for readConversation (shared rules, which decide everything): DOM in, plain data out. The whole document - turns scrolled out of
 // view too, no visibility test - and only these structures: grok.com/bot turns are ".group/bot-entry" blocks, user turns contain
 // [data-testid="user-message"], h1 / header for the name. Never document.body's text. Without bot-entry blocks the old generic guesses below
@@ -347,6 +352,11 @@ window.addEventListener('drop', scheduleDraft, true);
 window.addEventListener('input', reportEditing, true);
 window.addEventListener('focusin', reportEditing, true);
 window.addEventListener('focusout', () => setTimeout(reportEditing, 0), true);
+// An IME composition in progress (変換中, #11): main never throws the page away during one. Sent on change only.
+let imeOn = false;
+const reportIme = on => { if (on !== imeOn) { imeOn = on; ipcRenderer.send('pane:ime', on); } };
+window.addEventListener('compositionstart', () => reportIme(true), true);
+window.addEventListener('compositionend', () => reportIme(false), true);
 
 // Real user interaction in this pane (clears its update highlight).
 window.addEventListener('mousedown', () => ipcRenderer.send('pane:interact'), true);

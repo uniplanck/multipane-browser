@@ -33,6 +33,16 @@ const shown = o => !o ? '' : o.sleep ? 'sleep' : current(o) ? 'live' : o.mark ? 
 // one notification per report content (the same scan delivered again, re-read after a reload or by a background check alerts once)
 const alertKey = c => `${c.user}/${c.bot}/${c.fp || ''}`;
 const fpOf = c => ({ user: c.user, bot: c.bot, botSince: c.botSince, fp: String(c.fp || '') });
+// (debug log only) where a background check's report differs from the sleep's baseline: the fields the verdict compares (user / bot / fp) and
+// botSince, as numbers. The fingerprint only as 'hash same / differs' + the length of the text it was taken from - never the hash, the text,
+// a name or a URL. Changes no state and no verdict.
+function fpDiff(base, c) {
+  if (!base || !c) return 'no baseline';
+  const b = fpOf(c), num = v => Number.isSafeInteger(v) ? v : '?', len = fp => (/^[0-9a-z]+\.(\d{1,9})$/.exec(fp) || [])[1] || '?';
+  const out = ['user', 'bot', 'botSince'].filter(k => base[k] !== b[k]).map(k => `${k} ${num(base[k])}->${num(b[k])}`);
+  if (base.fp !== b.fp) out.push(`fp ${base.fp.split('.')[0] === b.fp.split('.')[0] ? 'hash same' : 'hash differs'} len ${len(base.fp)}->${len(b.fp)}`);
+  return out.join(', ') || 'no difference';
+}
 // a report stamped { ent, gen, seq } may be taken by this pane now? -> '' or the reject code (pure check, nothing changes)
 function admit(o, ent, gen, seq) {
   if (!o || o.closed) return 'CLOSED';
@@ -95,4 +105,4 @@ function reduce(o, a) {
   return no('BAD_ACTION');
 }
 
-module.exports = { REJECT, createObs, admit, reduce, current, sleepOk, shown, alertKey };
+module.exports = { REJECT, createObs, admit, reduce, current, sleepOk, shown, alertKey, fpDiff };

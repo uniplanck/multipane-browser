@@ -39,6 +39,9 @@ const DOM_CODES = ['LOADING', 'AUTH_REQUIRED', 'DOM_UNKNOWN', 'ROLE_GUESS', 'LAT
 // a report main dropped by its generation stamp (#02, pane-state.js admit / probe-scan): closed or other pane, no number yet, older generation,
 // duplicate / out of order, a background check that is no longer the running one
 const GEN_CODES = ['CLOSED', 'OTHER_PANE', 'NO_TOKEN', 'STALE_GEN', 'STALE_SEQ', 'STALE_RUN'];
+// input guard (#11, draft-guard.js; checked by the test): why an automatic operation was refused / why a confirmation no longer held
+const GUARD_AUTO_CODES = ['PRESENT', 'ATTACH', 'UPLOAD', 'IME', 'UNKNOWN', 'BUSY', 'CHANGED', 'STALE'];
+const GUARD_EXPIRE_CODES = ['GONE', 'NEW', 'CHANGED', 'STALE', 'PANE', 'INPUT'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -66,7 +69,9 @@ const EVENTS = {
   watchdog: { ja: '真っ白なBotの再読込', r: ['RELOAD'] },
   probe: { ja: 'スリープ中の新着確認', r: ['CHANGED', 'SAME', 'BASELINE', 'UNSURE', 'STALE', 'TIMEOUT', 'ABORT', 'WOKE', 'OFFSITE', 'NOTFOUND', 'ERROR'] },
   sleep: { ja: 'スリープ', r: ['SLEPT', 'WAKE'] },
-  draft: { ja: 'スリープ前の下書き確認', r: ['EMPTY', 'PRESENT'] },
+  draft: { ja: '操作前の入力欄の確認', r: ['EMPTY', 'PRESENT', 'NOINPUT'] },
+  'guard.auto': { ja: '入力があるため止めた自動操作', r: GUARD_AUTO_CODES },
+  'guard.ask': { ja: '入力が失われる操作の確認', r: ['ASKED', 'CANCEL', 'GO', 'BUSY', ...GUARD_EXPIRE_CODES] },
   'count.drop': { ja: '採用しなかった件数の報告', r: ['SLEEPING', 'NOT_BOT', ...GEN_CODES] },
   dom: { ja: '会話を確定できなかった読み取り', r: DOM_CODES },
   'ipc.reject': { ja: '拒否したIPC', r: IPC_CODES },
@@ -327,5 +332,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

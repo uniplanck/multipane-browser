@@ -133,6 +133,11 @@ const deepFreeze = x => { if (x && typeof x === 'object' && !Object.isFrozen(x))
   const first = PS.reduce(o, { type: 'probe-result', sleep: o.sleep.id, c: NEWBOT });
   t('first check result is only the baseline: not new, not unopened', first.verdict === 'BASELINE' && !first.fresh && !first.o.unopened && first.o.sleep.base.fp === NEWBOT.fp);
   t('the next one compares with it', PS.reduce(first.o, { type: 'probe-result', sleep: o.sleep.id, c: NEWBOT }).verdict === 'SAME');
+  // (debug log only) which field made a CHANGED: names and numbers, never the text / the hash itself; the verdict is untouched
+  const base = first.o.sleep.base, more = rep([['u', '依頼'], ['b', '返信1\n' + W], ['b', '返信2\n' + W + '\n追記']]);
+  t('fpDiff: count and fingerprint differences as numbers', PS.fpDiff(base, more) === `fp hash differs len ${NEWBOT.fp.split('.')[1]}->${more.fp.split('.')[1]}` && PS.fpDiff(base, USER) === `user 1->2, bot 2->1, botSince 2->0, fp hash differs len ${NEWBOT.fp.split('.')[1]}->${USER.fp.split('.')[1]}`);
+  t('fpDiff: same report / no baseline / junk fingerprint', PS.fpDiff(base, NEWBOT) === 'no difference' && PS.fpDiff(null, NEWBOT) === 'no baseline' && PS.fpDiff({ ...base, fp: '秘密.12' }, { ...NEWBOT, fp: 'x' }) === 'fp hash differs len ?->?');
+  t('fpDiff: no text and no hash in it', !/返信|依頼|追記/.test(PS.fpDiff(base, more)) && !PS.fpDiff(base, more).includes(NEWBOT.fp.split('.')[0]));
   let st = scan(mk(), 2, 1, WAIT).o; st = PS.reduce(st, { type: 'bump', gen: next() }).o; st = PS.reduce(st, { type: 'sleep', gen: next() }).o;
   t('a fingerprint of an older generation (another page / before a reload) is never a baseline', st.stable.fp === WAIT.fp && st.sleep.base === null);
   // ten panes falling asleep without a confirmed state: their first checks bring no unopened
@@ -202,7 +207,7 @@ function page(blocks) {
 // ---- main's wiring (contract with src/main.js) ----
 { const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
   const fn = name => { const i = main.indexOf(`function ${name}(`); if (i < 0) return ''; let d = 0, j = main.indexOf(') {', i) + 2; for (; j < main.length; j++) { if (main[j] === '{') d++; else if (main[j] === '}' && --d === 0) break; } return main.slice(i, j + 1); };
-  const om = fn('onMsgCount'), cs = fn('canSleep'), pp = fn('probePane'), sp = fn('sleepPane'), rp = fn('reloadPane'), cp = fn('closePane'), ap = fn('addPane'), ld = fn('liveDraft');
+  const om = fn('onMsgCount'), cs = fn('canSleep'), pp = fn('probePane'), sp = fn('sleepPane'), rp = fn('reloadPane'), cp = fn('closePane'), ap = fn('addPane'), ld = fn('liveInput');
   const at = (s, x) => s.indexOf(x);
   t('main: one per-launch counter for entities / generations / runs, at the top level (all windows)', /^let worldNo = 0;$/m.test(main) && /^const nextNo = \(\) => \+\+worldNo;$/m.test(main));
   t('main: a report is checked against its generation before anything else is done with it', at(om, 'PS.admit(p.obs, p.obs.ent, c.gen, c.seq)') > 0 && at(om, 'PS.admit(') < at(om, 'resetCounts(p)')
@@ -219,7 +224,10 @@ function page(blocks) {
   t('main: a check is a run of the sleep it starts in; its reports are checked per run / page, its result only for that sleep', at(pp, "type: 'probe-start', run") > 0 && at(pp, "type: 'probe-start'") < at(pp, 'new BrowserWindow')
     && at(pp, "type: 'probe-scan', run, gen: c.gen, seq: c.seq") < at(pp, 'last = c;') && /wc\.on\('did-navigate', docGen\);/.test(pp) && at(pp, "type: 'probe-stop', run") > at(pp, 'finally')
     && at(pp, "type: 'probe-result', sleep: sid") > at(pp, "diag.rec('probe', 'UNSURE'") && at(pp, "diag.rec('probe', 'STALE'") > 0);
-  t('main: a draft check answered by an older page counts as unknown', /const g = p\.obs\.gen;/.test(ld) && /p\.obs\.gen === g \? d : null/.test(ld));
+  t('main: a draft check answered by an older page counts as unknown (#11: stamps with the generation around the live check)', /const before = inStamp\(p\)/.test(ld) && /after: inStamp\(p\)/.test(ld)
+    && /const inStamp = p => \(\{ ent: p\.obs\.ent, gen: p\.obs\.gen,/.test(main) && require('../src/draft-guard').read({ d: 'empty' }, { page: true, before: { ent: 1, gen: 2, rev: 0 }, after: { ent: 1, gen: 3, rev: 0 }, at: 1 }).st === 'UNKNOWN');
+  t('main: a background check that says CHANGED logs which field differed, numbers only (debug log)', /const base0 = p\.obs\.sleep && p\.obs\.sleep\.base;/.test(pp) && /if \(res\.verdict === 'CHANGED' && debugOn\(\)\) dlog\(`pane\$\{p\.id\}`, 'probe changed:', PS\.fpDiff\(base0, last\)\);/.test(pp)
+    && pp.indexOf('const base0') < pp.indexOf("type: 'probe-result'"));
   t('main: unopened is the reducer\'s (no own copy left)', !/p\.unopened\s*=/.test(main) && !/sleepFp/.test(main));
   t('main: the generation state is never saved', !/obs/.test(main.slice(main.indexOf('const paneSpec'), main.indexOf('\n', main.indexOf('const paneSpec')))) && !/obs/.test(fn('stateDoc')));
   t('main: the screen gets live / last / sleep only', /obs: PS\.shown\(p\.obs\)/.test(fn('sendState'))); }

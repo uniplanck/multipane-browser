@@ -178,16 +178,15 @@ function moveFavorite(a, b) {
   const [f] = favorites.splice(i, 1); favorites.splice(j, 0, f); favChanged();
 }
 
-// ---- auto reload ----
+// ---- auto reload (through the input guard, #11: never while the page holds input; tried again on the next tick) ----
 setInterval(() => {
   const now = Date.now();
-  for (const p of ctxs.flatMap(c => c.panes)) {
+  for (const c of ctxs) for (const p of c.panes) {
     if (!p.reloadMinutes) continue;
     const wc = p.view.webContents;
     if (now - p.lastReload < p.reloadMinutes * 60000) continue;
     if (now - p.lastTyping < TYPING_GRACE_MS || p.editing || wc.isLoading()) continue;
-    p.lastReload = now;
-    reloadPane(p);
+    c.autoReload(p);
   }
 }, 15000);
 
@@ -276,7 +275,13 @@ function linkOpen(wc, d) {
   if (/^(mailto|tel|sms|facetime):$/.test(u.protocol)) { openExt(d.url, 'system-handler'); return { action: 'deny' }; }
   if (u.protocol === 'blob:' || u.protocol === 'data:' || d.url === 'about:blank') { dlog('link', 'popup-window', u.protocol); return childWin(); }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') { dlog('link', 'blocked scheme', u.protocol); return { action: 'deny' }; }
-  if (isGrokHost(u.hostname)) { if (popup) return childWin(); dlog('link', 'same-site, stays in pane', d.url.slice(0, 120)); wc.loadURL(d.url).catch(() => {}); return { action: 'deny' }; }
+  if (isGrokHost(u.hostname)) {
+    if (popup) return childWin();
+    dlog('link', 'same-site, stays in pane', d.url.slice(0, 120));
+    const c = ctxs.find(k => k.panes.some(p => p.view.webContents === wc));   // a pane: through its input guard (#11); the 承認Bot popup: as before
+    if (c) c.openLink(wc, d.url); else wc.loadURL(d.url).catch(() => {});
+    return { action: 'deny' };
+  }
   if (popup || AUTH_HOST.test(u.hostname)) { dlog('link', 'auth/popup window', u.hostname); return childWin(); }
   openExt(d.url, 'external-browser');
   return { action: 'deny' };
@@ -305,6 +310,10 @@ let probeBusy = false, sysBlocked = false, resumeAt = 0, probeDbgAt = 0;     // 
 const PS = require('./pane-state');
 let worldNo = 0;
 const nextNo = () => ++worldNo;
+// ---- input guard (#11, draft-guard.js): before a page is thrown away (sleep / reload / close / another URL / layout / workspace) main reads
+// the composer live and the guard decides: automatic operations only when the page clearly holds nothing, manual ones ask (makeWindow: guardRun)
+const GUARD = require('./draft-guard');
+const { COMPOSER_JS } = require('./pane-rules');             // composerState() from the shared rules: the same code the pane preload has built in
 
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
@@ -460,13 +469,15 @@ function relayout(animate = false) {
 }
 function applyPreset(key) {
   if (!PRESETS[key]) return;
-  layout = key; maximizedId = null;
   const want = PRESETS[key][0] * PRESETS[key][1];
-  while (panes.length > want) closePane(panes[panes.length - 1].id, true);
-  while (panes.length < want) addPane({ url: '' }, { focus: false });
-  rowLens = null;                                       // a preset re-initialises the rows
-  setFocused(Math.min(focused, panes.length - 1));
-  relayout(true); save();
+  guardRun('LAYOUT', () => panes.slice(want), () => {          // the panes past the preset are closed: asked first when one holds input (#11)
+    layout = key; maximizedId = null;
+    while (panes.length > want) closePane(panes[panes.length - 1].id, true);
+    while (panes.length < want) addPane({ url: '' }, { focus: false });
+    rowLens = null;                                       // a preset re-initialises the rows
+    setFocused(Math.min(focused, panes.length - 1));
+    relayout(true); save();
+  });
 }
 function toggleMaximize(id) {
   const p = byId(id ?? panes[focused]?.id); if (!p) return;
@@ -776,6 +787,7 @@ setInterval(async () => {
       const b = p.view.getBounds(); if (!b.width || !b.height || Date.now() - (p.loadedAt || 0) < 20000 || Date.now() - (p.lastReload || 0) < 20000) continue;
       if (await wc.executeJavaScript(GROK_RENDERED(id)).catch(() => true)) { p.wdTries = 0; continue; }
       if ((p.wdTries || 0) >= 3 || Date.now() - (p.wdAt || 0) < 30000) continue;
+      if (!autoGate(p, await liveInput(p), 'watchdog')) continue;   // #11: a page that holds input is never reloaded by itself (tried again later)
       p.wdTries = (p.wdTries || 0) + 1; p.wdAt = Date.now();
       dlog(`pane${p.id}`, 'watchdog: blank bot pane -> reload', p.wdTries); diag.rec('watchdog', 'RELOAD', { p: p.id, n: p.wdTries });
       reloadPane(p);
@@ -872,24 +884,106 @@ function sleepPane(p) {
   wc.loadURL('about:blank').catch(() => {});                 // drops the page (its URL stays in p.url / p.botTarget)
   applyThrottling(); sendState(); save();
 }
-// Final live check right before discarding the page: a draft (or a failed check) means: do not sleep.
-const { DRAFT_JS } = require('./pane-rules');                // composerDraft() from the shared rules: the same code the pane preload has built in
-async function liveDraft(p) {
-  const g = p.obs.gen;                                       // an answer about an older page (navigated / reloaded meanwhile) is unknown (#02)
-  try { const d = await p.view.webContents.executeJavaScript(DRAFT_JS); const v = p.obs.gen === g ? d : null; diag.rec('draft', v === false ? 'EMPTY' : v === true ? 'PRESENT' : 'UNKNOWN', { p: p.id }, 600000); return v === false ? false : true; }
-  catch { diag.rec('draft', 'UNKNOWN', { p: p.id }, 600000); return true; }
+// ---- input guard (#11, draft-guard.js) ----
+// The live reading right before a page is thrown away: the shared composerState() run in the page (timeout CHECK_MS), framed by main's stamps
+// of the pane (entity / generation #02 / keys typed / asleep), so an answer about an older page, or one overtaken by typing, is unknown.
+const inStamp = p => ({ ent: p.obs.ent, gen: p.obs.gen, rev: p.inputRev || 0, closed: !!p.obs.closed, sleeping: !!p.sleeping });
+// main's own state: does the pane hold a page whose input could be lost? Not when asleep, blank / queued at startup, an error page, the new-tab
+// page or a gone renderer - those are never read or asked about, so a new empty view, a first load and a wake are never held up.
+function hasPage(p) {
+  const wc = p.view.webContents; if (p.sleeping || wc.isDestroyed() || wc.isCrashed()) return false;
+  const u = wc.getURL(); return !isBlankUrl(u) && !(u.startsWith('file:') && u.includes('newtab.html'));
+}
+async function liveInput(p) {
+  const before = inStamp(p), page = hasPage(p), expect = page && isBotUrl(p.view.webContents.getURL()) && PS.current(p.obs);   // a confirmed conversation has a composer
+  let raw = null;
+  if (page) { try { raw = await Promise.race([p.view.webContents.executeJavaScriptInIsolatedWorld(1003, [{ code: COMPOSER_JS }]), sleep(GUARD.CHECK_MS).then(() => null)]); } catch { raw = null; } }   // own world: page scripts cannot change what it uses
+  const r = GUARD.read(raw, { page, before, after: inStamp(p), at: Date.now(), expect, ime: !!p.ime, busy: !!p.broadcasting, hold: !!p.guardHold });
+  if (page) diag.rec('draft', r.st, { p: p.id }, 600000);
+  return r;
+}
+// automatic operations (auto-sleep / auto-reload / watchdog): go only when the reading says the page clearly holds nothing to lose
+function autoGate(p, r, what) {
+  const code = GUARD.autoRefusal(r, Date.now());
+  if (code) { diag.rec('guard.auto', code, { p: p.id }, 600000); if (debugOn()) dlog(`pane${p.id}`, 'auto', what, 'held:', code); }
+  return !code;
 }
 async function trySleep(p) {
   if (p.sleepChecking) return; p.sleepChecking = true;
-  try { const d = await liveDraft(p); p.hasDraft = d; if (!d && canSleep(p, panes.indexOf(p))) sleepPane(p); } finally { p.sleepChecking = false; }
+  try {
+    const r = await liveInput(p);
+    if (r.st === 'PRESENT') p.hasDraft = true; else if (r.st === 'EMPTY') p.hasDraft = false;   // an unknown reading changes nothing: tried again on the next tick
+    if (autoGate(p, r, 'sleep') && canSleep(p, panes.indexOf(p))) sleepPane(p);
+  } finally { p.sleepChecking = false; }
 }
-async function sleepNowAsk(p) {                                // manual 今すぐスリープ: warn when a draft exists
+async function autoReload(p) {                                 // the per-pane 自動リロード (top-level timer)
+  if (p.autoChecking) return; p.autoChecking = true;
+  try {
+    const r = await liveInput(p);
+    if (!autoGate(p, r, 'reload') || !panes.includes(p) || p.editing || p.view.webContents.isLoading()) return;
+    p.lastReload = Date.now(); reloadPane(p);
+  } finally { p.autoChecking = false; }
+}
+// Manual operations that throw pages away. targets() = the panes it would drop right now (asked again right before acting), run(list) does it.
+// Nothing that could hold input -> at once, as before. Otherwise every target is read; the panes at risk are listed in one dialog (default / Esc =
+// やめる; skip: 'all but those' for reload-all); after a confirmation all are read again and any change cancels. Cancelled / expired: nothing
+// happens and the focus goes back where it was. One at a time per window: a second ⌘W waits for the first.
+let guardQ = null, guardN = 0;
+const paneLabel = p => p ? p.name || displayTitle(p) : '';
+function guardRun(op, targets, run, opt = {}) {
+  if (!guardN && !targets().some(hasPage)) { run(targets()); return; }
+  if (guardN >= 5) { diag.rec('guard.ask', 'BUSY'); return; }
+  guardN++;
+  guardQ = (guardQ || Promise.resolve()).then(() => guardOnce(op, targets, run, opt)).catch(e => dlog('guard error', op, String(e))).finally(() => { guardN--; });
+}
+async function guardOnce(op, targets, run, { skip = false } = {}) {
+  const ts = targets(), fw = require('electron').webContents.getFocusedWebContents();
+  const back = () => { try { if (fw && !fw.isDestroyed()) fw.focus(); } catch {} };
+  const readAll = async list => (await Promise.all(list.map(p => liveInput(p)))).map((r, i) => ({ id: list[i].id, r }));
+  ts.forEach(p => { p.guardHold = true; });                  // no automatic operation on them meanwhile
+  try {
+    let last = await readAll(ts), only = null;
+    const pl = GUARD.plan(last);
+    if (pl.ask.length) {
+      diag.rec('guard.ask', 'ASKED', { n: pl.ask.length });
+      const d = GUARD.dialogText(op, pl.ask.map(a => ({ label: paneLabel(byId(a.id)), codes: a.codes })), { skip: skip && pl.pass.length > 0 });
+      const { response } = await dialog.showMessageBox(win, { type: 'warning', message: d.message, detail: d.detail, buttons: d.buttons, defaultId: d.defaultId, cancelId: d.cancelId, noLink: true });
+      const act = d.actions[response] || 'cancel';
+      if (act === 'cancel') { diag.rec('guard.ask', 'CANCEL', { n: pl.ask.length }); back(); return; }
+      if (act === 'skip') { only = pl.pass; last = last.filter(x => only.includes(x.id)); }
+      const again = await readAll(ts.filter(p => last.some(x => x.id === p.id)));
+      const why = GUARD.expired(last, again, Date.now());    // the confirmation was for what was shown: anything else now cancels it
+      if (why) { diag.rec('guard.ask', why, { n: pl.ask.length }); dlog('guard', op, 'confirmation no longer holds:', why); back(); return; }
+      last = again;
+    }
+    const cur = targets().filter(p => !only || only.includes(p.id));
+    const why = GUARD.unmoved(last, cur.map(p => ({ id: p.id, stamp: inStamp(p) })));   // right before acting: the same panes, nothing moved since read
+    if (why) { diag.rec('guard.ask', why, { n: cur.length }); dlog('guard', op, 'changed before acting:', why); back(); return; }
+    if (pl.ask.length) diag.rec('guard.ask', 'GO', { n: pl.ask.length });
+    run(cur);
+  } finally { ts.forEach(p => { p.guardHold = false; }); }
+}
+const onlyPane = p => () => p && panes.includes(p) ? [p] : [];   // targets(): this pane while it is open
+function askClose(id) {                                        // ✕ / ⌘W / menus (no id: the pane focused when it runs)
+  guardRun('CLOSE', () => { const p = id == null ? panes[focused] : byId(id); return p ? [p] : []; }, l => l.forEach(p => closePane(p.id)));
+}
+function askReload(id) {                                       // ↻ / ⌘R / menus (no id: the focused pane); a sleeping pane has no page: woken at once
+  guardRun('RELOAD', () => { const p = id == null ? panes[focused] : byId(id); return p ? [p] : []; }, l => l.forEach(p => reloadPane(p)));
+}
+function openIn(p, url, op = 'NAVIGATE', then) {               // another URL in this pane (address bar, palette, favorite, ⌘T at the pane limit)
+  guardRun(op, onlyPane(p), l => l.forEach(q => { loadInto(q.view.webContents, url); then?.(q); }));
+}
+function goHist(p, dir) {                                      // back / forward
+  const h = p && p.view.webContents.navigationHistory; if (!h || !(dir < 0 ? h.canGoBack() : h.canGoForward())) return;
+  guardRun(dir < 0 ? 'BACK' : 'FORWARD', onlyPane(p), l => l.forEach(q => { const n = q.view.webContents.navigationHistory; dir < 0 ? n.goBack() : n.goForward(); }));
+}
+function openLink(wc, url) {                                   // a grok.com link opened from the page into its own pane (linkOpen)
+  const p = panes.find(q => q.view.webContents === wc); if (!p) return;
+  guardRun('LINK', onlyPane(p), l => l.forEach(q => q.view.webContents.loadURL(url).catch(() => {})));
+}
+function sleepNowAsk(p) {                                      // manual 今すぐスリープ: asks when the page holds input (or cannot tell)
   if (!canSleep(p, panes.indexOf(p), true)) return;
-  if (await liveDraft(p)) {
-    const r = await dialog.showMessageBox(win, { type: 'warning', buttons: ['スリープする', 'やめる'], defaultId: 1, cancelId: 1, message: '入力欄に下書き（または添付）があるか、確認できませんでした', detail: 'スリープすると入力途中の内容は失われます。' });
-    if (r.response !== 0) return;
-  }
-  if (canSleep(p, panes.indexOf(p), true)) sleepPane(p);
+  guardRun('SLEEP', onlyPane(p), l => l.forEach(q => { if (canSleep(q, panes.indexOf(q), true)) sleepPane(q); }));
 }
 function sleepTick() { panes.forEach((p, i) => { if (canSleep(p, i)) trySleep(p); }); }
 
@@ -974,11 +1068,13 @@ async function probePane(p) {
     diag.rec('probe', 'UNSURE', { p: p.id, ms, n: pushes + hard }); diag.rec('dom', issue, { p: p.id }, 600000);
     dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'unsure', issue); return;
   }
+  const base0 = p.obs.sleep && p.obs.sleep.base;            // (debug log only) the baseline it is compared with, before the result replaces it
   const res = obsDo(p, { type: 'probe-result', sleep: sid, c: last });   // compared with the baseline of the sleep it was started in; becomes the new baseline
   if (res.code) { diag.rec('probe', 'STALE', { p: p.id, ms, n: pushes + hard }); dlog(`pane${p.id}`, 'probe', why, ms + 'ms', 'stale run'); return; }   // woke / slept again / closed meanwhile: not this sleep's result
   const nf = { user: last.user, bot: last.bot, botSince: last.botSince, fp: last.fp || '', waiting: last.waiting, working: last.working, done: last.done, asks: last.asks };
   diag.rec('probe', res.verdict, { p: p.id, ms, n: pushes + hard });
   dlog(`pane${p.id}`, 'probe', why, ms + 'ms', res.verdict, `bot_since=${nf.botSince} waiting=${nf.waiting} working=${nf.working}`, debugOn() ? `mem ${Math.round(m0 / 1048576)}->peak ${Math.round(peak / 1048576)}MB` : '');
+  if (res.verdict === 'CHANGED' && debugOn()) dlog(`pane${p.id}`, 'probe changed:', PS.fpDiff(base0, last));   // which field differed: names and numbers only
   if (last.hn && snapOk(last.snap, 'name')) { p.pageH1 = last.hn; p.pageHdr = last.hh || ''; if (p.sleepSnap) Object.assign(p.sleepSnap, sleepIdentity({ h1: p.pageH1, hdr: p.pageHdr, userName: p.name, title: p.sleepSnap.title })); }
   if (nf.waiting && last.q && snapOk(last.snap, 'quote')) p.reqQuote = last.q;              // refresh the quote shown while asleep
   if (!res.fresh) return;                                                                 // nothing new (or only a baseline), or the user spoke last
@@ -1037,7 +1133,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, zoomIndiv: spec.zoomIndiv === undefined ? clampZ(spec.zoom) !== 1 : !!spec.zoomIndiv,   // older saves had per-pane zoom only: keep those panes individual
     zoom: 1,
-    lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1 };
+    lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1,
+    inputRev: 0, ime: false };                               // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page
   p.zoom = p.zoomIndiv ? clampZ(spec.zoom) : gZoom();
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   win.contentView.addChildView(view);
@@ -1055,7 +1152,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-start-loading', () => { p.loadedAt = p.loadT0 = Date.now(); });
   const rememberUrl = () => { const u = wc.getURL(); if (/^https?:/.test(u)) { p.url = u; if (GROK_BOT_RE.test(u)) p.botTarget = u; } };
   wc.on('did-navigate', rememberUrl); wc.on('did-navigate-in-page', rememberUrl);
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1067,7 +1164,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   });
   const loadMs = () => p.loadT0 ? Date.now() - p.loadT0 : undefined;
   wc.on('did-fail-load', (e, code, desc, url, isMain) => { if (isMain && !p.sleeping) diag.rec('pane.load', DIAG.netCode(code), { p: p.id, ms: loadMs() }); dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'); });
-  wc.on('render-process-gone', (e, d) => { diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); });
+  wc.on('render-process-gone', (e, d) => { p.ime = false; diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); });
   wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); });
   wc.on('did-finish-load', () => {
     if (!p.sleeping) diag.rec('pane.load', 'OK', { p: p.id, ms: loadMs() });   // a sleeping pane loading about:blank is not a page load
@@ -1075,7 +1172,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
   wc.on('focus', () => { if (!p.sleeping) setFocused(panes.indexOf(p)); });   // a hidden sleeping view can fire a stray focus event right after it is hidden: that must not wake it
-  wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && !input.meta && !input.control) clearUnread(p); if (handleKey(input, p)) e.preventDefault(); });
+  wc.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault(); });   // a key typed: the input revision moves (#11)
   wc.on('context-menu', (e, params) => {
     const items = [];
     if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX, click: () => addPane({ url: params.linkURL }) },
@@ -1083,8 +1180,8 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
     if (params.selectionText) items.push({ role: 'copy', label: 'コピー' });
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
     if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
-    items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
-      { label: '再読み込み', click: () => reloadPane(p) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
+    items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => goHist(p, -1) },
+      { label: '再読み込み', click: () => askReload(p.id) }, { label: '検証', click: () => wc.inspectElement(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window: win });
   });
   insertPane(p);
@@ -1121,7 +1218,7 @@ function closePane(id, keepEmpty) {
   else { updateBadge(); applyThrottling(); relayout(true); save(); }
 }
 function newPane(url = '') {
-  if (panes.length >= MAX) { const p = panes[focused]; if (p) loadInto(p.view.webContents, url); return; }
+  if (panes.length >= MAX) { const p = panes[focused]; if (p) openIn(p, url); return; }
   maximizedId = null;
   const p = addPane({ url });
   relayout(true);
@@ -1163,14 +1260,14 @@ function handleKey(input, pane) {
   if (k === 'k') { overlayOpen ? closeOverlay() : openOverlay('palette'); return true; }
   if (k === 't' && input.shift) { closeOverlay(); reopenClosed(); return true; }
   if (k === 't') { closeOverlay(); newPane(''); return true; }
-  if (k === 'w' && !input.shift) { if (fp) closePane(fp.id); return true; }
+  if (k === 'w' && !input.shift) { if (fp) askClose(); return true; }
   if (k === 'l') { closeOverlay(); focusUrlBar(); return true; }
   if (k === 'j') { nextUnread(); return true; }
   if (!input.shift && (k === '\\' || k === '¥' || input.code === 'Backslash' || input.code === 'IntlYen')) { toggleMaximize(); return true; }
   if (k === 'r' && input.shift) { reloadAll(); return true; }
-  if (k === 'r' && !input.shift) { if (fp) reloadPane(fp); return true; }
-  if (k === '[' ) { fp?.view.webContents.navigationHistory.goBack(); return true; }
-  if (k === ']' ) { fp?.view.webContents.navigationHistory.goForward(); return true; }
+  if (k === 'r' && !input.shift) { if (fp) askReload(); return true; }
+  if (k === '[' ) { goHist(fp, -1); return true; }
+  if (k === ']' ) { goHist(fp, 1); return true; }
   if (k === '=' || k === '+' || (k === ';' && input.shift)) { setZoom(fp, (fp?.zoom || 1) + 0.1); return true; }
   if (k === '-') { setZoom(fp, (fp?.zoom || 1) - 0.1); return true; }
   if (k === '0') { resetPaneZoom(fp); return true; }
@@ -1283,7 +1380,7 @@ function paneMenu(id) {
     { label: 'ブラウザで開く', enabled: !!paneUrl(p), click: () => shell.openExternal(paneUrl(p)) },
     { label: '開発者ツール', click: () => p.view.webContents.openDevTools({ mode: 'detach' }) },
     { type: 'separator' },
-    { label: 'ペインを閉じる', click: () => closePane(id) },
+    { label: 'ペインを閉じる', click: () => askClose(id) },
   ];
   Menu.buildFromTemplate(tpl).popup({ window: win });
 }
@@ -1307,16 +1404,19 @@ async function overwriteWorkspace(name, confirm) {
   saveWorkspace(name);
 }
 function loadWorkspace(name) {
-  const ws = workspaces[name]; if (!ws) return;
-  maximizedId = null;
-  [...panes].forEach(p => closePane(p.id, true));
-  if (PRESETS[ws.layout]) layout = ws.layout;
-  if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
-  (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
-  if (!panes.length) addPane({ url: '' });
-  rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
-  activeWs = name;
-  setFocused(0); pumpLoads(); relayout(); save();
+  if (!workspaces[name]) return;
+  guardRun('WORKSPACE', () => panes.slice(), () => {           // every pane is replaced: asked first when one holds input (#11)
+    const ws = workspaces[name]; if (!ws) return;
+    maximizedId = null;
+    [...panes].forEach(p => closePane(p.id, true));
+    if (PRESETS[ws.layout]) layout = ws.layout;
+    if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
+    (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
+    if (!panes.length) addPane({ url: '' });
+    rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
+    activeWs = name;
+    setFocused(0); pumpLoads(); relayout(); save();
+  });
 }
 function runAction(a) {
   if (!a || typeof a !== 'object') return;
@@ -1324,7 +1424,7 @@ function runAction(a) {
     case 'focus': { const i = panes.findIndex(p => p.id === a.id); closeOverlay(); focusPane(i); break; }
     case 'layout': closeOverlay(); applyPreset(a.layout); break;
     case 'open-new': closeOverlay(); newPane(String(a.url || '')); break;
-    case 'open-here': { closeOverlay(); const p = panes[focused]; if (p) loadInto(p.view.webContents, String(a.url || '')); break; }
+    case 'open-here': { closeOverlay(); const p = panes[focused]; if (p) openIn(p, String(a.url || '')); break; }
     case 'next-unread': closeOverlay(); nextUnread(); break;
     case 'maximize': closeOverlay(); toggleMaximize(); break;
     case 'clear-unread': closeOverlay(); clearAll(); break;
@@ -1376,7 +1476,9 @@ async function injectSend(p, text) {
 async function broadcastSend(text, ids) {
   for (const id of ids) {
     const p = byId(id); if (!p) continue;
+    p.broadcasting = true;                                     // #11: no automatic operation throws the page away while text goes in / is sent
     try { const r = await injectSend(p, text); dlog(`pane${p.id}`, 'broadcast', r); } catch (e) { dlog(`pane${p.id}`, 'broadcast err', String(e)); }
+    finally { p.broadcasting = false; }
   }
 }
 function wsMenu() {
@@ -1395,15 +1497,15 @@ function wsMenu() {
 // Reload-all: every pane starts at the same moment (no queue, no stagger, no debounce, no focus requirement).
 // Panes are already warm (cookies / cache), so 8 in parallel is fine; reloadPane clears all retry state and the CPU throttle
 // stays off while reloading (applyThrottling re-enables it once a pane has been settled for 3 s).
+// #11: asked first when a pane holds input ('all but those' is offered when some do not).
 function reloadAll() {
-  loadQ.length = 0; lastReloadAll = Date.now(); abortProbe();
-  for (const p of [...panes]) {
-    if (p.view.webContents.isDestroyed()) continue;
-    reloadPane(p).catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e)));
-  }
-  dlog('reload-all started', panes.length);
-  setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
-  fetchUsage();
+  guardRun('RELOAD_ALL', () => panes.filter(p => !p.view.webContents.isDestroyed()), list => {
+    loadQ.length = 0; lastReloadAll = Date.now(); abortProbe();
+    for (const p of list) reloadPane(p).catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e)));
+    dlog('reload-all started', list.length);
+    setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
+    fetchUsage();
+  }, { skip: true });
 }
 // ---- usage hover popover (lives in the overlay view, sized to the popover so it never blocks the panes) ----
 let popOpen = false, popTimer = null, popRect = null;
@@ -1431,7 +1533,7 @@ function chipMenu(id) {
   const p = byId(id); if (!p) return;
   Menu.buildFromTemplate([
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || chipDefault(p) }) },
-    { label: '再読み込み', click: () => reloadPane(p) },
+    { label: '再読み込み', click: () => askReload(id) },
     { label: '待機中・終了にスリープ', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
     { label: '今すぐスリープ（待機中・終了のみ）', enabled: canSleep(p, panes.indexOf(p), true), click: () => sleepNowAsk(p) },
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
@@ -1439,20 +1541,20 @@ function chipMenu(id) {
     { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
     pcItem(p),
     { type: 'separator' },
-    { label: '閉じる（新しいタブに戻す）', click: () => { p.name = ''; loadInto(p.view.webContents, ''); sendState(); save(); } },
-    { label: 'ペインごと閉じる', click: () => closePane(id) },
-    { label: '他のペインをすべて閉じる', enabled: panes.length > 1, click: () => { panes.filter(q => q.id !== id).map(q => q.id).forEach(x => closePane(x, true)); setFocused(0); relayout(true); save(); } },
+    { label: '閉じる（新しいタブに戻す）', click: () => openIn(p, '', 'NEWTAB', q => { q.name = ''; sendState(); save(); }) },
+    { label: 'ペインごと閉じる', click: () => askClose(id) },
+    { label: '他のペインをすべて閉じる', enabled: panes.length > 1, click: () => guardRun('CLOSE_OTHERS', () => panes.filter(q => q.id !== id), l => { l.forEach(q => closePane(q.id, true)); setFocused(0); relayout(true); save(); }) },
   ]).popup({ window: win });
 }
 const ui = {}, paneIpc = {};
 const on = (ch, fn) => { ui[ch] = fn; registerUi(ch); };
 const paneOn = (ch, fn) => { paneIpc[ch] = fn; registerPane(ch); };
-on('navigate', (id, url) => { const p = byId(id); if (p) loadInto(p.view.webContents, url); });
-on('back', id => byId(id)?.view.webContents.navigationHistory.goBack());
-on('forward', id => byId(id)?.view.webContents.navigationHistory.goForward());
+on('navigate', (id, url) => { const p = byId(id); if (p) openIn(p, url); });
+on('back', id => goHist(byId(id), -1));
+on('forward', id => goHist(byId(id), 1));
 on('copy-pane-url', id => { const p = byId(id); if (p) { const u = paneUrl(p) || p.url; if (u) clipboard.writeText(String(u)); } });
-on('reload', id => { const p = byId(id); if (p) reloadPane(p); });
-on('close', id => closePane(id));
+on('reload', id => { if (byId(id)) askReload(id); });
+on('close', id => askClose(id));
 on('add', () => newPane(''));
 on('reopen-closed', () => reopenClosed());
 on('layout', l => applyPreset(l));
@@ -1504,16 +1606,17 @@ paneOn('pane:mouseup', () => splitEnd());
 paneOn('pane:typing', p => { p.lastTyping = Date.now(); p.lastInteract = Date.now(); });
 paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
 paneOn('pane:editing', (p, v) => { p.editing = !!v; });
+paneOn('pane:ime', (p, v) => { p.ime = v === true; });       // #11: no page is thrown away during an IME composition
 // ---- favorites (global list, opened in this window) ----
 function openFavorite(id, where = 'here') {
   const f = favorites.find(x => x.id === id); if (!f) return;
   if (where === 'window') { makeWindow({ layout: '2x2', panes: [{ url: f.url, name: f.label }] }); return; }
   if (where === 'new' || !panes[focused]) { newPane(f.url); const p = panes[panes.length - 1]; if (p && !p.name && f.label) { p.name = f.label; sendState(); } return; }
-  const p = panes[focused];
-  if (f.label && (!p.name || p.favId)) p.name = f.label;
-  p.favId = f.id;
-  loadInto(p.view.webContents, f.url);
-  focusPane(focused, { clear: false });
+  openIn(panes[focused], f.url, 'NAVIGATE', p => {
+    if (f.label && (!p.name || p.favId)) p.name = f.label;
+    p.favId = f.id;
+    focusPane(panes.indexOf(p), { clear: false });
+  });
 }
 function favMenu(id) {
   const f = favorites.find(x => x.id === id); if (!f) return;
@@ -1543,6 +1646,7 @@ function snapshot() {
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, moveFocus, focusUrlBar, openOverlay, paneMenu, applyPreset,
   sleepTick, probeNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   othersInfo(n) {
@@ -1604,7 +1708,7 @@ function buildMenu() {
       acc('CmdOrCtrl+T', () => cur()?.newPane(''), '新しいペイン'),
       acc('CmdOrCtrl+Shift+T', () => cur()?.reopenClosed(), '閉じたペインを開き直す'),
       { label: '新しいウィンドウ', accelerator: 'CmdOrCtrl+N', click: () => makeWindow({ layout: '2x2', panes: [{ url: '' }] }) },
-      acc('CmdOrCtrl+W', () => { const k = cur(); k?.focusedPane && k.closePane(k.focusedPane.id); }, 'ペインを閉じる'),
+      acc('CmdOrCtrl+W', () => { const k = cur(); k?.focusedPane && k.askClose(); }, 'ペインを閉じる'),
       acc('CmdOrCtrl+L', () => cur()?.focusUrlBar(), 'アドレスを編集'),
       acc('CmdOrCtrl+K', () => cur()?.openOverlay('palette'), 'コマンドパレット…'),
       { type: 'separator' },
@@ -1616,7 +1720,7 @@ function buildMenu() {
       isMac ? { role: 'close', label: 'ウィンドウを閉じる', accelerator: 'CmdOrCtrl+Shift+W' } : { role: 'quit', label: '終了' } ] },
     { role: 'editMenu', label: '編集' },
     { label: '表示', submenu: [
-      acc('CmdOrCtrl+R', () => { const fp = cur()?.focusedPane; if (fp) reloadPane(fp); }, 'ペインを再読み込み'),
+      acc('CmdOrCtrl+R', () => { const k = cur(); k?.focusedPane && k.askReload(); }, 'ペインを再読み込み'),
       acc('CmdOrCtrl+Shift+R', () => cur()?.reloadAll(), '全ペインを再読み込み（一括更新）'),
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),

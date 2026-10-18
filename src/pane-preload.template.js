@@ -77,13 +77,8 @@ function geoRole(el, box) {
 // @include src/pane-rules.js
 // page heading (bot name / group room name) + header text (participants in a group room) for the sleeping placeholder
 const headText = e => e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
-// composer for the snapshot: 'present' / 'empty' (composerDraft of the shared rules decides) / 'none' (no composer on the page: cannot tell) / 'error'
-function draftState() {
-  try {
-    if (composerDraft()) return 'present';
-    return [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(e => e.getAttribute('aria-hidden') !== 'true' && !(e.tabIndex < 0 && e.tagName === 'TEXTAREA')) ? 'empty' : 'none';
-  } catch { return 'error'; }
-}
+// composer for the snapshot: 'present' / 'empty' / 'none' (no composer on the page: cannot tell) - composerState of the shared rules decides - / 'error'
+function draftState() { try { return composerState().d; } catch { return 'error'; } }
 // Reads the page for readConversation (shared rules, which decide everything): DOM in, plain data out. The whole document - turns scrolled out of
 // view too, no visibility test - and only these structures: grok.com/bot turns are ".group/bot-entry" blocks, user turns contain
 // [data-testid="user-message"], h1 / header for the name. Never document.body's text. Without bot-entry blocks the old generic guesses below
@@ -202,6 +197,11 @@ window.addEventListener('drop', scheduleDraft, true);
 window.addEventListener('input', reportEditing, true);
 window.addEventListener('focusin', reportEditing, true);
 window.addEventListener('focusout', () => setTimeout(reportEditing, 0), true);
+// An IME composition in progress (変換中, #11): main never throws the page away during one. Sent on change only.
+let imeOn = false;
+const reportIme = on => { if (on !== imeOn) { imeOn = on; ipcRenderer.send('pane:ime', on); } };
+window.addEventListener('compositionstart', () => reportIme(true), true);
+window.addEventListener('compositionend', () => reportIme(false), true);
 
 // Real user interaction in this pane (clears its update highlight).
 window.addEventListener('mousedown', () => ipcRenderer.send('pane:interact'), true);
