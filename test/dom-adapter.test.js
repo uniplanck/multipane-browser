@@ -131,7 +131,8 @@ t('every unknown conv code is a diagnostics code', Object.keys(rules.SNAP.conv).
 
 // ---- the preload's DOM reader on a synthetic document ----
 function block({ text = '', user = false, quotes = [], widget = false } = {}) {
-  const kids = [], e = { textContent: text, innerText: text, kids, contains: o => o === e || kids.some(k => k.contains(o)),
+  const kids = [], e = { textContent: text, innerText: text, kids, parentElement: null,
+    closest: s => { for (let a = e; a; a = a.parentElement) if (a.isBlock && s === '[class*="group/bot-entry"]') return a; return null; }, isBlock: true, contains: o => o === e || kids.some(k => k.contains(o)),
     querySelector: s => (s === '[data-testid="user-message"]' ? (user ? {} : null) : /role="radio"/.test(s) ? (widget ? {} : null) : null),
     querySelectorAll: s => (s === 'blockquote' ? quotes.map(q => ({ innerText: q, textContent: q })) : []) };
   return e;
@@ -153,7 +154,7 @@ function page(o = {}) {
 const sender = role => ({ role, frame: { top: true, detached: false, url: 'https://grok.com/bot/bot1', origin: 'https://grok.com' } });
 const world = { owned: true, pane: () => true, fav: () => false, ws: () => false, winPane: () => false };
 { const outer = block({ text: '本文です\n> 次の作業を指示してください\n' + W, quotes: ['次の作業を指示してください'] }), inner = block({ text: '本文です' });
-  outer.kids.push(inner);
+  outer.kids.push(inner); inner.parentElement = outer;
   const pg = page({ blocks: [block({ text: '依頼します', user: true }), outer, inner], h1: ['Tibo'], header: 'Tibo', composer: [field('')] });
   pg.check();
   t('dom: first scan sends nothing (waits for a second, equal scan)', pg.sent.length === 0);

@@ -240,7 +240,8 @@ function draftState() { try { return composerState().d; } catch { return 'error'
 // still run, but readConversation marks their result GUESS (unknown).
 function scanMessages() {
   let all = [...document.querySelectorAll('[class*="group/bot-entry"]')];
-  all = all.filter(e => !all.some(o => o !== e && o.contains(e)));
+  // outermost only: an entry nested in another entry has a matching ancestor (O(n); the former pairwise contains() test was O(n^2): ~70 ms at 1000 turns)
+  all = all.filter(e => !(e.parentElement && e.parentElement.closest('[class*="group/bot-entry"]')));
   const entries = all.map(e => ({ user: !!e.querySelector('[data-testid="user-message"]'), blank: !(e.textContent || '').trim() }));
   const li = entries.map(e => !e.blank).lastIndexOf(true), le = li >= 0 ? all[li] : null;
   let last = null;
