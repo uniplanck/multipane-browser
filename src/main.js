@@ -192,7 +192,9 @@ setInterval(() => {
   }
 }, 15000);
 
-const clampZ = z => Math.round(Math.min(3, Math.max(0.3, Number(z) || 1)) * 100) / 100;
+const ZP = require('./zoom-policy');                         // (#53) pane zoom: range, targets, restore, native / legacy backend (makeWindow: initZoom / applyZoom)
+const NO_NATIVE_ZOOM = !!process.env.MPB_NO_NATIVE_ZOOM;     // dev/test hook: every pane on the preload zoom (legacy), as on an Electron without setZoomMode
+const clampZ = ZP.clamp;
 const gZoom = () => clampZ(settings.globalZoom || 1);
 function setGlobalZoom(z) { settings.globalZoom = clampZ(z); ctxs.forEach(c => c.applyGlobalZoom()); save(); }
 // Column-width sync between grid rows. ON: every row shares settings.splits[k].c. OFF: each row has its own (sp.rc[row]).
@@ -1285,16 +1287,15 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   const p = { id: nextPaneId++, view, url: paneStart(normalize(spec.url)), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
-    muted: !!spec.muted, zoomIndiv: spec.zoomIndiv === undefined ? clampZ(spec.zoom) !== 1 : !!spec.zoomIndiv,   // older saves had per-pane zoom only: keep those panes individual
-    zoom: 1,
+    muted: !!spec.muted, ...ZP.restore(spec, gZoom()),      // zoom / zoomIndiv (older saves had per-pane zoom only: those panes stay individual)
     lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1,
     inputRev: 0, ime: false };                               // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page
-  p.zoom = p.zoomIndiv ? clampZ(spec.zoom) : gZoom();
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
   regWc(wc, 'pane', { ctx, pane: p });
+  initZoom(p);                                               // (#53) native / legacy zoom for this view, before its first page
   // a new generation for every new page (load / reload / wake / sleep's blank page), SPA move of the main frame and renderer loss
   wc.on('did-navigate', () => newGen(p, 'NAV'));
   wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) newGen(p, 'SPA'); });
@@ -1314,7 +1315,7 @@ function addPane(spec = {}, { focus = true, defer = false } = {}) {
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
   wc.on('page-favicon-updated', (e, icons) => { p.favicon = (icons || []).find(u => /^https?:|^data:/.test(u)) || ''; sendState(); });
-  wc.on('dom-ready', () => { normalizeHostZoom(wc); applyZoom(p, p.zoom); sendGen(p); });   // the page's preload is listening by now
+  wc.on('dom-ready', () => { if (p.zoomBackend !== 'native') normalizeHostZoom(wc); applyZoom(p, p.zoom); sendGen(p); });   // the page's preload is listening by now; native: mode / factor checked on the new page
   wc.on('console-message', e => {
     if (!debugOn()) return;
     if (e.level === 'error' || e.level === 'warning') dlog(`pane${p.id}`, 'console', e.level, e.message, '@', e.sourceId + ':' + e.lineNumber);
@@ -1386,11 +1387,36 @@ function newPane(url = '') {
 }
 const byId = id => panes.find(p => p.id === id);
 // Zoom: every pane either follows the GLOBAL zoom (settings.globalZoom) or is "individual" (own p.zoom, ignores global changes).
-// Chromium keeps ONE zoom level per site (host zoom map), so wc.setZoomFactor on one grok.com pane zoomed every grok.com pane.
-// Zoom is therefore applied per page from the pane preload (webFrame.setZoomFactor); the shared site level is kept at 100%.
-function applyZoom(p, z) { p.zoom = clampZ(z); const wc = p.view.webContents; if (!wc.isDestroyed()) wc.send('mpb:zoom', p.zoom); }
-function normalizeHostZoom(wc) { try { if (wc.getZoomLevel() !== 0) { wc.setZoomLevel(0); setTimeout(() => panes.forEach(q => applyZoom(q, q.zoom)), 150); } } catch {} }
-function applyGlobalZoom() { panes.forEach(p => { if (!p.zoomIndiv) applyZoom(p, gZoom()); }); sendState(); }
+// Chromium keeps ONE zoom level per site (host zoom map), so wc.setZoomFactor in the default zoom mode on one grok.com pane zoomed every grok.com pane.
+// (#53, zoom-policy.js) Each view gets one backend before its first page (initZoom): native = setZoomMode('isolated') + wc.setZoomFactor (its own
+// zoom, kept across reloads / navigations / sleep's about:blank and the wake: the same WebContents); legacy = as before, the page's preload applies
+// it (webFrame.setZoomFactor via 'mpb:zoom') and the shared site level is kept at 100% (normalizeHostZoom). A page never gets both. Applied when
+// the zoom changes and on each new page (dom-ready: an isolated page that lost its mode gets it back before its factor) - not on focus, never polled.
+// The 承認Bot popup and the background check's hidden window stay in the default mode at the site's 100%, as before.
+const zoomModeOf = wc => typeof wc.getZoomMode === 'function' ? wc.getZoomMode() : undefined;
+function initZoom(p) {
+  const wc = p.view.webContents, api = ZP.hasNative(wc);
+  let threw = false, mode;
+  if (api && !NO_NATIVE_ZOOM) { try { wc.setZoomMode('isolated'); mode = zoomModeOf(wc); } catch { threw = true; } }
+  const b = ZP.backend({ api, forced: NO_NATIVE_ZOOM, threw, mode });
+  p.zoomBackend = b.backend; diag.rec('zoom', b.code, { p: p.id }, 600000);
+  if (b.backend === 'native') applyZoom(p, p.zoom);
+}
+function applyZoom(p, z) {
+  p.zoom = clampZ(z); const wc = p.view.webContents; if (wc.isDestroyed()) return;
+  if (p.zoomBackend === 'native') {
+    try {
+      const { ops } = ZP.plan({ backend: 'native', mode: zoomModeOf(wc), factor: wc.getZoomFactor(), zoom: p.zoom });
+      if (ops.includes('mode')) { wc.setZoomMode('isolated'); if (zoomModeOf(wc) !== 'isolated') throw new Error('zoom mode'); diag.rec('zoom', 'MODE_RESET', { p: p.id }, 600000); }
+      if (ops.includes('factor')) wc.setZoomFactor(p.zoom);
+      return;
+    } catch { p.zoomBackend = 'legacy'; diag.rec('zoom', 'FALLBACK', { p: p.id }); dlog(`pane${p.id}`, 'zoom: native failed, preload zoom from now on'); }
+  }
+  try { wc.send('mpb:zoom', p.zoom); } catch {}               // no page yet: its dom-ready sends it
+}
+// legacy pages / the 承認Bot popup: the shared site level back to 100%, then the legacy panes again (an isolated page's level is its own zoom)
+function normalizeHostZoom(wc) { try { if (wc.getZoomLevel() !== 0) { wc.setZoomLevel(0); setTimeout(() => panes.forEach(q => { if (q.zoomBackend !== 'native') applyZoom(q, q.zoom); }), 150); } } catch {} }
+function applyGlobalZoom() { ZP.followers(panes).forEach(p => applyZoom(p, gZoom())); sendState(); }
 function setZoom(p, z) {            // pane zoom: changing it makes the pane individual
   if (!p) return;
   p.zoomIndiv = true; applyZoom(p, z);

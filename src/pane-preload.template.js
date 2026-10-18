@@ -247,6 +247,8 @@ function startPcObs() { try { new MutationObserver(() => { if (!pcObsT) pcObsT =
 if (document.documentElement) startPcObs(); else window.addEventListener('DOMContentLoaded', startPcObs);
 
 // ---- per-pane zoom (main sends the zoom for THIS page; the site-wide zoom level stays at 100% so panes on the same site don't affect each other) ----
+// (#53) the legacy backend only: a pane on native isolated zoom (wc.setZoomFactor in main) never gets 'mpb:zoom', so this stays at 1 and does nothing
+
 let paneZoom = 1;
 const applyPaneZoom = () => { try { webFrame.setZoomFactor(paneZoom); } catch {} };
 ipcRenderer.on('mpb:zoom', (_e, z) => { paneZoom = Number(z) > 0 ? Number(z) : 1; applyPaneZoom(); });
