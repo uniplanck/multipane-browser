@@ -51,6 +51,9 @@ const NAV_CODES = ['E_URL', 'E_USERINFO', 'E_SCHEME', 'E_GESTURE', 'E_UI'];
 const PERM_CODES = ['E_PERM', 'E_ROLE', 'E_ORIGIN', 'E_FRAME', 'E_MEDIA', 'E_DOWNLOAD'];
 // (#53, zoom-policy.js CODES; checked by test/zoom-policy.test.js) a pane view's zoom backend and why, a page that lost the isolated mode, a fallback
 const ZOOM_CODES = ['NATIVE', 'NO_API', 'FORCED', 'INIT_FAIL', 'MODE_FAIL', 'MODE_RESET', 'FALLBACK'];
+// (#61, notification-policy.js CODES; checked by test/notification-policy.test.js) a notification sent for one pane / merged (n = panes), a
+// duplicate, consumed while muted / in quiet hours, dropped at delivery (closed / now in front), a click: pane opened / front only (gone, merged)
+const NOTIFY_CODES = ['SENT', 'MERGED', 'DUP', 'MUTED', 'QUIET', 'GONE', 'SEEN', 'OPEN', 'STALE', 'FRONT'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -88,6 +91,7 @@ const EVENTS = {
   'nav.block': { ja: '止めた遷移・リンク・外部起動', r: NAV_CODES },
   'perm.deny': { ja: '拒否したサイト権限・ダウンロード', r: PERM_CODES },
   zoom: { ja: 'ペインのズーム方式', r: ZOOM_CODES },
+  notify: { ja: '通知の配送', r: NOTIFY_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -160,9 +164,9 @@ function planRotation({ files, now, incoming = 0, fileMax = FILE_MAX, gens = GEN
 
 // ---- what the summary / screen may show about the app (everything else in `x` is ignored) ----
 const VER_RE = /^[0-9][0-9A-Za-z.+-]{0,31}$/;
-const SETTINGS = { notifications: 'bool', ecoMode: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', grokFix: 'bool', autoPc: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
+const SETTINGS = { notifications: 'bool', quietHours: 'bool', ecoMode: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', grokFix: 'bool', autoPc: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
   theme: ['system', 'dark', 'light'], memSaver: ['off', 'std', 'max'], globalZoom: [0.3, 3], sleepMinutes: [0, 1440], usageMargin: [0, 50] };
-const SET_JA = { notifications: '通知', ecoMode: '省電力', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化',
+const SET_JA = { notifications: '通知', quietHours: '静音時間', ecoMode: '省電力', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化',
   syncCols: '列幅の同期', debugLog: 'デバッグログ', diagPersist: '診断ログのファイル保存', theme: 'テーマ', memSaver: 'メモリ節約', globalZoom: '全体ズーム', sleepMinutes: 'スリープまでの分', usageMargin: '使用量の余裕%' };
 const STORE_STATUS = ['ready', 'recoveryRequired', 'unsupportedVersion'];
 function safeEnv(x) {
@@ -345,5 +349,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

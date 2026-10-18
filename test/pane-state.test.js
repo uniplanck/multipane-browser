@@ -215,7 +215,7 @@ function page(blocks) {
   t('main: a report is checked against its generation before anything else is done with it', at(om, 'PS.admit(p.obs, p.obs.ent, c.gen, c.seq)') > 0 && at(om, 'PS.admit(') < at(om, 'resetCounts(p)')
     && at(om, 'PS.admit(') < at(om, 'p.snap = s;') && at(om, 'PS.admit(') < at(om, "type: 'scan'") && at(om, "diag.rec('count.drop', drop") > 0);
   t('main: a CHANGING report applies no counts', at(om, "if (!snapOk(s, 'stable')) { sendState(); return; }") > 0 && at(om, "if (!snapOk(s, 'stable'))") < at(om, 'p.msgMode = true'));
-  t('main: one notification per report', /canAlert\(p\) && !obsDo\(p, \{ type: 'alert', key: PS\.alertKey\(c\) \}\)\.code\) \{ lightUp/.test(om) && /!obsDo\(p, \{ type: 'alert', key: PS\.alertKey\(nf\) \}\)\.code\) showPaneNotification/.test(pp));
+  t('main: one notification per report', /canAlert\(p\) && !obsDo\(p, \{ type: 'alert', key: PS\.alertKey\(c\) \}\)\.code\) \{ lightUp/.test(om) && /!obsDo\(p, \{ type: 'alert', key: PS\.alertKey\(nf\) \}\)\.code\) notifyPane/.test(pp));   // (#61) delivery: notification-policy.js
   t('main: auto-sleep needs the current generation\'s confirmed 🟢 / 🟣 (manual sleep unchanged)', /if \(!force && !PS\.sleepOk\(p\.obs\)\) return false;/.test(cs));
   t('main: new generation on every page / SPA move of the main frame / renderer loss; the number sent again on dom-ready', /wc\.on\('did-navigate', \(\) => newGen\(p, 'NAV'\)\);/.test(ap)
     && /wc\.on\('did-navigate-in-page', \(e, u, isMain\) => \{ if \(isMain\) newGen\(p, 'SPA'\); \}\);/.test(ap) && /wc\.on\('render-process-gone', \(\) => newGen\(p, 'GONE'\)\);/.test(ap) && /wc\.on\('dom-ready', [^\n]*sendGen\(p\)/.test(ap)

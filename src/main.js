@@ -119,6 +119,65 @@ function updateDockBadge() {
   if (isMac) app.dock?.setBadge(n ? String(n) : '');
   else app.setBadgeCount?.(n);
 }
+// ---- notifications (#61, notification-policy.js): only the delivery of an alert a window already decided (canAlert + pane-state alert).
+// One delivery per event (pane id + generation + kind + report key), candidates within NP.WINDOW_MS go out as one (one pane: its own
+// notification; more: 「Bots：確認待ち n件」 without names), app notifications off / a muted pane / quiet hours consume the candidate (nothing
+// comes out afterwards). Glow / unread / Dock badge / unopened are never changed here; a click never marks anything read.
+// Dev: MPB_NOTIFY_DRYRUN=1 shows no OS notification (debug log + diagnostics only).
+const NP = require('./notification-policy');
+const NOTIFY_DRYRUN = !!process.env.MPB_NOTIFY_DRYRUN;
+let notices = NP.createState(), noticeTimer = null;
+const noticeGate = () => ({ muted: !settings.notifications, quiet: settings.quietHours });
+const ctxOf = p => ctxs.find(c => !c.win.isDestroyed() && c.panes.includes(p));
+function frontWin(w) { if (!w || w.isDestroyed()) return; if (w.isMinimized()) w.restore(); w.show(); app.focus({ steal: true }); w.focus(); }
+function noticeArm(ms) { clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { noticeTimer = null; noticeTake(); }, Math.max(0, ms)); }
+function noticeOffer(p, kind, key, body, title) {           // a window's pane alerts now (lightUp / background check)
+  noticeTake();                                            // a due window goes out first: this candidate starts the next one
+  const g = noticeGate(); if (p.muted) g.muted = true;
+  const r = NP.offer(notices, { pane: p.id, gen: p.obs.gen, kind, key, p, body, title }, Date.now(), g);
+  notices = r.st;
+  if (r.code === 'OPEN') noticeArm(NP.WINDOW_MS);
+  else if (r.code === 'DUP' || r.code === 'MUTED' || r.code === 'QUIET') diag.rec('notify', r.code, { p: p.id }, 60000);
+  dlog(`pane${p.id}`, 'notify', kind, r.code);
+}
+function noticeTake() {
+  const r = NP.take(notices, Date.now(), noticeGate());
+  if (r.code === 'WAIT') { if (!noticeTimer) noticeArm(r.due - Date.now()); return; }
+  if (!r.code) return;
+  notices = r.st;
+  if (r.code !== 'DUE') { diag.rec('notify', r.code, { n: r.items.length }); return; }   // turned off / quiet hours began meanwhile: consumed
+  const live = r.items.filter(it => {                      // the pane closed, muted or in front of the user meanwhile: not delivered
+    const c = ctxOf(it.p), drop = !c || it.p.obs.closed ? 'GONE' : it.p.muted ? 'MUTED' : c.inView(it.p) ? 'SEEN' : '';
+    if (drop) diag.rec('notify', drop, { p: it.pane });
+    return !drop;
+  });
+  const m = NP.compose(live); if (!m) return;
+  diag.rec('notify', m.n === 1 ? 'SENT' : 'MERGED', { p: m.n === 1 ? m.item.pane : 0, n: m.n });
+  dlog('notify', m.n === 1 ? `pane${m.item.pane}` : 'merged', m.n, NOTIFY_DRYRUN ? '(dry run)' : '');
+  if (NOTIFY_DRYRUN || !Notification.isSupported()) return;
+  const n = new Notification(m.n === 1 ? { title: m.item.title, body: m.item.body, silent: false } : { title: m.title, body: m.body, silent: false });
+  n.on('click', () => noticeClick(m));
+  n.show();
+}
+// one pane: the same pane (id), still open, in the generation it was sent for -> its window in front + focus (a sleeping pane wakes; not marked
+// read). Otherwise (merged / closed / changed) only the app comes to the front; never another pane in its place.
+function noticeClick(m) {
+  const it = m.n === 1 ? m.item : null, list = it ? [it] : m.items;
+  const c = list.map(x => ctxOf(x.p)).find(Boolean) || ctxs.find(k => !k.win.isDestroyed());
+  if (!c) return;
+  const ok = !!it && NP.clickOk(it, it.p) && ctxOf(it.p) === c;
+  diag.rec('notify', !it ? 'FRONT' : ok ? 'OPEN' : 'STALE', { p: it ? it.pane : 0 });
+  frontWin(c.win);
+  if (ok) c.openPane(it.p);
+}
+function quietMenu() {                                     // (#61) quiet hours: off or a preset, local time (a saved other range is listed as is)
+  const q = NP.quietOf(settings.quietHours), set = v => { settings.quietHours = v; save(); buildMenu(); };
+  const list = NP.QUIET_PRESETS.map(([from, to]) => ({ from, to }));
+  if (q.on && !list.some(x => x.from === q.from && x.to === q.to)) list.push({ from: q.from, to: q.to });
+  return { label: `静音時間（${q.on ? `${q.from}〜${q.to}` : 'オフ'}・この間の通知は出さず、明けてもまとめて出さない）`, submenu: [
+    { label: 'オフ', type: 'radio', checked: !q.on, click: () => set({ ...q, on: false }) },
+    ...list.map(x => ({ label: `${x.from}〜${x.to}`, type: 'radio', checked: q.on && q.from === x.from && q.to === x.to, click: () => set({ on: true, ...x }) }))] };
+}
 // ---- IPC boundary (#71): ipc-policy.js decides. Every page main creates is registered here with its role and owner (window / pane), and
 // ipcOn / ipcHandle are the only listeners: a message counts only from a registered, live sender in its top frame showing the expected page,
 // with a valid payload for an existing target of its own window. Anything else is dropped without side effects (debug log: code + channel + role).
@@ -643,27 +702,23 @@ function clearUnread(p) {
   if (had) { updateBadge(); sendState(); }
 }
 function windowActive() { return win && !win.isDestroyed() && win.isFocused() && !win.isMinimized() && win.isVisible(); }
+const inView = p => panes[focused] === p && windowActive() && (maximizedId == null || maximizedId === p.id);   // the user is looking at it
 function canAlert(p) {
   if (!win) return false;
-  if (panes[focused] === p && windowActive() && (maximizedId == null || maximizedId === p.id)) return false;
+  if (inView(p)) return false;
   if (p.grokToken || p.grokPending) return false;
   if (Date.now() - p.loadedAt < 4000) return false;
   return true;
 }
-function lightUp(p, reason, always = false) {
+function lightUp(p, reason, always = false, key = '') {
   dlog(`pane${p.id}`, 'activity', reason);
   const first = !p.glow || always;
   p.glow = true;
   updateBadge(); sendState();
-  if (first && settings.notifications && !p.muted) showPaneNotification(p, p.msgMode ? (p.waiting ? `待機中（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります');
+  if (first) notifyPane(p, p.msgMode ? 'ask' : 'update', key || `u${p.unread || 0}`, p.msgMode ? (p.waiting ? `待機中（未返信 ${p.unread}件）` : `新しいメッセージ ${p.unread}件`) : '新しい更新があります');
 }
-function showPaneNotification(p, body) {
-  if (!Notification.isSupported()) return;
-  const n = new Notification({ title: p.name || displayTitle(p), body, silent: false });
-  n.on('click', () => { if (win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.show(); app.focus({ steal: true }); win.focus(); const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); });
-  dlog(`pane${p.id}`, 'notify', p.unread);
-  n.show();
-}
+// (#61) the alert goes to the app-wide delivery (noticeOffer): duplicate / merge / mute / quiet hours are decided there; title = the pane's name
+function notifyPane(p, kind, key, body) { noticeOffer(p, kind, key, body, p.name || displayTitle(p)); }
 const isBotUrl = u => /^https:\/\/grok\.com\/bot\//.test(String(u || ''));
 function resetCounts(p) { if (p.sleeping) return; const had = p.unread || p.glow || p.waiting || p.working || p.done || p.needsReply; p.snap = null; p.needsReply = false; p.msgMode = false; p.lastUserCount = null; p.lastMsg = null; p.unread = 0; p.glow = false; p.waiting = false; p.working = false; p.done = false; if (had) { updateBadge(); sendState(); } }
 function markActivity(p, reason) {
@@ -726,7 +781,7 @@ function onMsgCount(p, c) {
   if (wasAsk !== p.needsReply) dlog(`pane${p.id}`, 'needsReply', p.needsReply);
   if (userSent || c.botSince === 0) { if (p.glow) dlog(`pane${p.id}`, 'msgcount reset (user sent)'); p.glow = false; p.needsReply = false; }
   else if (!p.needsReply) { p.glow = false; }                      // plain progress report: grey number only
-  else if (prev != null && (!wasAsk || c.botSince > prev) && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(c) }).code) { lightUp(p, `bot asks (${c.botSince})`, true); return; }   // glow + notification only when waiting for the user, once per report
+  else if (prev != null && (!wasAsk || c.botSince > prev) && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(c) }).code) { lightUp(p, `bot asks (${c.botSince})`, true, PS.alertKey(c)); return; }   // glow + notification only when waiting for the user, once per report
   updateBadge(); sendState();
 }
 function updateBadge() { updateDockBadge(); }
@@ -1258,7 +1313,7 @@ async function probePane(p) {
   p.unread = nf.botSince; p.waiting = nf.waiting; p.working = nf.working && !nf.waiting; p.done = !!nf.done && !nf.waiting && !nf.working; if (!nf.waiting) p.reqQuote = '';
   p.needsReply = !!(nf.asks || nf.waiting) && !nf.working && !nf.done;
   updateBadge(); sendState();
-  if (p.needsReply && settings.notifications && !p.muted && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(nf) }).code) showPaneNotification(p, `未開封の新着（待機中 ${p.unread}件）`);
+  if (p.needsReply && canAlert(p) && !obsDo(p, { type: 'alert', key: PS.alertKey(nf) }).code) notifyPane(p, 'probe', PS.alertKey(nf), `未開封の新着（待機中 ${p.unread}件）`);   // off / muted / quiet: consumed in noticeOffer (#61)
 }
 
 // ---- panes ----
@@ -1839,6 +1894,7 @@ const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { 
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
+  inView, openPane(p) { const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); },   // (#61) notification click: this very pane, not marked read
   othersInfo(n) {
     return { wid: win.id, n, panes: panes.filter(p => p.waiting || p.working || p.done || p.glow || p.unread || p.obs.unopened).map(p => ({ id: p.id, name: (p.name || displayTitle(p) || '').slice(0, 40),
       waiting: !!p.waiting, working: !!p.working, done: !!p.done, glow: !!p.glow, unopened: !!p.obs.unopened, unread: p.unread || 0, color: COLORS[p.color] || '' })) };
@@ -1948,6 +2004,7 @@ function buildMenu() {
         click: () => { settings.theme = v; nativeTheme.themeSource = v; save(); } })) },
       { type: 'separator' },
       { label: '更新時にmacOS通知を出す', type: 'checkbox', checked: settings.notifications, click: m => { settings.notifications = m.checked; save(); } },
+      quietMenu(),
       { label: 'メモリ節約モード（再起動で反映）', submenu: [
         ['std', '標準（推奨）— V8を省メモリ設定 ≈-20%・動作は変わらない'], ['max', '最大 — 同一サイトのペインでプロセス共有 ≈-45%（1ペインの重い処理で他ペインも一時的に固まる）'], ['off', 'オフ — Chromium既定']]
         .map(([v, l]) => ({ label: l, type: 'radio', checked: MEM_MODE === v, click: () => {
@@ -2012,7 +2069,7 @@ function diagEnv() {
     platform: process.platform, arch: process.arch, packaged: app.isPackaged,
     settings: { notifications: !!settings.notifications, ecoMode: !!settings.ecoMode, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
       autoPc: settings.autoPc !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
-      globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin },
+      globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin, quietHours: NP.quietOf(settings.quietHours).on },
     counts: { windows: ctxs.length, panes: all.length, bots: all.filter(p => p.msgMode).length, sleeping: all.filter(p => p.sleeping).length },
     store: si && { status: si.status, saveError: si.saveError, frozen: si.frozen } };
 }
