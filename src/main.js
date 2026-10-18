@@ -161,7 +161,7 @@ function syncColsApply(on) {
   save(); ctxs.forEach(c => c.relayout(true)); broadcast();
 }
 
-setInterval(() => ctxs.forEach(c => { try { c.sleepTick(); } catch {} }), 30000);
+setInterval(() => ctxs.forEach(c => { try { c.sleepTick(); } catch {} }), 10000);
 setInterval(async () => {                                    // one background check at a time, never while the Mac sleeps / is locked
   if (probeBusy || sysBlocked || Date.now() - resumeAt < 20000) { if (debugOn() && Date.now() - probeDbgAt > 60000) { probeDbgAt = Date.now(); dlog('probe tick skipped:', probeBusy ? 'busy' : sysBlocked ? 'system asleep/locked' : 'just resumed'); } return; }
   probeBusy = true; if (debugOn()) dlog('probe tick');
@@ -762,15 +762,17 @@ async function reloadPane(p) {
 }
 
 // ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
-// A pane sleeps when its last output is the 🟢 marker and nobody touched it for N minutes. It never sleeps while 🔴 working, unmarked, focused,
+// A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 10 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
-const sleepMs = () => (Number(process.env.MPB_SLEEP_SEC) > 0 ? Number(process.env.MPB_SLEEP_SEC) * 1000 : (settings.sleepMinutes > 0 ? settings.sleepMinutes : 10) * 60000);
+const { sleepDelayFor } = require('./sleep-rules');
+const sleepDelay = p => Number(process.env.MPB_SLEEP_SEC) > 0 ? ((p.waiting || p.done) && !p.working ? Number(process.env.MPB_SLEEP_SEC) * 1000 : null)   // dev override: same delay for both
+  : sleepDelayFor(p, settings.sleepMinutes > 0 ? settings.sleepMinutes * 60000 : undefined);
 function canSleep(p, i, force) {
   const wc = p.view.webContents; if (wc.isDestroyed() || p.sleeping) return false;
   if (!force && (settings.sleepWaiting === false || p.sleepOn === false)) return false;
   if (!(p.waiting || p.done) || p.working || !isBotUrl(wc.getURL()) || i === focused || maximizedId === p.id || p.pcMax || p.editing) return false;
   if (wc.isLoading() || p.grokToken || p.grokPending) return false;
-  if (!force && Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < sleepMs()) return false;
+  if (!force) { const d = sleepDelay(p); if (d == null || Date.now() - Math.max(p.lastInteract || 0, p.waitSince || 0, p.lastTyping || 0, p.loadedAt || 0) < d) return false; }   // waitSince = when 待機中 / 終了 was first detected
   return true;
 }
 function sleepPane(p) {
@@ -1488,7 +1490,7 @@ function buildMenu() {
           dialog.showMessageBox({ type: 'question', buttons: ['今すぐ再起動', 'あとで'], defaultId: 0, message: 'メモリ節約モードを変更しました', detail: '再起動すると反映されます。ペインの構成と状態は保存されています。' })
             .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
         } })) },
-      { label: '待機中（🟢）・終了（🟣）のペインを自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
+      { label: '終了（🟣）は1分後・待機中（🟢）は10分後に自動スリープ（メモリ節約）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); } },
       { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },

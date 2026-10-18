@@ -247,3 +247,8 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 /* unopened (cyan) stays on top of green / red / purple */
 .pane.unopened.done{outline:2px solid var(--unop);box-shadow:0 0 0 1px var(--unop),0 0 18px color-mix(in srgb,var(--unop) 55%,transparent)}
 .chip.unopened.done{border-color:color-mix(in srgb,var(--unop) 70%,transparent);background:color-mix(in srgb,var(--unop) 16%,transparent)}
+
+/* sleeping placeholder keeps the pane's marker colour: purple = 終了, green = 待機中 (cyan 'unopened' still wins) */
+.pane.sleeping.done:not(.unopened) .sleepph{color:var(--done)}
+.pane.sleeping.waiting:not(.unopened) .sleepph{color:var(--wait)}
+.pane.sleeping.done:not(.unopened) .sleepph:hover,.pane.sleeping.waiting:not(.unopened) .sleepph:hover{color:var(--text)}
