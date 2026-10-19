@@ -17,6 +17,7 @@ const MAX_TALL = 3;               // the rows' tallest cells added up
 const STACK_ROWS = 2;             // cells stack only while there are at most this many rows
 const MAX_ROWS = 3;               // an edge drop (a new row) only while there are fewer rows
 const EDGE = { out: 18, in: 12 }; // px: the edge bands reach this far beyond / into the top and the bottom of the rows
+const BAND = { part: 4, min: 60, max: 200 };   // px: the preview of an edge drop is this part of the rows' height, kept within min..max (and the rows)
 const SIDES = ['top', 'bottom', 'left', 'right', 'edgeTop', 'edgeBottom'];
 const HIT = ['left', 'right', 'top', 'bottom'];   // a point as near to two sides (on a diagonal): the first of these
 const DRAG_MS = 30000;            // main ends a drag that lasts longer (views shown again)
@@ -142,6 +143,21 @@ function zoneAt(grid, ids, rects, area, from, pt, edge = EDGE) {
   const side = sideOf(rects[i], pt);
   return canDrop(grid, from, ids[i], side) ? { to: ids[i], side } : null;
 }
+// the preview of a zone, where the cursor is (not where the dragged pane ends up): top / bottom / left / right = that half of the target pane's
+// rectangle r (as zoneAt got it); edgeTop / edgeBottom = a band the full width of the rows' rectangle `area` at its top / bottom (r unused),
+// BAND high -> { x, y, w, h } | null (unknown side, no usable rectangle)
+function previewRect(r, side, area) {
+  if (side === 'edgeTop' || side === 'edgeBottom') {
+    if (!isRect(area)) return null;
+    const h = Math.min(area.h, Math.max(BAND.min, Math.min(BAND.max, Math.round(area.h / BAND.part))));
+    return { x: area.x, y: side === 'edgeTop' ? area.y : area.y + area.h - h, w: area.w, h };
+  }
+  if (!HIT.includes(side) || !isRect(r)) return null;
+  const hh = Math.round(r.h / 2), hw = Math.round(r.w / 2);
+  const out = side === 'top' ? { x: r.x, y: r.y, w: r.w, h: hh } : side === 'bottom' ? { x: r.x, y: r.y + hh, w: r.w, h: r.h - hh }
+    : side === 'left' ? { x: r.x, y: r.y, w: hw, h: r.h } : { x: r.x + hw, y: r.y, w: r.w - hw, h: r.h };
+  return isRect(out) ? out : null;
+}
 
 // a new pane once the rows are no longer the default grid (main's insertPane): a cell of its own at the end of the first row with fewer than
 // maxCols cells, else a new row while there are fewer than maxRows -> the grid (fit), or null (no room: main goes back to the default grid)
@@ -172,5 +188,5 @@ function reopen(grid, id, e) {
   return fit(g);
 }
 
-module.exports = { MAX_STACK, MAX_TALL, STACK_ROWS, MAX_ROWS, EDGE, SIDES, DRAG_MS, READY_MS,
-  flat, isFlat, stacksOk, read, toGrid, fromGrid, where, without, dissolve, fit, drop, canDrop, sideOf, zoneAt, add, reopen };
+module.exports = { MAX_STACK, MAX_TALL, STACK_ROWS, MAX_ROWS, EDGE, BAND, SIDES, DRAG_MS, READY_MS,
+  flat, isFlat, stacksOk, read, toGrid, fromGrid, where, without, dissolve, fit, drop, canDrop, sideOf, zoneAt, previewRect, add, reopen };

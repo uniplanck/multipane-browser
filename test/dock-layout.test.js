@@ -1,7 +1,7 @@
 // node test/dock-layout.test.js — ドッキング型のペイン並べ替え. The pure parts (src/dock-layout.js): the rows with stacked cells (rows / stacks <->
 // a grid of pane ids, older rows without stacks), the zone under the cursor (a pane's four sides by its diagonals, the edge bands, gaps, ties,
 // the dragged pane itself), the limits (stacking with 1 / 2 / 3 rows, 2 / 3 panes in a cell, the rows' tallest cells, no edge row at 3 rows),
-// the drops (left / right / top / bottom / edge), the hole a pane leaves, drops that change nothing, every stack undone when the rows grow
+// the drops (left / right / top / bottom / edge), the preview's rectangle (the zone's half of the target pane / the edge band), the hole a pane leaves, drops that change nothing, every stack undone when the rows grow
 // (fixed results), a new / reopened pane, the saved form (state-schema.js: kept, repaired, round trip, older files) and main's wiring.
 // Not covered here: the real drag over the WebContentsViews, the stills, the preview on screen - that needs the manual check.
 const fs = require('fs'), path = require('path');
@@ -69,6 +69,32 @@ t('limits as fixed numbers', DL.MAX_STACK === 3 && DL.MAX_TALL === 3 && DL.STACK
     && at(g, 5, 900, 130) === 'null' && at(g, 5, 30, 700) === J({ to: 4, side: 'left' })); }
 { const g = [[[1, 2], [3]], [[4]]];                          // 2 rows, 1 / 2 stacked: dragging 2 out leaves tall 2 -> stacking elsewhere is fine
   t('zoneAt: tall counted without the dragged pane (out of its stack: 2) -> top / bottom react', at(g, 2, 900, 130) === J({ to: 3, side: 'top' })); }
+
+// ---- the preview: where the cursor is (the zone on the target pane / the edge band), not the dragged pane's place after the drop ----
+{ const r = { x: 606, y: 100, w: 594, h: 397 };
+  t('previewRect: top / bottom / left / right = that half of the target pane (odd sizes: the halves add up to it)',
+    J(DL.previewRect(r, 'top', AREA)) === J({ x: 606, y: 100, w: 594, h: 199 }) && J(DL.previewRect(r, 'bottom', AREA)) === J({ x: 606, y: 299, w: 594, h: 198 })
+    && J(DL.previewRect(r, 'left', AREA)) === J({ x: 606, y: 100, w: 297, h: 397 }) && J(DL.previewRect(r, 'right', AREA)) === J({ x: 903, y: 100, w: 297, h: 397 }));
+  t('previewRect: the pane sides do not need the area', J(DL.previewRect(r, 'top', null)) === J(DL.previewRect(r, 'top', AREA)));
+  t('previewRect: edgeTop / edgeBottom = a band the rows\' full width at their top / bottom, a quarter of their height (800 -> 200), the pane unused',
+    J(DL.previewRect(null, 'edgeTop', AREA)) === J({ x: 0, y: 100, w: 1200, h: 200 }) && J(DL.previewRect(r, 'edgeBottom', AREA)) === J({ x: 0, y: 700, w: 1200, h: 200 }));
+  const band = h => DL.previewRect(null, 'edgeBottom', { x: 6, y: 50, w: 900, h }).h;
+  t('previewRect: the band\'s height kept within 60..200 px (and the rows)', band(400) === 100 && band(1000) === 200 && band(200) === 60 && band(40) === 40 && DL.BAND.min === 60 && DL.BAND.max === 200);
+  t('previewRect: bad input -> null (unknown side, no / empty pane rectangle, no area for an edge)', DL.previewRect(r, 'middle', AREA) === null && DL.previewRect(null, 'top', AREA) === null
+    && DL.previewRect({ x: 0, y: 0, w: 0, h: 100 }, 'left', AREA) === null && DL.previewRect({ x: NaN, y: 0, w: 10, h: 10 }, 'right', AREA) === null
+    && DL.previewRect({ x: 0, y: 0, w: 10, h: 1 }, 'bottom', AREA) === null && DL.previewRect(r, 'edgeTop', null) === null && DL.previewRect(r, 'edgeBottom', { x: 0, y: 0, w: 10, h: 0 }) === null); }
+for (const [name, g, from] of [['2 x 2', G([2, 2]), 4], ['a stacked cell', [[[1, 2], [3]], [[4]]], 4], ['1 row', G([3]), 2]]) {
+  const rs = rectsOf(g, AREA, 6), all = ids(g.flat(2).length); let n = 0, ok = true;
+  for (let x = 3; x < 1200; x += 37) for (let y = 85; y < 915; y += 29) {
+    const z = DL.zoneAt(g, all, rs, AREA, from, { x, y }); if (!z) continue;
+    const tr = z.to ? rs[z.to - 1] : AREA, p = DL.previewRect(tr, z.side, AREA); n++;
+    if (!p) { ok = false; continue; }
+    const inside = p.x >= tr.x && p.y >= tr.y && p.x + p.w <= tr.x + tr.w && p.y + p.h <= tr.y + tr.h;
+    const hit = x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h;
+    if (!inside || (z.to ? !hit : y >= AREA.y && y < AREA.y + AREA.h && !hit)) ok = false;
+  }
+  t(`previewRect with zoneAt (${name}): within the target pane / the rows, under the cursor (a band: whenever the cursor is inside the rows)`, ok && n > 50);
+}
 
 // ---- drops: left / right ----
 { const g = G([3, 2]);                                       // 1 2 3 / 4 5
@@ -171,8 +197,10 @@ t('reopen: an older entry (no cell) / junk is safe', J(DL.reopen(G([2]), 5, { ro
     /capturePage\(\)/.test(fn('dockBegin')) && /if \(dock !== d\) return;/.test(fn('dockBegin')) && /DL\.READY_MS/.test(fn('dockBegin')) && /d\.hide = true; showViews\(\);/.test(fn('dockReady')));
   t('main: no drag while maximized / an overlay is open / one pane', /panes\.length < 2 \|\| maximizedId != null \|\| overlayOpen\) return;/.test(fn('dockBegin')));
   t('main: zone and drop from the rows as they are now; the views back before the panes move; refused grids change nothing',
-    /DL\.zoneAt\(g, panes\.map\(p => p\.id\), cells\(\), area, d\.id, \{ x, y \}\)/.test(fn('dockZone')) && fn('dockDrop').indexOf("dockEnd('DROP')") < fn('dockDrop').indexOf('applyGrid(') && /if \(!z \|\| !applyGrid\(z\.grid\)\) return;/.test(fn('dockDrop'))
+    /cs = cells\(\), z = DL\.zoneAt\(g, panes\.map\(p => p\.id\), cs, area, d\.id, \{ x, y \}\)/.test(fn('dockZone')) && fn('dockDrop').indexOf("dockEnd('DROP')") < fn('dockDrop').indexOf('applyGrid(') && /if \(!z \|\| !applyGrid\(z\.grid\)\) return;/.test(fn('dockDrop'))
     && /new Set\(next\)\.size !== next\.length/.test(fn('applyGrid')));
+  t('main: the preview is the zone on the target pane as it is now (the same cells as the zone) / the edge band, not the dragged pane after the drop',
+    /DL\.previewRect\(cs\[panes\.findIndex\(p => p\.id === z\.to\)\], z\.side, area\)/.test(fn('dockZone')) && !/geom\(/.test(fn('dockZone')) && /hover: z \? z\.rect : null/.test(fn('dockHover')));
   t('main: saved with the rows (window / workspace), read back validated, a preset clears them',
     /\.\.\.rowsSave\(\)/.test(fn('snapshot')) && /\.\.\.rowsSave\(\)/.test(fn('saveWorkspace')) && /stackLens = DL\.read\(ws\.stacks\);/.test(fn('loadWorkspace')) && /stackLens = DL\.read\(spec\.stacks\);/.test(main)
     && /rowLens = null; stackLens = null;/.test(fn('applyPreset')) && /DL\.stacksOk\(stackLens, l\)/.test(fn('getStacks')));

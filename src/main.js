@@ -793,11 +793,11 @@ function dockReady(seq) {                                    // the window shows
   const d = dock; if (!d || d.seq !== seq || d.hide) return;
   clearTimeout(d.ready); d.hide = true; showViews();
 }
-function dockZone(x, y) {                                    // the drop under the cursor now -> { to, side, grid: the rows after it, rect: the dragged pane then }
+function dockZone(x, y) {                                    // the drop under the cursor now -> { to, side, grid: the rows after it, rect: the preview (the zone on the target pane / the edge band) }
   const d = dock, g = paneGrid(); if (!d || !g || !byId(d.id) || maximizedId != null) return null;
-  const area = areaNow(), z = DL.zoneAt(g, panes.map(p => p.id), cells(), area, d.id, { x, y });
-  const ng = z && DL.drop(g, d.id, z.to, z.side), r = ng && DL.fromGrid(ng), i = r ? r.order.indexOf(d.id) : -1;
-  const rect = i >= 0 ? geom(r.stacks || DL.flat(r.rows), area).out[i] : null;
+  const area = areaNow(), cs = cells(), z = DL.zoneAt(g, panes.map(p => p.id), cs, area, d.id, { x, y });
+  const ng = z && DL.drop(g, d.id, z.to, z.side);
+  const rect = ng ? DL.previewRect(cs[panes.findIndex(p => p.id === z.to)], z.side, area) : null;
   return rect ? { ...z, grid: ng, rect } : null;
 }
 function dockHover(x, y) {
