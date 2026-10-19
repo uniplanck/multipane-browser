@@ -454,6 +454,10 @@ const AQ = require('./attention-queue');
 // ---- キーボードでのペイン移動 (#51, pane-navigation.js): ⌘⌥←→↑↓ by position, ⌘⇧J to the next item of the 対応キュー; the same focus / wake as a
 // click (makeWindow: navKey / moveFocus / queueNext / navGo). Memory only (a pending move: navWait)
 const PN = require('./pane-navigation');
+// ---- ドッキング型の並べ替え (dock-layout.js): a pane dragged by its header onto another one's top / bottom (stacked in its cell) / left / right
+// (a cell of its own) or onto the band at the top / bottom edge of the rows (a row of its own); the rows with stacked cells (window / workspace
+// `stacks`, optional). makeWindow: dock* (the drag, its views hidden behind stills, the preview), grid / applyGrid (the rows as pane ids)
+const DL = require('./dock-layout');
 // ---- 一斉送信 (#12, broadcast-state.js): a preview of every chosen pane (read live), then one confirmed batch: per target the same pane /
 // generation / conversation / keys typed as previewed and an empty composer right before it, input, a check, the send, then page evidence
 // (makeWindow: bc*). Memory only (never in panes.json, never resumed after a restart); the text is never logged.
@@ -556,8 +560,11 @@ function grid(n) {
 }
 // ---- row structure: every pane belongs to a row (rowLens[r] = number of panes in row r, panes[] is kept in row-major order) ----
 // Closing a pane only shrinks ITS row (the row re-divides evenly); panes never move between rows. An empty row disappears.
+// (dock) A row's cells may stack panes: stackLens[r][c] = the panes of cell c of row r, top to bottom (null = one pane per cell); rowLens still
+// counts every pane of the row and the columns are the row's cells. A stacked pane closed: only its cell shrinks (one left: an ordinary cell)
 const closedStack = [];                                      // last CP.LIMIT closed panes (newest last), for 閉じたペインを開き直す (#23: this window, memory only)
 let rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;
+let stackLens = DL.read(spec.stacks);
 const sumArr = a => a.reduce((x, y) => x + y, 0);
 function defRows(n) {                                  // rows as the preset / auto-fit would lay n panes out
   if (n <= 0) return [];
@@ -565,19 +572,44 @@ function defRows(n) {                                  // rows as the preset / a
   for (let r = 0; r < g.rows && left > 0; r++) { const k = r === g.rows - 1 ? left : Math.min(g.cols, left); out.push(k); left -= k; }
   return out;
 }
-function getRows() {                                   // validated; falls back to the default grid
-  if (!rowLens || !rowLens.every(k => Number.isInteger(k) && k > 0) || sumArr(rowLens) !== panes.length) rowLens = defRows(panes.length);
+function getRows() {                                   // validated; falls back to the default grid (one pane per cell)
+  if (!rowLens || !rowLens.every(k => Number.isInteger(k) && k > 0) || sumArr(rowLens) !== panes.length) { rowLens = defRows(panes.length); stackLens = null; }
   return rowLens;
 }
+function getStacks() {                                 // (dock) the rows' cells, validated against the rows and the limits; else one pane per cell
+  const l = getRows();
+  if (stackLens && !DL.stacksOk(stackLens, l)) stackLens = null;
+  return stackLens || DL.flat(l);
+}
+// (dock) the rows as a grid of pane ids (dock-layout.js) and back: applyGrid puts panes[] / rows / stacks in its order (extra: a pane not in
+// panes[] yet), the focused pane stays focused. It never loses or duplicates a pane: anything else is refused (false) and nothing changes
+const paneGrid = () => DL.toGrid(getRows(), getStacks(), panes.map(p => p.id));
+function applyGrid(g, extra = []) {
+  if (!g) return false;
+  const r = DL.fromGrid(g), all = [...panes, ...extra], fid = panes[focused]?.id;
+  const next = r.order.map(id => all.find(p => p.id === id));
+  if (next.length !== all.length || next.some(p => !p) || new Set(next).size !== next.length) return false;
+  panes.splice(0, panes.length, ...next); rowLens = r.rows; stackLens = r.stacks;
+  focused = Math.max(0, panes.findIndex(p => p.id === fid));
+  return true;
+}
+const rowsSave = () => { const st = getStacks(); return { rows: [...getRows()], ...(DL.isFlat(st) ? {} : { stacks: st.map(s => [...s]) }) }; };   // stacks only when a cell stacks
 const sameArr = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const splitKey = () => { const l = getRows(); return `${Math.max(1, ...l)}x${Math.max(1, l.length)}`; };
+const splitKey = () => { const l = getStacks(); return `${Math.max(1, ...l.map(s => s.length))}x${Math.max(1, l.length)}`; };
+const areaNow = () => { const [w, h] = win.getContentSize(); return { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP }; };
 function cells(grid = false) {                         // grid: the rows' layout even while a pane is maximized (#51 keyboard moves)
-  const [w, h] = win.getContentSize();
   const n = panes.length; if (!n) return [];
-  const area = { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP };
+  const area = areaNow();
   if (!grid && maximizedId != null && byId(maximizedId))
     return panes.map(p => p.id === maximizedId ? { x: area.x, y: area.y, w: area.w, h: area.h } : null);
-  const lens = getRows(), rows = lens.length, cols = Math.max(...lens);
+  const r = geom(getStacks(), area);
+  lastGeom = r.g;
+  return r.out;
+}
+// the panes' rectangles (panes[] order) for rows whose cells hold stacks[r][c] panes: the cells side by side, a stacked cell's panes share
+// its row's height evenly (no splitter of their own); lastGeom from it for the splitters
+function geom(stacks, area) {
+  const lens = stacks.map(s => s.length), rows = lens.length, cols = Math.max(...lens);
   const sp = settings.splits?.[`${cols}x${rows}`] || {};
   const wts = (arr, k) => Array.isArray(arr) && arr.length === k && arr.every(v => v > 0.05) ? arr : Array(k).fill(1);
   const edges = (start, len, k, w) => { const tot = w.reduce((a, b) => a + b, 0); let acc = 0; const e = [start]; for (let j = 0; j < k; j++) { acc += w[j]; e.push(start + (len + GAP) * acc / tot); } return e; };
@@ -587,17 +619,20 @@ function cells(grid = false) {                         // grid: the rows' layout
   const evenEdges = () => { const tot = area.w - GAP * (cols - 1), base = Math.floor(tot / cols), rem = tot - base * cols; const e = []; for (let j = 0; j <= cols; j++) e.push(area.x + j * (base + GAP) + Math.min(j, rem)); return e; };   // integer-exact equal columns
   const cEs = Array.from({ length: rows }, (_, r) => { const w = rowW(r); return w.every(v => v === w[0]) ? evenEdges() : edges(area.x, area.w, cols, w); });
   const fr = Math.max(0, lens.findIndex(k => k === cols)), cE = cEs[fr], rE = edges(area.y, area.h, rows, wts(sp.r, rows));
-  lastGeom = { area, cols, rows, cE, cEs, rE, n, sync, lens };
-  const out = []; let idx = 0;
+  const g = { area, cols, rows, cE, cEs, rE, n: sumArr(stacks.map(sumArr)), sync, lens };
+  const out = [];
   lens.forEach((inRow, r) => {
-    for (let c = 0; c < inRow; c++, idx++) {
+    for (let c = 0; c < inRow; c++) {
       let x0, x1;
-      if (inRow === cols) { x0 = cEs[r][c]; x1 = cEs[r][c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }   // shorter row: its panes share the width evenly
-      const x = Math.round(x0), y = Math.round(rE[r]);
-      out.push({ x, y, w: Math.round(x1 - GAP) - x, h: Math.round(rE[r + 1] - GAP) - y });
+      if (inRow === cols) { x0 = cEs[r][c]; x1 = cEs[r][c + 1]; } else { const cw = (area.w + GAP) / inRow; x0 = area.x + c * cw; x1 = area.x + (c + 1) * cw; }   // shorter row: its cells share the width evenly
+      const x = Math.round(x0), k = stacks[r][c], rh = rE[r + 1] - rE[r];
+      for (let j = 0; j < k; j++) {                       // one pane per cell: the row's own top / bottom, exactly as before
+        const y = Math.round(rE[r] + rh * j / k), y1 = j + 1 === k ? rE[r + 1] : rE[r] + rh * (j + 1) / k;
+        out.push({ x, y, w: Math.round(x1 - GAP) - x, h: Math.round(y1 - GAP) - y });
+      }
     }
   });
-  return out;
+  return { out, g };
 }
 let lastGeom = null, splitDrag = null;
 function splitters() {
@@ -664,7 +699,7 @@ function relayout(animate = false) {
   const targets = cs.map(c => c && viewRect(c));
   panes.forEach((p, i) => {
     const t = targets[i];
-    p.view.setVisible(!!t && !p.sleeping && !viewHeld(p));
+    p.view.setVisible(!!t && !p.sleeping && !viewHeld(p) && !dockHide());
     if (!t) return;
     if (!animate || !p.bounds) { p.view.setBounds(t); p.bounds = t; }
   });
@@ -695,7 +730,7 @@ function applyPreset(key) {
     layout = key; maximizedId = null;
     while (panes.length > want) closePane(panes[panes.length - 1].id, true);
     while (panes.length < want) addPane({ url: '' }, { focus: false });
-    rowLens = null;                                       // a preset re-initialises the rows
+    rowLens = null; stackLens = null;                     // a preset re-initialises the rows (no stacked cells)
     setFocused(Math.min(focused, panes.length - 1));
     relayout(true); save();
   });
@@ -726,6 +761,64 @@ function swapPanes(a, b) {
   [panes[i], panes[j]] = [panes[j], panes[i]];
   focused = Math.max(0, panes.findIndex(p => p.id === fid));
   relayout(true); save();
+}
+// ---- ドッキング型の並べ替え (dock-layout.js): a pane's header dragged (renderer: dockBegin -> dockHover ... -> dockDrop / dockEnd; a tab of the
+// strip still swaps). The views are native and lie above the window's page, which gets no drag events over them: while the drag lasts every
+// view is hidden behind a still of its page (capturePage, sent to the window first; hidden once the window shows them, at most DL.READY_MS
+// later) and shown again by the drag's end in every case - the drop, dragend / Esc, the window losing focus, an overlay, the window's page gone,
+// the window closing, DL.DRAG_MS at most. Only the visibility changes (showViews gives every view back by its usual rule: asleep / waiting for
+// a load / stopped stay hidden); pages, loads, sleep and checks are not touched. The zone / preview / drop is decided here from the rows as they
+// are at that moment; a drop onto itself, over a limit or that changes nothing does nothing.
+let dock = null, dockNo = 0;                                // { seq, id: the dragged pane, hide: views hidden, at: the zone shown, end / ready: timers }
+const dockHide = () => !!dock && dock.hide;
+const dockSend = m => { try { if (win && !win.isDestroyed()) win.webContents.send('dock', m); } catch {} };
+function dockBegin(id) {
+  dockEnd('NEW');
+  if (!byId(id) || panes.length < 2 || maximizedId != null || overlayOpen) return;   // nothing to dock onto: the drag does nothing
+  const d = dock = { seq: ++dockNo, id, hide: false, at: '', end: setTimeout(() => dockEnd('TIME'), DL.DRAG_MS), ready: null };
+  dockSend({ seq: d.seq, on: true });
+  const cs = cells(), shown = panes.filter((q, i) => cs[i] && !q.sleeping && !viewHeld(q) && !q.view.webContents.isDestroyed());
+  const still = q => Promise.race([Promise.resolve().then(() => q.view.webContents.capturePage()), new Promise(r => setTimeout(() => r(null), 250))]).then(img => {
+    if (!img || img.isEmpty()) return '';
+    const w = Math.round(q.bounds?.width || 0), im = w && img.getSize().width > w ? img.resize({ width: w }) : img;   // the view's own size (not Retina pixels)
+    return 'data:image/jpeg;base64,' + im.toJPEG(80).toString('base64');
+  }).catch(() => '');
+  Promise.all(shown.map(q => still(q).then(url => ({ id: q.id, url })))).then(list => {
+    if (dock !== d) return;                                    // already over: nothing was hidden
+    dockSend({ seq: d.seq, on: true, shots: list.filter(s => s.url) });
+    d.ready = setTimeout(() => dockReady(d.seq), DL.READY_MS);
+  });
+}
+function dockReady(seq) {                                    // the window shows the stills (or did not answer in time): the views go
+  const d = dock; if (!d || d.seq !== seq || d.hide) return;
+  clearTimeout(d.ready); d.hide = true; showViews();
+}
+function dockZone(x, y) {                                    // the drop under the cursor now -> { to, side, grid: the rows after it, rect: the dragged pane then }
+  const d = dock, g = paneGrid(); if (!d || !g || !byId(d.id) || maximizedId != null) return null;
+  const area = areaNow(), z = DL.zoneAt(g, panes.map(p => p.id), cells(), area, d.id, { x, y });
+  const ng = z && DL.drop(g, d.id, z.to, z.side), r = ng && DL.fromGrid(ng), i = r ? r.order.indexOf(d.id) : -1;
+  const rect = i >= 0 ? geom(r.stacks || DL.flat(r.rows), area).out[i] : null;
+  return rect ? { ...z, grid: ng, rect } : null;
+}
+function dockHover(x, y) {
+  const d = dock; if (!d) return;
+  const z = dockZone(x, y), key = z ? `${z.to}:${z.side}` : '';
+  if (key === d.at) return;
+  d.at = key; dockSend({ seq: d.seq, hover: z ? z.rect : null });
+}
+function dockDrop(x, y) {
+  if (!dock) return;
+  const z = dockZone(x, y);
+  dockEnd('DROP');                                           // the views back first (where they were), then moved to the new rows
+  if (!z || !applyGrid(z.grid)) return;
+  relayout(true); save();
+}
+function dockEnd(code) {
+  const d = dock; if (!d) return;
+  dock = null; clearTimeout(d.end); clearTimeout(d.ready);
+  if (d.hide) showViews();
+  dockSend({ seq: d.seq, on: false });
+  dlog('dock end', code);
 }
 
 function displayTitle(p) {
@@ -902,7 +995,7 @@ function navKey(id) {
 }
 // the pane next to the focused one by position (the grid's rows / rectangles, also while one pane is maximized); none that way: nothing
 function moveFocus(dir) {
-  const i = PN.pick(cells(true), getRows(), focused, dir);
+  const i = PN.pick(cells(true), getRows(), focused, dir, getStacks());   // (dock) a stacked cell: up / down within it first
   if (i < 0) { diag.rec('nav', 'EDGE', { p: panes[focused]?.id }, 60000); return; }
   navGo(i, 'MOVE');
 }
@@ -1462,7 +1555,7 @@ function fixLoad(p, url, pending = null) {
 }
 function showViews() {                                        // the queue moved: views on / off behind their placeholder, the screen updated
   if (!win || win.isDestroyed()) return;
-  const cs = cells(); panes.forEach((p, i) => p.view.setVisible(!!cs[i] && !p.sleeping && !viewHeld(p))); sendState(cs);
+  const cs = cells(); panes.forEach((p, i) => p.view.setVisible(!!cs[i] && !p.sleeping && !viewHeld(p) && !dockHide())); sendState(cs);
   navSettle();                                               // (#51) its load started: the view is shown now
 }
 
@@ -1595,15 +1688,11 @@ function probeEnd(p, sid, kind) {
 
 // New pane: while the rows are still the default grid it behaves as before (appended, grid re-fits); once the user has closed panes
 // (rows differ from the default) the new pane goes to the first row that has room (typically the row it was closed from), or opens a new row.
+// (dock) Room is counted in cells; a new row that breaks the stacking limits undoes the stacks (dock-layout.js add / fit)
 function insertPane(p) {
   const n = panes.length, lens = getRows(), pr = PRESETS[layout] || [2, 2];
-  if (n === 0 || sameArr(lens, defRows(n))) { panes.push(p); rowLens = null; return; }
-  let r = lens.findIndex(k => k < pr[0]);
-  if (r < 0 && lens.length < pr[1]) { lens.push(0); r = lens.length - 1; }
-  if (r < 0) { panes.push(p); rowLens = null; return; }
-  const idx = sumArr(lens.slice(0, r + 1));
-  panes.splice(idx, 0, p); lens[r]++;
-  if (idx <= focused) focused++;
+  if (n === 0 || (sameArr(lens, defRows(n)) && DL.isFlat(getStacks()))) { panes.push(p); rowLens = null; stackLens = null; return; }
+  if (!applyGrid(DL.add(paneGrid(), p.id, pr[0], pr[1]), [p])) { panes.push(p); rowLens = null; stackLens = null; }   // no room: the default grid
 }
 function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {}) {   // asleep: (#22) restorePlan() of a saved spec at startup
   if (panes.length >= MAX) return null;
@@ -1700,14 +1789,15 @@ function reopenClosed() {
   if (pre.code) { diag.rec('reopen', pre.code, { n: closedStack.length }); return; }
   reopening = true;
   try {
-    const e = pre.e, before = [...getRows()], had = new Set(panes), prev = panes[focused];
+    const e = pre.e, before = paneGrid(), had = new Set(panes), prev = panes[focused];
     let p = null;
     try { p = addPane({ ...e.spec }, { focus: false }); } catch { p = panes.find(q => !had.has(q)) || null; dlog('reopen', 'addPane threw'); }   // made after all: it counts
     if (!p) { diag.rec('reopen', 'FAIL', { n: closedStack.length }); sendState(); return; }
     CP.take(closedStack, e);
-    const pl = placeReopened(before, e);                        // back into the row it was closed from (if there is room)
-    panes.splice(panes.indexOf(p), 1); panes.splice(pl.index, 0, p); rowLens = pl.rows;
-    maximizedId = null; setFocused(pl.index); relayout(true); save(); sendState();
+    const pl = DL.reopen(before, p.id, e);                      // back into the row it was closed from (if there is room; its stacked cell if it still fits)
+    panes.splice(panes.indexOf(p), 1);
+    if (!applyGrid(pl, [p])) { panes.push(p); rowLens = null; stackLens = null; }   // (not expected) the default grid rather than a pane left out
+    maximizedId = null; setFocused(panes.indexOf(p)); relayout(true); save(); sendState();
     diag.rec('reopen', 'OK', { p: p.id, n: closedStack.length });
     const at = { ...focusNow(), id: p.id };                     // the keyboard may still be where ⌘⇧T / ↩ / the palette left it: that pane, the bar, the new one
     at.fws = [at.fw, wcId(prev && prev.view.webContents), wcId(p.view.webContents)];
@@ -1716,9 +1806,10 @@ function reopenClosed() {
 }
 function closePane(id, keepEmpty) {
   const i = panes.findIndex(p => p.id === id); if (i < 0) return;
-  { const lens = getRows(), w = CP.where(lens, i);
+  if (dock && dock.id === id) dockEnd('CLOSED');               // (dock) the dragged pane goes: its drag ends, the views come back
+  { const g = paneGrid(), w = DL.where(g, id);
     if (!keepEmpty) CP.push(closedStack, CP.entry(paneSpec(panes[i]), w, NEWTAB));   // for ⌘⇧T (a blank / new-tab pane: nothing to reopen; closing many at once: not kept)
-    lens[w.row]--; if (lens[w.row] <= 0) lens.splice(w.row, 1); }   // only this pane's row shrinks; an empty row disappears
+    const r = DL.fromGrid(DL.without(g, id)); rowLens = r.rows; stackLens = r.stacks; }   // only this pane's cell / row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
   disposePane(p, 'CLOSED');
   if (maximizedId === id) maximizedId = null;
@@ -1797,6 +1888,7 @@ function handleKey(input, pane) {
   const k = input.key.toLowerCase();
   const mod = isMac ? input.meta : input.control;
   if (k === 'escape' && !mod && !input.alt && !input.shift) {
+    if (dock) { dockEnd('ESC'); return true; }                // (dock) a header drag: cancelled, nothing changes
     if (overlayOpen) { closeOverlay(); return true; }
     if (pane?.pcMax) return false;                         // Esc closes the page's computer view first (the pane then returns to normal)
     if (maximizedId != null) { toggleMaximize(maximizedId); return true; }
@@ -1888,6 +1980,7 @@ function hideApprove() {
 }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
+  dockEnd('OVERLAY');                                          // (dock) a header drag ends (the views come back) before anything is shown over them
   popOpen = false; clearTimeout(popTimer);
   overlayOpen = true; overlayMode = mode;
   const [w, h] = win.getContentSize();
@@ -1940,7 +2033,7 @@ function paneMenu(id) {
 function saveWorkspace(name) {
   name = String(name || '').trim().slice(0, 60); if (!name) return;
   const key = splitKey(), sp = settings.splits?.[key];
-  workspaces[name] = { layout, panes: panes.map(paneSpec), rows: [...getRows()], savedAt: new Date().toISOString(),
+  workspaces[name] = { layout, panes: panes.map(paneSpec), ...rowsSave(), savedAt: new Date().toISOString(),
     ...(sp ? { splitsKey: key, splits: JSON.parse(JSON.stringify(sp)) } : {}) };
   activeWs = name;
   save(); buildMenu(); broadcast();
@@ -1968,6 +2061,7 @@ function loadWorkspace(name) {
       (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
       if (!panes.length) addPane({ url: '' });
       rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
+      stackLens = DL.read(ws.stacks);                                       // (dock) its stacked cells (none / unusable: one pane per cell)
       activeWs = name;
       setFocused(0);
     });
@@ -2291,6 +2385,11 @@ on('focus-pane', id => { const i = panes.findIndex(p => p.id === id); setFocused
 on('activate-pane', id => focusPane(panes.findIndex(p => p.id === id)));
 on('set-reload', (id, m) => { const p = byId(id); if (p && RELOAD_CHOICES.includes(m)) { p.reloadMinutes = m; p.lastReload = Date.now(); sendState(); save(); } });
 on('swap', (a, b) => swapPanes(a, b));
+on('dock-begin', id => dockBegin(id));                        // (dock) a header drag: its start, the window showing the stills, the cursor, the drop, its end
+on('dock-ready', seq => dockReady(seq));
+on('dock-hover', (x, y) => dockHover(x, y));
+on('dock-drop', (x, y) => dockDrop(x, y));
+on('dock-end', () => dockEnd('END'));
 on('maximize', id => toggleMaximize(id));
 on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
 on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) { reloadPane(p); setFocused(panes.indexOf(p)); } });   // asleep, or its wait was cancelled (取消): load it now
@@ -2371,7 +2470,7 @@ function snapshot() {
   try { if (!win.isDestroyed() && !win.isMaximized() && !win.isFullScreen()) bounds = win.getNormalBounds(); } catch {}
   lastBounds = bounds;
   const now = Date.now();
-  return (snapCache = { layout, focused, panes: panes.map(p => paneSave(p, now)), rows: [...getRows()], window: { bounds, maximized: win.isMaximized() } });   // (#22) + a sleeping pane's snap
+  return (snapCache = { layout, focused, panes: panes.map(p => paneSave(p, now)), ...rowsSave(), window: { bounds, maximized: win.isMaximized() } });   // (#22) + a sleeping pane's snap; (dock) + stacks
 }
 
 
@@ -2403,7 +2502,10 @@ win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e
 win.on('resize', () => relayout());
 win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });
+win.on('blur', () => dockEnd('BLUR'));                       // (dock) another app / window in front: a header drag ends, the views come back
+win.webContents.on('render-process-gone', () => dockEnd('GONE'));   // (dock) the window's own page is gone: no dragend will come
 win.on('close', () => {
+  dockEnd('WINDOW');
   snapshot();
   lq.cancel(t => t.win === ctx, 'WINDOW');                   // (#31) this window's loads / check: the slots go back once its views / check window are gone
   try { approveOpen = false; destroyApprove(); } catch {}
@@ -2432,6 +2534,7 @@ const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ u
 lq.batch(() => {
   specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true, asleep: restore ? restorePlan(s) : null }));   // (#22) saved asleep: not loaded
   rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
+  stackLens = DL.read(spec.stacks);                                       // (dock) saved stacked cells (validated against those rows)
   setFocused(Math.min(spec.focused || 0, panes.length - 1));
 });
 relayout();

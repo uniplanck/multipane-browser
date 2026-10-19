@@ -1,7 +1,8 @@
 // キーボードでのペイン移動 (#51) (unit-tested in test/pane-navigation.test.js). Pure: main.js passes the window's pane rectangles / rows, the
 // key event (before-input-event Input) and the 対応キュー it just built, and does the focus itself (makeWindow: navKey / moveFocus / queueNext).
-//   ⌘⌥← / ⌘⌥→   the pane before / after this one in the same row (never into another row)
-//   ⌘⌥↑ / ⌘⌥↓   the pane of the row above / below whose centre X is nearest to this pane's centre (a tie: the left one)
+//   ⌘⌥← / ⌘⌥→   the cell before / after this pane's cell in the same row (never into another row); a stacked cell: its pane nearest in height
+//   ⌘⌥↑ / ⌘⌥↓   in a stacked cell (dock-layout.js) the pane above / below in it first; from its end the pane of the row above / below whose centre X
+//               is nearest to this pane's centre (a tie: the left one; one stacked cell: its pane nearest in height)
 //   ⌘⇧J         the next item of the 対応キュー (after this pane's own item; not listed: the first; the last: back to the first)
 // Nothing that way (an edge, one pane, only this pane listed): nothing happens - no wrap-around between the edges of the grid.
 // The keys need ⌘ (Ctrl elsewhere) plus exactly ⌥ / ⇧: an arrow, Enter, Esc or a page's editing key (⌘A ⌘C ⌘V ⌘Z ...) is never taken. They
@@ -77,37 +78,49 @@ function match(input, { mac = true, modal = false, ime = false } = {}) {
 
 const isRows = rows => Array.isArray(rows) && rows.length > 0 && rows.every(k => Number.isInteger(k) && k > 0);
 const isRect = r => !!r && typeof r === 'object' && [r.x, r.y, r.w, r.h].every(Number.isFinite);
-// the rows' default geometry (each row shares the width evenly) - used when the rectangles are missing / incomplete
-function gridRects(rows) {
+// stacks[r][c] = panes stacked in cell c of row r (dock-layout.js); missing / not these rows: one pane per cell
+const cellsOf = (rows, stacks) => Array.isArray(stacks) && stacks.length === rows.length && stacks.every((s, r) => Array.isArray(s) && s.length > 0
+  && s.every(k => Number.isInteger(k) && k > 0) && s.reduce((a, b) => a + b, 0) === rows[r]) ? stacks : rows.map(k => Array(k).fill(1));
+// the rows' default geometry (each row shares the width evenly, a stacked cell its height) - used when the rectangles are missing / incomplete
+function gridRects(rows, stacks = null) {
   const out = [];
   if (!isRows(rows)) return out;
-  rows.forEach((k, r) => { for (let c = 0; c < k; c++) out.push({ x: c * 1200 / k, y: r * 100, w: 1200 / k, h: 100 }); });
+  cellsOf(rows, stacks).forEach((s, r) => s.forEach((k, c) => { for (let j = 0; j < k; j++) out.push({ x: c * 1200 / s.length, y: r * 100 + j * 100 / k, w: 1200 / s.length, h: 100 / k }); }));
   return out;
 }
 // rects: the panes' rectangles { x, y, w, h } in pane order (row-major, as cells() lays them out); rows: panes per row; from: the focused index;
-// dir: left / right / up / down -> the index to focus, or -1 (nothing that way / bad input)
-function pick(rects, rows, from, dir) {
+// dir: left / right / up / down; stacks: the rows' cells (none: one pane per cell) -> the index to focus, or -1 (nothing that way / bad input)
+function pick(rects, rows, from, dir, stacks = null) {
   if (!DIRS.includes(dir) || !isRows(rows)) return -1;
   const n = rows.reduce((a, b) => a + b, 0);
   if (!Number.isInteger(from) || from < 0 || from >= n) return -1;
-  const R = Array.isArray(rects) && rects.length === n && rects.every(isRect) ? rects : gridRects(rows);
-  const rowOf = []; rows.forEach((k, r) => { for (let c = 0; c < k; c++) rowOf.push(r); });
-  const fr = rowOf[from];
-  if (dir === 'left' || dir === 'right') {                      // the neighbour in the same row (panes keep their order left to right)
-    const i = from + (dir === 'left' ? -1 : 1);
-    return i >= 0 && i < n && rowOf[i] === fr ? i : -1;
+  const st = cellsOf(rows, stacks);
+  const R = Array.isArray(rects) && rects.length === n && rects.every(isRect) ? rects : gridRects(rows, st);
+  const at = []; st.forEach((s, r) => s.forEach((k, c) => { for (let j = 0; j < k; j++) at.push({ r, c, j, k }); }));
+  const f = at[from];
+  const cx = i => R[i].x + R[i].w / 2, cy = i => R[i].y + R[i].h / 2, fx = cx(from), fy = cy(from);
+  // the candidate nearest in X (a tie: the left one), then nearest in Y (the panes of one stacked cell share their X), then the first
+  const best = ok => {
+    let b = -1;
+    for (let i = 0; i < n; i++) {
+      if (!ok(at[i])) continue;
+      if (b < 0) { b = i; continue; }
+      const d = Math.abs(cx(i) - fx), bd = Math.abs(cx(b) - fx);
+      if (d < bd - TIE_PX) { b = i; continue; }
+      if (Math.abs(d - bd) > TIE_PX) continue;
+      if (cx(i) < cx(b) - TIE_PX || (Math.abs(cx(i) - cx(b)) <= TIE_PX && Math.abs(cy(i) - fy) < Math.abs(cy(b) - fy) - TIE_PX)) b = i;
+    }
+    return b;
+  };
+  if (dir === 'left' || dir === 'right') {                      // the neighbouring cell in the same row (cells keep their order left to right)
+    const tc = f.c + (dir === 'left' ? -1 : 1);
+    return best(a => a.r === f.r && a.c === tc);
   }
-  const tr = fr + (dir === 'up' ? -1 : 1);
+  const step = dir === 'up' ? -1 : 1;
+  if (f.j + step >= 0 && f.j + step < f.k) return from + step;   // within its stacked cell first
+  const tr = f.r + step;
   if (tr < 0 || tr >= rows.length) return -1;
-  const cx = i => R[i].x + R[i].w / 2, fx = cx(from);
-  let best = -1;
-  for (let i = 0; i < n; i++) {
-    if (rowOf[i] !== tr) continue;
-    if (best < 0) { best = i; continue; }
-    const d = Math.abs(cx(i) - fx), bd = Math.abs(cx(best) - fx);
-    if (d < bd - TIE_PX || (Math.abs(d - bd) <= TIE_PX && cx(i) < cx(best) - TIE_PX)) best = i;   // nearer; a tie: the left one (then the first)
-  }
-  return best;
+  return best(a => a.r === tr);
 }
 
 const isId = v => Number.isSafeInteger(v) && v > 0;

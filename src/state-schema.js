@@ -7,7 +7,11 @@
 // Messages name the position only (windows[0].panes[3].zoom), never URLs, pane / workspace names or other content.
 // (#22) A pane spec may carry an optional sleep snapshot `snap` (session-snapshot.js; no new schema): never fatal. A broken / newer-version one
 // is dropped and a usable one cleaned (types, limits) as a repair; a workspace never keeps one. validate() does not look at it.
+// (dock) A window / workspace may carry optional `stacks` next to `rows` (dock-layout.js: the panes stacked in each cell; no new schema, `rows`
+// still counts every pane, so an older app lays the stacked panes side by side). Stacks that do not fit the rows / the limits are dropped as a
+// repair (the rows alone are read); validate() refuses them like rows that do not match.
 const SS = require('./session-snapshot');
+const DL = require('./dock-layout');
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 
@@ -37,6 +41,7 @@ function groupErrors(g, at) {
     }
   }
   if (has(g, 'rows') && !rowsOk(g.rows, paneCount(g))) e.push(`${at}.rows: does not match the panes`);
+  if (has(g, 'stacks') && !DL.stacksOk(g.stacks, g.rows)) e.push(`${at}.stacks: does not match the rows`);
   return e;
 }
 
@@ -81,6 +86,10 @@ function migrate(raw) {
     if (!isObj(g) || g.rows === undefined || rowsOk(g.rows, paneCount(g))) return g;
     const c = { ...g }; delete c.rows; fixes.push(`${at}.rows: does not match the panes, dropped`); return c;
   };
+  const fixStacks = (g, at) => {                               // (dock) stacks that do not fit the (kept) rows / the limits: read as one pane per cell
+    if (!isObj(g) || g.stacks === undefined || DL.stacksOk(g.stacks, g.rows)) return g;
+    const c = { ...g }; delete c.stacks; fixes.push(`${at}.stacks: does not match the rows, dropped`); return c;
+  };
   const fixSnaps = (g, at, drop) => {                         // (#22) the panes' sleep snapshots: cleaned (windows) / dropped (workspaces, unusable)
     if (!isObj(g) || !Array.isArray(g.panes) || !g.panes.some(s => isObj(s) && s.snap !== undefined)) return g;
     return { ...g, panes: g.panes.map((s, i) => {
@@ -91,7 +100,7 @@ function migrate(raw) {
       fixes.push(`${at}.panes[${i}].snap: ${c ? 'repaired' : 'dropped'}`); return n;
     }) };
   };
-  if (Array.isArray(windows)) windows = windows.map((w, i) => fixSnaps(fixRows(w, `windows[${i}]`), `windows[${i}]`, false));
+  if (Array.isArray(windows)) windows = windows.map((w, i) => fixSnaps(fixStacks(fixRows(w, `windows[${i}]`), `windows[${i}]`), `windows[${i}]`, false));
   let favorites = raw.favorites == null ? [] : raw.favorites;
   if (Array.isArray(favorites) && favorites.every(f => isObj(f) && typeof f.url === 'string')) {
     const seen = new Set(), uniq = favorites.filter(f => !seen.has(f.url) && seen.add(f.url));
@@ -100,7 +109,7 @@ function migrate(raw) {
     favorites = uniq.slice(0, MAX_FAVS);
   }
   let workspaces = raw.workspaces == null ? {} : raw.workspaces;
-  if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixSnaps(fixRows(ws, `workspaces#${i}`), `workspaces#${i}`, true)]));
+  if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixSnaps(fixStacks(fixRows(ws, `workspaces#${i}`), `workspaces#${i}`), `workspaces#${i}`, true)]));
   const doc = { schema: SCHEMA_VERSION, windows, favorites, settings: raw.settings == null ? {} : raw.settings, workspaces };
   const errors = validate(doc);
   return errors.length ? fail('recoveryRequired', 'invalid', errors) : { ok: true, status: 'ready', doc, from, fixes };

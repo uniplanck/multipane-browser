@@ -112,7 +112,9 @@ function model(rows) {
   t('main: closePane keeps an entry only when not closing many at once, through CP.entry (the new-tab page skipped)', /if \(!keepEmpty\) CP\.push\(closedStack, CP\.entry\(paneSpec\(panes\[i\]\), w, NEWTAB\)\)/.test(close));
   t('main: reopenClosed plans first, makes the pane through addPane (new id / generation, its load through the queue), takes the entry after',
     /CP\.plan\(closedStack, panes\.length, MAX, reopening\)/.test(reopen) && reopen.indexOf('addPane(') < reopen.indexOf('CP.take(closedStack, e)') && reopen.indexOf('if (!p)') < reopen.indexOf('CP.take(') && !/closedStack\.(pop|shift|splice)/.test(main));
-  t('main: placed by placeReopened, the keyboard follows only via CP.mayFocus', /placeReopened\(before, e\)/.test(reopen) && /CP\.mayFocus\(at, focusNow\(\)\)\) p\.view\.webContents\.focus\(\)/.test(reopen) && !/setTimeout\(\(\) => !p\.view/.test(reopen));
+  t('main: placed by dock-layout reopen (placeReopened on the cells, its stacked cell when it still fits), the keyboard follows only via CP.mayFocus', /DL\.reopen\(before, p\.id, e\)/.test(reopen) && /before = paneGrid\(\)/.test(reopen)
+    && /CP\.mayFocus\(at, focusNow\(\)\)\) p\.view\.webContents\.focus\(\)/.test(reopen) && !/setTimeout\(\(\) => !p\.view/.test(reopen));
+  t('main: closePane records where the pane sat in the cells (dock-layout where) and closes its cell / row (without)', /w = DL\.where\(g, id\)/.test(close) && /DL\.fromGrid\(DL\.without\(g, id\)\)/.test(close));
   const elsewhere = main.replace(close, '').replace(reopen, '').split('\n').filter(l => l.includes('closedStack'));
   t('main: the history is never saved (not in snapshot / panes.json) and the UI is told canReopen', snap.length > 100 && !/closedStack/.test(snap) && /canReopen: CP\.canReopen\(closedStack, panes\.length, MAX\)/.test(main)
     && elsewhere.length === 2 && /^const closedStack = \[\];/.test(elsewhere[0]) && elsewhere[1].includes('canReopen: CP.canReopen(closedStack'));

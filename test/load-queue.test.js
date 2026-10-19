@@ -194,7 +194,7 @@ const rankOf = tk => tk.data.rank;
     && /GUARD\.expired\(/.test(fn('lqRecheck')) && /GUARD\.autoRefusal\(/.test(fn('lqRecheck')) && /await liveInput\(p\)/.test(fn('lqRecheck')));
   t('main: the guard hands its confirmed reading to the task, then forgets it', /p\.guardOk = x \? x\.r : null;/.test(fn('guardOnce')) && fn('guardOnce').indexOf('p.guardOk = x') < fn('guardOnce').indexOf('run(cur)') && /p\.guardOk = null;/.test(fn('guardOnce')) && /ok: p\.guardOk \|\| null/.test(fn('viewLoad')));
   t('main: a waiting load of a pane that moved to another page is cancelled (URL)', /lq\.cancel\(t\.id, 'URL'\)/.test(fn('addPane')) && /!isBlankUrl\(u\)/.test(fn('addPane')));
-  t('main: the view stays hidden while its pane waits with nothing to show; the screen gets wait / position / held / idle', /p\.view\.setVisible\(!!t && !p\.sleeping && !viewHeld\(p\)\);/.test(fn('relayout'))
+  t('main: the view stays hidden while its pane waits with nothing to show; the screen gets wait / position / held / idle', /p\.view\.setVisible\(!!t && !p\.sleeping && !viewHeld\(p\) && !dockHide\(\)\);/.test(fn('relayout'))
     && /lq: lt \? lt\.state : '', lqPos: /.test(fn('sendState')) && /held: viewHeld\(p\)/.test(fn('sendState')));
   t('main: the watchdog leaves queued / cancelled panes alone; auto-sleep never sleeps a pane with a load', /lqView\(p, false\) \|\| p\.loadIdle/.test(main) && /lqView\(p, false\)\) return false;/.test(fn('canSleep')));
   t('main: 取消 only cancels a waiting load of that pane', /^on\('load-cancel', id => \{ const p = byId\(id\); if \(p\) lq\.cancel\(t => t\.win === ctx && t\.ent === p\.obs\.ent && !t\.probe && t\.state === 'wait', 'USER'\); \}\);$/m.test(main));

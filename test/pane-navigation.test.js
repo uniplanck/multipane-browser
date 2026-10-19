@@ -65,6 +65,20 @@ t('maximized (other rects null): moves by the grid as if not maximized', P([3, 2
 t('rects of another length are ignored (rows decide)', P([3, 2], 4, 'up', [{ x: 0, y: 0, w: 1, h: 1 }]) === 2);
 t('gridRects: one rect per pane, rows share the width', NAV.gridRects([3, 2]).length === 5 && NAV.gridRects([3, 2])[3].w === 600 && J(NAV.gridRects([])) === '[]' && J(NAV.gridRects(null)) === '[]');
 
+// ---- stacked cells (dock-layout.js stacks): up / down within the cell first, left / right by cell ----
+{ const PS = (rows, stacks, from, dir) => NAV.pick(null, rows, from, dir, stacks);
+  // rows [3] + stacks [[1, 2]]: 0 | 1 over 2
+  t('stack: ↑↓ inside the cell first, its ends go to the next row (none here)', PS([3], [[1, 2]], 1, 'down') === 2 && PS([3], [[1, 2]], 2, 'up') === 1 && PS([3], [[1, 2]], 1, 'up') === -1 && PS([3], [[1, 2]], 2, 'down') === -1);
+  t('stack: ← → go cell by cell (never inside the stack), into a stack: the pane nearest in height (a tie: the upper one)', PS([3], [[1, 2]], 1, 'left') === 0 && PS([3], [[1, 2]], 2, 'left') === 0 && PS([3], [[1, 2]], 0, 'right') === 1
+    && PS([3], [[1, 2]], 1, 'right') === -1 && PS([4], [[1, 3]], 0, 'right') === 2);
+  // rows [3, 2] + stacks [[1, 2], [1, 1]]: 0 | 1 over 2 / 3 | 4
+  t('stack: from its bottom ↓ to the row below (nearest centre X), from below ↑ into the stack\'s bottom pane', PS([3, 2], [[1, 2], [1, 1]], 2, 'down') === 4 && PS([3, 2], [[1, 2], [1, 1]], 4, 'up') === 2
+    && PS([3, 2], [[1, 2], [1, 1]], 3, 'up') === 0 && PS([3, 2], [[1, 2], [1, 1]], 1, 'down') === 2);
+  // rows [1, 3] + stacks [[1], [2, 1]]: 0 / 1 over 2 | 3
+  t('stack in the lower row: ↓ from above into its top pane', PS([1, 3], [[1], [2, 1]], 0, 'down') === 1 && PS([1, 3], [[1], [2, 1]], 1, 'up') === 0 && PS([1, 3], [[1], [2, 1]], 3, 'left') === 1);
+  t('stacks not fitting the rows / none: one pane per cell (as before)', PS([3, 2], [[1, 1]], 1, 'right') === 2 && PS([3, 2], null, 1, 'down') === 3 && PS([3, 2], [[1, 1], [1, 1]], 0, 'right') === 1);
+  t('gridRects with stacks: the stacked panes share the row height', J(NAV.gridRects([3], [[1, 2]]).map(r => [r.x, r.y, r.w, r.h])) === J([[0, 0, 600, 100], [600, 0, 600, 50], [600, 50, 600, 50]])); }
+
 // ---- the key match ----
 const K = (o, opt) => NAV.match({ type: 'keyDown', key: '', code: '', isAutoRepeat: false, isComposing: false, shift: false, control: false, alt: false, meta: false, ...o }, opt);
 const arrow = (key, o = {}) => K({ key, code: key, meta: true, alt: true, ...o });
@@ -140,7 +154,7 @@ t('a nav entry keeps the pane number only', J(DG.sanitize('nav', 'MOVE', { p: 3,
 t('the ペイン menu lists the keys from the table (registerAccelerator false via acc), 次の未読 kept', /\.\.\.PN\.KEYS\.map\(k => acc\(k\.accel, \(\) => cur\(\)\?\.navKey\(k\.id\), k\.ja\)\)/.test(MAIN)
   && /acc\('CmdOrCtrl\+J', \(\) => cur\(\)\?\.nextUnread\(\), '次の未読ペインへ'\)/.test(MAIN) && /const acc = \(a, click, label, extra = \{\}\) => \(\{ label, accelerator: a, registerAccelerator: false/.test(MAIN));
 t('navKey: nothing under another overlay; moveFocus by the grid rects (cells(true)) and rows; no index wrap left', /function navKey\(id\) \{\n  if \(overlayOpen && overlayMode !== 'queue'\) return;/.test(MAIN)
-  && /PN\.pick\(cells\(true\), getRows\(\), focused, dir\)/.test(MAIN) && /if \(!grid && maximizedId != null/.test(MAIN) && !/i = i - 1; else if \(dir === 'right'\)/.test(MAIN));
+  && /PN\.pick\(cells\(true\), getRows\(\), focused, dir, getStacks\(\)\)/.test(MAIN) && /if \(!grid && maximizedId != null/.test(MAIN) && !/i = i - 1; else if \(dir === 'right'\)/.test(MAIN));
 t('queueNext: the queue just built, the pane by its id, focusPane without read, read only in view', /sendState\(\);[^\n]*\n  const cur = panes\[focused\], p = byId\(PN\.nextInQueue\(queueNow, cur && cur\.id\)\);/.test(MAIN)
   && /navGo\(panes\.indexOf\(p\), 'QUEUE'\);\n  if \(inView\(p\)\) clearUnread\(p\);/.test(MAIN) && /state\.queue = queueBuild\(state\.panes\);[^\n]*\n  queueNow = state\.queue;/.test(MAIN));
 t('navGo: the older move dropped first, the queue overlay closed, focusPane(i, { clear: false }), a wait only for a pane not shown with a load coming',

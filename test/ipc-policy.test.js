@@ -33,6 +33,7 @@ const SNAPV = { cid: 'abc', conv: 'OK', roles: 'TESTID', latest: 'BOT', marker: 
 const COUNT = { user: 3, bot: 5, botSince: 2, waiting: true, working: false, done: false, q: '依頼の引用', hn: 'Bot', hh: 'Bot', asks: true, method: 'bot-entry', fp: '1x2y3z.120', snap: SNAPV };
 const SAMPLE = {
   navigate: ['chrome', [1, 'https://grok.com/bot/abc']], 'set-reload': ['chrome', [1, 5]], swap: ['chrome', [1, 3]],
+  'dock-begin': ['chrome', [2]], 'dock-ready': ['chrome', [4]], 'dock-hover': ['chrome', [640, 300]], 'dock-drop': ['chrome', [12, 70]], 'dock-end': ['chrome', []],
   layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
   'fav-open': ['chrome', [1, 'here']], 'fav-menu': ['chrome', [2]], 'fav-move': ['chrome', [2, 1]], 'fav-add': ['chrome', ['https://example.com/', '']],
   'focus-other': ['chrome', [2, 7]], 'usage-pop-show': ['chrome', [{ right: 812.5, bottom: 36, kind: 'grok', sel: '' }]], 'usage-win-menu': ['chrome', ['codex', '']],
@@ -174,6 +175,12 @@ t('open / fav-add URLs bounded', run('overlay', { type: 'open-new', url: 'x'.rep
 // ---- target: exists, and belongs to the sender's window ----
 t('pane of another window / closed pane -> E_TARGET', ['navigate', 'close', 'reload', 'sleep-toggle', 'wake-pane', 'pane-menu'].every(ch => chk(ch, 'chrome', ch === 'navigate' ? [7, 'x'] : [7]) === 'E_TARGET'));
 t('swap needs both panes in this window', chk('swap', 'chrome', [1, 7]) === 'E_TARGET' && chk('swap', 'chrome', [7, 1]) === 'E_TARGET');
+t('dock (header drag): begin = a pane of this window, ready = main\'s number, hover / drop = a finite point, end = nothing; chrome only',
+  chk('dock-begin', 'chrome', [7]) === 'E_TARGET' && [0, -1, 1.5, '2', null, undefined].every(v => pay('dock-begin', 'chrome', [v]))
+  && [0, -1, 1.5, '4', null, undefined, Number.MAX_SAFE_INTEGER + 1].every(v => pay('dock-ready', 'chrome', [v]))
+  && ['dock-hover', 'dock-drop'].every(ch => chk(ch, 'chrome', [0, 0]) === null && chk(ch, 'chrome', [-5.5, 1e5]) === null
+    && [[NaN, 1], [1, Infinity], ['1', 2], [1], [], [{ x: 1, y: 2 }], [2e5, 1], [1, -2e5]].every(a => pay(ch, 'chrome', a)))
+  && ['dock-begin', 'dock-ready', 'dock-hover', 'dock-drop', 'dock-end'].every(ch => ['overlay', 'pane', 'probe'].every(w => chk(ch, w, SAMPLE[ch][1]) === 'E_ROLE')));
 t('favorites must exist', chk('fav-open', 'chrome', [3, 'here']) === 'E_TARGET' && chk('fav-move', 'chrome', [1, 3]) === 'E_TARGET' && chk('fav-menu', 'chrome', [9]) === 'E_TARGET');
 t('focus-other: an existing window + its pane', chk('focus-other', 'chrome', [3, 7]) === 'E_TARGET' && chk('focus-other', 'chrome', [2, 1]) === 'E_TARGET');
 
@@ -266,6 +273,7 @@ const CALLS = [
   ['chrome', 'approveOpen'], ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
   ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
   ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],
+  ['chrome', 'dockBegin', 2], ['chrome', 'dockReady', 1], ['chrome', 'dockHover', 700, 95], ['chrome', 'dockHover', 0, 70], ['chrome', 'dockDrop', 1394, 893], ['chrome', 'dockEnd'],
   ['chrome', 'renamePane', 1], ['chrome', 'chipMenu', 2], ['chrome', 'syncReset'], ['chrome', 'syncCols', false], ['chrome', 'syncCols', true],
   ['chrome', 'splitStart', 'c', 1, undefined], ['chrome', 'splitStart', 'c', 2, 1], ['chrome', 'splitStart', 'r', 1, undefined], ['chrome', 'splitReset', 'c', undefined], ['chrome', 'splitReset', 'c', 0], ['chrome', 'splitEnd'],
   ['chrome', 'favOpen', 1, 'here'], ['chrome', 'favOpen', 2, 'new'], ['chrome', 'favOpen', 1, 'window'], ['chrome', 'favMenu', 1], ['chrome', 'favMove', 2, 1], ['chrome', 'favAdd', 'https://example.com/', ''],

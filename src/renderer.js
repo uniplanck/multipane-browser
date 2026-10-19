@@ -80,7 +80,8 @@ function mk(id) {
   </div>
   <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><div class="sleepr"></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" title="このペインを開いてログイン状態を確認します">ログインを確認</button><button class="pbx pbr" title="スリープ中の新着確認を再開します（1枚ずつ順番に確認）">確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
   <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは2枚まで。順番が来ると自動で読み込みます</small></div>
-  <div class="goneph"><span class="gp1">⚠ ページが停止しました</span><button class="pbx gpr" title="このペインのページを読み込み直します">再読み込み</button><span class="gp2">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="この読み込み待ちを取り消す">取消</button></span><span class="gp3">再読み込み中…</span><small>このペインのページの処理が止まりました（ほかのペインはそのままです）。自動では再読み込みしません。入力途中の文字・添付は戻らないことがあります</small></div>`;
+  <div class="goneph"><span class="gp1">⚠ ページが停止しました</span><button class="pbx gpr" title="このペインのページを読み込み直します">再読み込み</button><span class="gp2">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="この読み込み待ちを取り消す">取消</button></span><span class="gp3">再読み込み中…</span><small>このペインのページの処理が止まりました（ほかのペインはそのままです）。自動では再読み込みしません。入力途中の文字・添付は戻らないことがあります</small></div>
+  <img class="dockshot" alt="" draggable="false">`;
   d.querySelector('.sleepph').onclick = () => mpb.wakePane(id);
   // (#32) the page's renderer is gone: 再読み込み is the pane's usual reload (the input guard and the load queue as ↻)
   d.querySelector('.gpr').onclick = e => { e.stopPropagation(); mpb.reload(id); };
@@ -101,13 +102,13 @@ function mk(id) {
   };
   inp.onfocus = () => { d.classList.add('editing'); inp.select(); mpb.focusPane(id); };
   inp.onblur = () => d.classList.remove('editing');
-  // drag & drop to swap panes
-  head.ondragstart = e => { e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); };
-  head.ondragend = () => { document.body.classList.remove('dragging'); d.classList.remove('drag-src'); document.querySelectorAll('.drop-over').forEach(x => x.classList.remove('drop-over')); };
-  const accept = e => e.dataTransfer.types.includes('text/x-mpb-pane');
+  // drag a pane by its header: docking (dockStart below; main decides the zone and the drop). A tab of the strip dropped on a header still swaps
+  head.ondragstart = e => { e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); dockStart(id); };
+  head.ondragend = () => { document.body.classList.remove('dragging'); d.classList.remove('drag-src'); document.querySelectorAll('.drop-over').forEach(x => x.classList.remove('drop-over')); dockStop(); };
+  const accept = e => !drag && e.dataTransfer.types.includes('text/x-mpb-pane');
   d.ondragover = e => { if (accept(e)) { e.preventDefault(); d.classList.add('drop-over'); } };
   d.ondragleave = () => d.classList.remove('drop-over');
-  d.ondrop = e => { const from = Number(e.dataTransfer.getData('text/x-mpb-pane')); d.classList.remove('drop-over'); if (from && from !== id) mpb.swap(from, id); };
+  d.ondrop = e => { if (drag) return; const from = Number(e.dataTransfer.getData('text/x-mpb-pane')); d.classList.remove('drop-over'); if (from && from !== id) mpb.swap(from, id); };
   root.appendChild(d); els.set(id, d);
   requestAnimationFrame(() => requestAnimationFrame(() => d.classList.remove('entering')));
   return d;
@@ -307,6 +308,39 @@ fb.ondrop = e => {
   const t = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '').split('\n')[0].trim();
   if (/^https?:\/\//.test(t)) { e.preventDefault(); mpb.favAdd(t, ''); }
 };
+// ---- ドッキング型の並べ替え: a header drag. The panes' views lie above this page (it would not see the drag over them): main hides them behind
+// stills of their pages (shown here first, then dockReady), says where a drop would put the pane (the red preview: the place it would take) and
+// does the drop. This page only reports the cursor; main ends the drag by itself too (Esc / another window / an overlay): then nothing is shown
+let drag = null;                                             // { id, seq, x, y } while a header drag lasts
+const hint = $('#drop-hint');
+function dockClear() {
+  hint.classList.remove('on'); document.body.classList.remove('docking');
+  root.querySelectorAll('.dockshot[src]').forEach(i => i.removeAttribute('src'));
+}
+function dockStart(id) { dockClear(); drag = { id, seq: 0, x: NaN, y: NaN }; mpb.dockBegin(id); }
+function dockStop() { if (!drag) return; drag = null; dockClear(); mpb.dockEnd(); }
+mpb.onDock(m => {
+  if (!m || !drag) return;
+  if (m.on === false) { if (!drag.seq || m.seq === drag.seq) dockClear(); return; }   // over (the drag itself may go on: it does nothing more)
+  if (m.on === true && !m.shots) { drag.seq = m.seq; document.body.classList.add('docking'); return; }
+  if (m.seq !== drag.seq) return;
+  if (m.shots) {
+    const imgs = m.shots.map(s => { const i = els.get(s.id)?.querySelector('.dockshot'); if (i) i.src = s.url; return i; }).filter(Boolean);
+    Promise.all(imgs.map(i => i.decode().catch(() => {}))).then(() => { if (drag && drag.seq === m.seq) mpb.dockReady(m.seq); });
+    return;
+  }
+  if ('hover' in m) { const r = m.hover; hint.classList.toggle('on', !!r); if (r) Object.assign(hint.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }); }
+});
+document.addEventListener('dragover', e => {
+  if (!drag) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  const x = Math.round(e.clientX), y = Math.round(e.clientY);
+  if (x !== drag.x || y !== drag.y) { drag.x = x; drag.y = y; mpb.dockHover(x, y); }
+});
+document.addEventListener('drop', e => {
+  if (!drag || (e.target.closest && e.target.closest('.chip'))) return;   // onto a tab of the strip: it swaps (chip.ondrop)
+  e.preventDefault(); mpb.dockDrop(Math.round(e.clientX), Math.round(e.clientY));
+});
 mpb.onFocusUrl(id => { const d = els.get(id); if (d) startEdit(d); });
 mpb.ready();
 

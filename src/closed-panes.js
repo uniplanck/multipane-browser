@@ -2,7 +2,8 @@
 // last, memory only: never written to panes.json, gone when the app quits), the views, the focus and every side effect; where the pane goes back
 // in the rows is reopen-rules.js placeReopened().
 // An entry is only what the pane is made again from: spec (main's paneSpec: url, name, color, muted, zoom, zoomIndiv, reloadMinutes, sleep) and
-// where it sat (row, col, rowGone, cols). Never a draft, an attachment, page text, a snapshot, a token, the pane id or its view.
+// where it sat (row, col, rowGone, cols; with the dock's stacked cells also cell, pos, size from dock-layout.js where). Never a draft, an
+// attachment, page text, a snapshot, a token, the pane id or its view.
 // Reopening reads the newest entry (peek) and takes it off only once the pane exists: a full window (MAX panes), a reopen already running or a
 // pane that could not be made leave the history as it was.
 const LIMIT = 10;                // the newest LIMIT closed panes
@@ -20,7 +21,9 @@ function where(rows, i) {
 function entry(spec, w, newtab) {
   if (!spec || typeof spec !== 'object' || typeof spec.url !== 'string' || !spec.url || spec.url === newtab || !w) return null;
   const s = {}; for (const k of SPEC_KEYS) if (Object.hasOwn(spec, k)) s[k] = spec[k];
-  return { spec: s, row: w.row, col: w.col, rowGone: !!w.rowGone, cols: w.cols };
+  const e = { spec: s, row: w.row, col: w.col, rowGone: !!w.rowGone, cols: w.cols };
+  if (['cell', 'pos', 'size'].every(k => Number.isInteger(w[k]))) Object.assign(e, { cell: w.cell, pos: w.pos, size: w.size });   // (dock) its cell / place in it
+  return e;
 }
 // remember an entry (null: nothing); the oldest go beyond `limit`
 function push(stack, e, limit = LIMIT) {
