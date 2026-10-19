@@ -65,8 +65,10 @@ t('limits as fixed numbers', DL.MAX_STACK === 3 && DL.MAX_TALL === 3 && DL.STACK
   t('zoneAt: 3 rows: top / bottom of any pane and the bands do not react (no preview), left / right do', at(g, 4, 300, 110) === 'null' && at(g, 4, 300, 130) === 'null' && at(g, 1, 300, 888) === 'null'
     && at(g, 3, 300, 250) === 'null' && at(g, 3, 30, 250) === J({ to: 1, side: 'left' }) && at(g, 1, 1190, 600) === J({ to: 3, side: 'right' })); }
 { const g = [[[1, 2], [3]], [[4], [5]]];                    // 2 rows, tall 3 already: 1 / 2 stacked, 3 | 4 5
-  t('zoneAt: top / bottom that would make the rows taller than 3: no reaction (no preview); within the limit: yes', at(g, 5, 300, 520) === 'null' && at(g, 3, 300, 880) === 'null'
-    && at(g, 5, 900, 130) === J({ to: 3, side: 'top' }) && at(g, 5, 30, 700) === J({ to: 4, side: 'left' })); }
+  t('zoneAt: the rows already 3 tall (without the dragged pane): top / bottom never react (no preview); left / right do', at(g, 5, 300, 520) === 'null' && at(g, 3, 300, 880) === 'null'
+    && at(g, 5, 900, 130) === 'null' && at(g, 5, 30, 700) === J({ to: 4, side: 'left' })); }
+{ const g = [[[1, 2], [3]], [[4]]];                          // 2 rows, 1 / 2 stacked: dragging 2 out leaves tall 2 -> stacking elsewhere is fine
+  t('zoneAt: tall counted without the dragged pane (out of its stack: 2) -> top / bottom react', at(g, 2, 900, 130) === J({ to: 3, side: 'top' })); }
 
 // ---- drops: left / right ----
 { const g = G([3, 2]);                                       // 1 2 3 / 4 5
@@ -82,7 +84,7 @@ t('1 row: top / bottom stack the target\'s cell, the other panes keep their heig
 t('1 row: a cell of 3', drop([[[1, 2], [3]]], 3, 2, 'bottom') === J([[[1, 2, 3]]]) && drop([[[1, 2], [3]]], 3, 1, 'bottom') === J([[[1, 3, 2]]]));
 t('a cell of 3: no 4th (no reaction)', DL.drop([[[1, 2, 3], [4]]], 4, 1, 'top') === null && DL.drop([[[1, 2, 3], [4]]], 4, 3, 'bottom') === null);
 t('2 rows: a stack of 2 in one row (tall 2 + 1 = 3)', drop(G([2, 2]), 4, 1, 'bottom') === J([[[1, 4], [2]], [[3]]]) && drop(G([2, 2]), 1, 3, 'top') === J([[[2]], [[1, 3], [4]]]));
-t('2 rows: a second stack in the same row is fine (tall stays 3)', drop([[[1, 4], [2]], [[3], [5]]], 5, 2, 'top') === J([[[1, 4], [5, 2]], [[3]]]));
+t('2 rows, already 3 tall: no second stack, even in the same row (no reaction)', DL.drop([[[1, 4], [2]], [[3], [5]]], 5, 2, 'top') === null);
 t('2 rows: a stack in the other row too (tall 4) / a cell of 3 (tall 4): no reaction', DL.drop([[[1, 4], [2]], [[3], [5]]], 2, 3, 'top') === null && DL.drop([[[1, 4], [2]], [[3], [5]]], 5, 4, 'bottom') === null);
 t('2 rows -> 1 row by the drop: up to a cell of 3', drop([[[1, 2]], [[3]]], 3, 2, 'bottom') === J([[[1, 2, 3]]]));
 t('3 rows: top / bottom never (counted before the drop, even when the dragged pane is alone in its row)', DL.drop(G([2, 1, 1]), 4, 1, 'top') === null && DL.drop(G([2, 1, 1]), 1, 3, 'bottom') === null && DL.drop(G([1, 1, 1]), 3, 1, 'top') === null);

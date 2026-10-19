@@ -116,6 +116,7 @@ function drop(grid, from, to, side) {
   if ((side === 'top' || side === 'bottom') && grid.length > STACK_ROWS) return null;
   const g = without(grid, from), at = find(g, to);
   if (side === 'left' || side === 'right') { g[at.r].splice(at.c + (side === 'right' ? 1 : 0), 0, [from]); return fit(g); }
+  if (tallOf(shape(g)) >= MAX_TALL) return null;            // the rows (without the dragged pane) are already 3 tall: no top / bottom at all
   if (g[at.r][at.c].length >= MAX_STACK) return null;
   g[at.r][at.c].splice(at.k + (side === 'bottom' ? 1 : 0), 0, from);
   return limitsOk(shape(g)) ? g : null;
