@@ -224,7 +224,7 @@ const onlyKeys = e => Object.keys(e).every(k => KEYS.includes(k));
     await dg.flushNow();
     const env = {
       versions: { app: '1.0.0', electron: '44.7.2', chrome: '140.0.7339.80', node: '22.19.0', os: '15.6.1', extra: S }, platform: 'darwin', arch: 'arm64', packaged: false,
-      settings: { notifications: true, ecoMode: false, theme: 'dark', memSaver: 'std', globalZoom: 1.1, diagPersist: true, sleepMinutes: S, usageMargin: 5, name: SECRETS[6], usageBase: { day: S }, splits: { [S]: 1 } },
+      settings: { notifications: true, ecoMode: false, grokFix: false, theme: 'dark', memSaver: 'std', globalZoom: 1.1, diagPersist: true, sleepMinutes: S, usageMargin: 5, name: SECRETS[6], usageBase: { day: S }, splits: { [S]: 1 } },
       counts: { windows: 1, panes: 8, bots: 6, sleeping: 3, names: [SECRETS[6]] },
       store: { status: 'ready', saveError: SECRETS[2], frozen: false, file: SECRETS[2] },
       url: SECRETS[1], cookie: SECRETS[4], quote: SECRETS[3],
@@ -236,8 +236,9 @@ const onlyKeys = e => Object.keys(e).every(k => KEYS.includes(k));
     t('files: allowed keys only', lines(path.join(dir, 'diag-0.jsonl')).every(onlyKeys));
     const sum = out.summary;
     t('summary keeps the allowed items (versions, settings, counts, store, entries)', sum.includes('app 1.0.0') && sum.includes('Electron 44.7.2') && sum.includes('darwin arm64 15.6.1') && sum.includes('theme=dark') && sum.includes('notifications=on')
-      && sum.includes('ecoMode=off') && sum.includes('globalZoom=1.1') && sum.includes('panes=8') && sum.includes('構成の保存: ready saveError=UNKNOWN') && /probe .*SAME=\d+/.test(sum) && sum.includes('pane.load') && sum.includes('NET_DNS=1') && / probe SAME ms=812 n=2 p=4/.test(sum));
+      && sum.includes('grokFix=off') && sum.includes('globalZoom=1.1') && sum.includes('panes=8') && sum.includes('構成の保存: ready saveError=UNKNOWN') && /probe .*SAME=\d+/.test(sum) && sum.includes('pane.load') && sum.includes('NET_DNS=1') && / probe SAME ms=812 n=2 p=4/.test(sum));
     t('summary: invalid values dropped, not cut or masked', !sum.includes('sleepMinutes') && !sum.includes('usageBase') && !sum.includes('splits') && !/\*{3}|\[redacted\]/i.test(sum));
+    t('ecoMode (kept in panes.json, no effect) is not shown', !sum.includes('ecoMode') && !J(dg.view(env)).includes('省電力'));
     const rows = dg.view(env).rows;
     t('screen rows: version, settings, counts, save state', rows.every(r => typeof r.sec === 'string' && typeof r.label === 'string' && typeof r.sub === 'string')
       && rows.some(r => r.sec === 'バージョン' && r.label.includes('アプリ 1.0.0')) && rows.some(r => r.sec === '設定' && r.label.includes('通知'))

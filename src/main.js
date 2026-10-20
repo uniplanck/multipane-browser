@@ -33,7 +33,7 @@ const PRESET_KEYS = Object.keys(PRESETS);
 const COLORS = { none: null, red: '#ff5f57', orange: '#ff9f0a', yellow: '#ffd60a', green: '#30d158', teal: '#40c8e0', blue: '#0a84ff', purple: '#bf5af2', pink: '#ff375f' };
 const COLOR_JA = { none: 'なし', red: '赤', orange: 'オレンジ', yellow: '黄', green: '緑', teal: '水色', blue: '青', purple: '紫', pink: 'ピンク' };
 
-let settings = { notifications: false, ecoMode: true, debugLog: false, grokFix: true, theme: 'system' };
+let settings = { notifications: false, ecoMode: true, debugLog: false, grokFix: true, theme: 'system' };   // ecoMode: unused (no CPU throttling, see 'load reduction'); kept so panes.json reads / writes as before
 let workspaces = {};        // name -> { layout, panes: [spec] }
 let favorites = [];         // [{ id, url, label }]
 let nextFavId = 1, nextPaneId = 1;
@@ -876,7 +876,6 @@ function setFocused(i) {
   if (navWait && navWait.id !== panes[i].id) navEnd('DROP');        // (#51) the user went elsewhere: the waiting keyboard move is dropped
   focused = i;
   if (panes[i].sleeping) reloadPane(panes[i]);                      // focusing a sleeping pane wakes it
-  applyThrottling();
   sendState(); save();
 }
 function focusPane(i, { clear = true } = {}) {
@@ -1053,21 +1052,10 @@ function navHolds(p, input) {
 }
 
 // ---- load reduction ----
-function applyThrottling() {
-  panes.forEach((p, i) => {
-    const wc = p.view.webContents; if (wc.isDestroyed()) return;
-    // never slow a pane that is still loading / being fixed (that made background panes load twice as slowly)
-    const settled = !wc.isLoading() && !p.grokToken && !p.grokPending && Date.now() - (p.loadedAt || 0) > 3000;
-    const rate = settings.ecoMode && !process.env.MPB_NO_ECO && i !== focused && settled ? 2 : 1;
-    if (p.cpuRate === rate) return;
-    const dbg = wc.debugger;
-    try {
-      if (!dbg.isAttached()) dbg.attach('1.3');
-      dbg.sendCommand('Emulation.setCPUThrottlingRate', { rate }).then(() => { p.cpuRate = rate; }).catch(() => {});
-    } catch { /* devtools open or attach failed: just skip */ }
-  });
-}
-setInterval(() => { if (!win || win.isDestroyed()) return; try { applyThrottling(); } catch {} }, 5000);   // picks up panes that finished loading
+// No CPU throttling of panes through the DevTools protocol (the old 省電力 / settings.ecoMode: Emulation.setCPUThrottlingRate 2 on every unfocused
+// settled pane via wc.debugger). Its throttler kept stopping and resuming each such renderer's main thread and cost ~40% CPU per pane, sleeping
+// about:blank ones included. Hidden panes are slowed by Chromium's own backgroundThrottling (pane webPreferences) and a sleeping pane has dropped
+// its page. test/cpu-throttle.test.js keeps it that way.
 
 // ---- grok.com/bot/<id> workaround ----
 // grok.com renders the bot chat only after client-side navigation. After a direct load we
@@ -1102,7 +1090,7 @@ async function grokFix(p, target, id, viaHome) {
   for (let k = 0; k < 70 && alive(); k++) {
     await sleep(k === 0 ? 120 : 350);
     const pr = await grokProbe(wc, id);
-    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr, pushes ? `after ${pushes} push(es)` : ''); diag.rec('grokfix', pr === 'rendered' ? 'FAST_RENDERED' : 'FAST_NOTFOUND', { p: p.id, ms: Date.now() - t0, n: pushes }); p.loadedAt = Date.now(); p.grokToken = null; p.hardTries = 0; p.wdTries = 0; applyThrottling(); return; }
+    if (pr === 'rendered' || pr === 'notfound') { dlog(`pane${p.id}`, 'grokfix fast', pr, pushes ? `after ${pushes} push(es)` : ''); diag.rec('grokfix', pr === 'rendered' ? 'FAST_RENDERED' : 'FAST_NOTFOUND', { p: p.id, ms: Date.now() - t0, n: pushes }); p.loadedAt = Date.now(); p.grokToken = null; p.hardTries = 0; p.wdTries = 0; return; }
     if (pushes >= 2 && Date.now() - lastPush > PUSH_GAP && (p.hardTries || 0) < 3) {
       // the router hop keeps missing: start over with a fresh load of the bot URL (bounded) instead of pushing forever
       p.hardTries = (p.hardTries || 0) + 1; p.grokToken = null;
@@ -1148,7 +1136,7 @@ async function grokFix(p, target, id, viaHome) {
     }
   }
   if (!alive()) return;
-  p.grokToken = null; p.loadedAt = Date.now(); applyThrottling();
+  p.grokToken = null; p.loadedAt = Date.now();
   if (!viaHome) {                                  // fallback: go home, then click the bot link
     dlog(`pane${p.id}`, 'grokfix fallback: load grok.com/ then navigate'); diag.rec('grokfix', 'FALLBACK_HOME', { p: p.id, ms: Date.now() - t0 });
     fixLoad(p, 'https://grok.com/', { target, id });
@@ -1226,7 +1214,6 @@ async function reloadPane(p, cls = 'USER', task = null) {
   const token = p.grokToken = Symbol();      // cancels a running grokFix
   p.loadedAt = Date.now();
   if (wc.isLoading()) { try { wc.stop(); } catch {} }      // restart a load that is stuck half way
-  try { applyThrottling(); } catch {}                      // grokToken is set -> CPU throttle off while we reload
   dlog(`pane${p.id}`, 'reload fast path', target);
   const t0 = Date.now();
   while (!wc.isDestroyed() && p.grokToken === token && Date.now() - t0 < 1000) {
@@ -1279,7 +1266,7 @@ function sleepPane(p) {
   dlog(`pane${p.id}`, 'sleep', paneUrl(p)); diag.rec('sleep', 'SLEPT', { p: p.id });
   p.view.setVisible(false);
   appLoad(wc, 'about:blank');                                // drops the page (its URL stays in p.url / p.botTarget); an unload: no queue slot (#31)
-  applyThrottling(); sendState(); save();
+  sendState(); save();
 }
 // (#22) a pane saved asleep (設定 > 前回のスリープ状態を復元): starts asleep with no page and no load in the queue; opening it is the usual wake
 // (reloadPane: the queue, the user's own first). Its placeholder shows the saved name / group / marker as 前回・未再確認 (r = restorePlan());
@@ -1705,7 +1692,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, ...ZP.restore(spec, gZoom()),      // zoom / zoomIndiv (older saves had per-pane zoom only: those panes stay individual)
-    lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false, cpuRate: 1,
+    lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false,
     inputRev: 0, ime: false };                               // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   p.rcv = RP.createRec();                                    // (#32) its failures / planned reload (memory only)
@@ -1815,7 +1802,7 @@ function closePane(id, keepEmpty) {
   if (maximizedId === id) maximizedId = null;
   focused = Math.max(0, Math.min(focused, panes.length - 1));
   if (!panes.length && !keepEmpty) addPane({ url: '' });
-  else { updateBadge(); applyThrottling(); relayout(true); save(); }
+  else { updateBadge(); relayout(true); save(); }
 }
 // (#32) the end of one pane view, once per view addPane made (closePane; every pane when its window is closed): nothing from its page counts, its
 // background check / loads / planned reload end, then the view leaves the window and its WebContents is closed - detaching or hiding a view
@@ -1937,7 +1924,7 @@ function ensureApprove() {
   approve.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
   const wc = approve.webContents;
   regWc(wc, 'approve', { ctx });                             // no preload: registered so that nothing from it is ever accepted
-  approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now(), cpuRate: 1 };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
+  approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now() };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
   guardNavigation(wc, 'approve');
   wc.on('did-finish-load', () => { if (approvePane) { approvePane.loadedAt = Date.now(); onGrokLoad(approvePane); } });
@@ -2318,15 +2305,13 @@ function wsMenu() {
   ]).popup({ window: win });
 }
 // Reload-all: every pane through the shared load queue (#31; BULK: LQ.LIMIT at a time in all windows, the focused pane first, after the user's own
-// loads; a pane already waiting is merged, not loaded twice). reloadPane clears all retry state and the CPU throttle stays off while reloading
-// (applyThrottling re-enables it once a pane has been settled for 3 s).
+// loads; a pane already waiting is merged, not loaded twice). reloadPane clears all retry state.
 // #11: asked first when a pane holds input ('all but those' is offered when some do not); a pane that waited is read again right before.
 function reloadAll() {
   guardRun('RELOAD_ALL', () => panes.filter(p => !p.view.webContents.isDestroyed()), list => {
     lastReloadAll = Date.now(); abortProbe();
     lq.batch(() => { for (const p of list) { recoverCancel(p); reloadPane(p, 'BULK').catch(e => dlog(`pane${p.id}`, 'reload-all err', String(e))); } });   // (#32) the user's own: no planned reload left
     dlog('reload-all queued', list.length);
-    setTimeout(() => { try { applyThrottling(); } catch {} }, 3200);
     fetchUsage();
   }, { skip: true });
 }
@@ -2476,7 +2461,7 @@ function snapshot() {
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, paneMenu, applyPreset,
-  sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, applyThrottling, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
+  sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
@@ -2609,7 +2594,6 @@ function buildMenu() {
       // (#22) both off by default. Off: no snap / quote written (the next save removes them), every pane loads at startup as before
       { label: '前回のスリープ状態を復元（再起動後。スリープ中だったペインは読み込まずにスリープのまま開く）', type: 'checkbox', checked: settings.restoreSleep === true, click: m => { settings.restoreSleep = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中の引用も保存（最大300文字）', type: 'checkbox', enabled: settings.restoreSleep === true, checked: settings.saveQuote === true, click: m => { settings.saveQuote = m.checked; save(); } },
-      { label: '省電力（非フォーカスペインのCPUを制限）', type: 'checkbox', checked: settings.ecoMode, click: m => { settings.ecoMode = m.checked; ctxs.forEach(k => k.applyThrottling()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },
       { label: '診断ログをファイルにも保存（userData/diagnostics・2MiB×3・7日。会話・名前・URLは記録しない）', type: 'checkbox', checked: settings.diagPersist === true, click: m => { settings.diagPersist = m.checked; diagSync(); save(); } },
@@ -2661,7 +2645,7 @@ function diagEnv() {
   const all = ctxs.flatMap(c => c.panes), si = store ? store.info() : null;
   return { versions: { app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, os: process.getSystemVersion?.() },
     platform: process.platform, arch: process.arch, packaged: app.isPackaged,
-    settings: { notifications: !!settings.notifications, ecoMode: !!settings.ecoMode, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
+    settings: { notifications: !!settings.notifications, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
       autoPc: settings.autoPc !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
       globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin, quietHours: NP.quietOf(settings.quietHours).on,
       restoreSleep: settings.restoreSleep === true, saveQuote: settings.saveQuote === true },
