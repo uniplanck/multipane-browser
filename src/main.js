@@ -1919,6 +1919,7 @@ function newPane(url = '') {
   const p = addPane({ url });
   relayout(true);
   if (p) setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
+  return p;
 }
 const byId = id => panes.find(p => p.id === id);
 // Zoom: every pane either follows the GLOBAL zoom (settings.globalZoom) or is "individual" (own p.zoom, ignores global changes).
@@ -2555,7 +2556,9 @@ paneOn('pane:sel', (p, v) => { p.sel = v === true; });       // 選択部分だ�
 function openFavorite(id, where = 'here', f = favorites.find(x => x.id === id)) {   // f: (Grok bar) a listed Bot as a favorite
   if (!f) return;
   if (where === 'window') { makeWindow({ layout: '2x2', panes: [{ url: f.url, name: f.label }] }); return; }
-  if (where === 'new' || !panes[focused]) { newPane(f.url); const p = panes[panes.length - 1]; if (p && !p.name && f.label) { p.name = f.label; sendState(); } return; }
+  // At MAX, newPane already falls back to the focused pane. Use the guarded current-pane path here too, so naming follows that pane.
+  if ((where === 'new' || !panes[focused]) && panes.length < MAX) { const p = newPane(f.url); if (p && !p.name && f.label) { p.name = f.label; sendState(); } return; }
+  if (!panes[focused]) return;
   openIn(panes[focused], f.url, 'NAVIGATE', p => {
     if (f.label && (!p.name || p.favId)) p.name = f.label;
     p.favId = f.id;
@@ -2563,7 +2566,7 @@ function openFavorite(id, where = 'here', f = favorites.find(x => x.id === id)) 
   });
 }
 // (Grok bar) a listed Bot / group: the same as a favorite, named as the bar shows it
-function openGrokBot(id, where = 'here') { const b = grok.bots.find(x => x.id === id); if (b) openFavorite(null, where, { id: 'g:' + b.id, url: b.url, label: GB.nameOf(grok, b) }); }
+function openGrokBot(id, where = 'new') { const b = grok.bots.find(x => x.id === id); if (b) openFavorite(null, where, { id: 'g:' + b.id, url: b.url, label: GB.nameOf(grok, b) }); }
 function favMenu(id) {
   const f = favorites.find(x => x.id === id); if (!f) return;
   Menu.buildFromTemplate([
@@ -2580,8 +2583,8 @@ function gbotMenu(id) {                                       // (Grok bar) a Bo
   const b = grok.bots.find(x => x.id === id); if (!b) return;
   const pinned = grok.pins.includes(id);
   Menu.buildFromTemplate([
-    { label: '選択中のペインで開く', click: () => openGrokBot(id, 'here') },
-    { label: '新しいペインで開く', accelerator: isMac ? 'Cmd+Click' : 'Ctrl+Click', registerAccelerator: false, enabled: panes.length < MAX, click: () => openGrokBot(id, 'new') },
+    { label: '新しいペインで開く', enabled: panes.length < MAX, click: () => openGrokBot(id, 'new') },
+    { label: '今のペインで開く', accelerator: isMac ? 'Cmd+Click' : 'Alt+Click', registerAccelerator: false, click: () => openGrokBot(id, 'here') },
     { label: '別ウィンドウで開く', accelerator: 'Shift+Click', registerAccelerator: false, click: () => openGrokBot(id, 'window') },
     { type: 'separator' },
     { label: '名前を変更…', click: () => openOverlay('gbot-rename', { id, value: GB.nameOf(grok, b), orig: b.name }) },

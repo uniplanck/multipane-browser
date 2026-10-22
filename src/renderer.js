@@ -282,11 +282,22 @@ mpb.onState(onS);
 // 表示モード (gbar-mode.js; main keeps it): a right-click on the Grok button takes the next one, 通常 → セミコンパクト → コンパクト → 通常
 const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
 let G = null, gRev = 0, favKey = '', gMode = 'normal';
-const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here';
+const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.altKey) ? 'here' : 'new';
 // a name as the mode shows it: 通常 = as before (up to max columns), セミコンパクト = 4 units (コンパクト: no name, see gbotBtn / renderFavs)
 const gLabel = (s, max) => (gMode === 'semi' ? GbarMode.truncate(s) : shortLabel(s, max));
-gbtn.onclick = () => { if (!(G && G.busy)) mpb.gbarRefresh(); };
-gbtn.oncontextmenu = e => { e.preventDefault(); mpb.gbarMode(); };
+// Handle secondary mousedown too in case native contextmenu is missed; consume its contextmenu / click once.
+// A new press (or keyboard interaction) resets the gesture: rapid distinct right-clicks still each advance the mode.
+let gModePress = false, gModeClick = false;
+gbtn.onmousedown = e => {
+  gModePress = gModeClick = e.button === 2 || (e.button === 0 && e.ctrlKey);
+  if (gModePress) { e.preventDefault(); mpb.gbarMode(); }
+};
+gbtn.oncontextmenu = e => { e.preventDefault(); if (!gModePress) mpb.gbarMode(); gModePress = false; gModeClick = true; };
+gbtn.onkeydown = () => { gModePress = gModeClick = false; };
+gbtn.onclick = (e = {}) => {
+  if (gModeClick || e.button === 2 || e.ctrlKey) { e.preventDefault?.(); gModeClick = false; return; }
+  if (!(G && G.busy)) mpb.gbarRefresh();
+};
 mpb.onGbar(v => {
   G = v; gRev++; gMode = GbarMode.normMode(v.mode);
   gbtn.classList.toggle('busy', !!v.busy); gbtn.setAttribute('aria-busy', v.busy ? 'true' : 'false');
@@ -306,9 +317,9 @@ function gbotBtn(b, pin) {
   const el = document.createElement('button');
   el.className = 'fav-btn gbot' + (pin ? ' gpin' : '') + (b.group ? ' grp' : '');
   el.appendChild(gIcon(b));
-  if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>${b.group ? '<span class="gmark">👥</span>' : ''}`);   // コンパクト: the icon only
-  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
-  el.onclick = e => mpb.gbotOpen(b.id, openWhere(e));
+  if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>`);   // コンパクト: the icon only
+  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 新しいペインで開く（上限時は今のペイン）\n${MOD}・Optionクリック: 今のペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（今のペイン・名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
+  el.onclick = e => { if (e.button === 2 || e.ctrlKey) return; mpb.gbotOpen(b.id, openWhere(e)); };
   el.onauxclick = e => { if (e.button === 1) mpb.gbotOpen(b.id, 'new'); };
   el.oncontextmenu = e => { e.preventDefault(); mpb.gbotMenu(b.id); };
   if (pin) {                                                 // pins: drag one onto another to reorder (as the favorites)
