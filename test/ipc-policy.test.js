@@ -39,7 +39,7 @@ const SAMPLE = {
   'focus-other': ['chrome', [2, 7]], 'usage-pop-show': ['chrome', [{ right: 812.5, bottom: 36, kind: 'grok', sel: '' }]], 'usage-win-menu': ['chrome', ['codex', '']],
   'usage-pop-leave': ['overlay', []], 'usage-pop-keep': ['overlay', []], 'usage-pop-size': ['overlay', [242]], 'overlay-close': ['overlay', []],
   'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
-  'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []],
+  'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []], 'usage-connect': ['chrome', ['kimi']], 'usage-open': ['overlay', ['antigravity']],
   'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]], 'pane:sel': ['pane', [true]],
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
 };
@@ -121,8 +121,15 @@ t('sync-cols / draft / editing / ime / sel / usage:get: booleans only', [1, 0, '
 t('usage-pop-show: finite rect + kind + optional selection', chk('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'codex' }]) === null && chk('usage-pop-show', 'chrome', [{ right: 0, bottom: 0, kind: 'claude', sel: 'x'.repeat(P.TEXT_MAX) }]) === null
   && pay('usage-pop-show', 'chrome', [{ bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: Infinity, bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2e5, kind: 'grok' }])
   && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'gpt' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'grok', sel: 'x'.repeat(P.TEXT_MAX + 1) }]) && pay('usage-pop-show', 'chrome', [[1, 2]]) && pay('usage-pop-show', 'chrome', [null]));
-t('usage-win-menu / aiusage:get: codex / claude only', chk('usage-win-menu', 'chrome', ['claude', 'five_hour']) === null && pay('usage-win-menu', 'chrome', ['grok', '']) && pay('usage-win-menu', 'chrome', ['codex', 5])
-  && chk('aiusage:get', 'chrome', ['codex', false]) === null && pay('aiusage:get', 'chrome', ['grok', false]) && pay('aiusage:get', 'chrome', ['codex']));
+t('usage-win-menu / aiusage:get: codex / claude / kimi only', chk('usage-win-menu', 'chrome', ['claude', 'five_hour']) === null && chk('usage-win-menu', 'chrome', ['kimi', '']) === null && pay('usage-win-menu', 'chrome', ['grok', '']) && pay('usage-win-menu', 'chrome', ['antigravity', '']) && pay('usage-win-menu', 'chrome', ['codex', 5])
+  && chk('aiusage:get', 'chrome', ['codex', false]) === null && chk('aiusage:get', 'chrome', ['kimi', false]) === null && pay('aiusage:get', 'chrome', ['grok', false]) && pay('aiusage:get', 'chrome', ['antigravity', false]) && pay('aiusage:get', 'chrome', ['codex']));
+t('usage-pop-show: every gauge of the bar (codex / claude / kimi / antigravity / grok), nothing else', ['codex', 'claude', 'kimi', 'antigravity', 'grok'].every(k => chk('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: k }]) === null)
+  && ['gemini', '', null, 5, '__proto__', 'toString'].every(k => pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: k }])));
+t('使用量表示: usage-connect = a provider with a login window (codex / claude / kimi), usage-open = also antigravity; a kind only (never a URL); UI pages only',
+  ['codex', 'claude', 'kimi'].every(k => chk('usage-connect', 'chrome', [k]) === null && chk('usage-connect', 'overlay', [k]) === null && chk('usage-open', 'overlay', [k]) === null)
+  && chk('usage-open', 'chrome', ['antigravity']) === null && pay('usage-connect', 'chrome', ['antigravity']) && pay('usage-connect', 'chrome', ['grok'])
+  && ['https://claude.ai/settings/usage', 'grok', '', null, undefined, 5, ['kimi'], '__proto__'].every(v => pay('usage-open', 'overlay', [v]) && pay('usage-connect', 'chrome', [v]))
+  && ['pane', 'probe', 'approve'].every(w => chk('usage-connect', w, ['kimi']) === 'E_ROLE' && chk('usage-open', w, ['kimi']) === 'E_ROLE'));
 t('usage-pop-size: 0..1e5', chk('usage-pop-size', 'overlay', [0]) === null && chk('usage-pop-size', 'overlay', [1e5]) === null && [-1, 1e5 + 1, NaN, '10'].every(v => pay('usage-pop-size', 'overlay', [v])));
 t('usage:margin: any number (NaN = read only), nothing else', [0, 50, 2.5, NaN, 99].every(v => chk('usage:margin', 'overlay', [v]) === null) && ['5', undefined, null].every(v => pay('usage:margin', 'overlay', [v])));
 t('fav-open: where here / new / window', ['here', 'new', 'window'].every(w => chk('fav-open', 'chrome', [1, w]) === null) && pay('fav-open', 'chrome', [1, 'tab']) && pay('fav-open', 'chrome', [1]));
@@ -291,7 +298,10 @@ const CALLS = [
   ['chrome', 'gbarRefresh'], ['chrome', 'gbotOpen', 'b1', 'here'], ['chrome', 'gbotOpen', 'b-2', 'new'], ['chrome', 'gbotOpen', 'b1', 'window'], ['chrome', 'gbotMenu', 'b1'], ['chrome', 'gbotMove', 'b-2', 'b1'],
   ['chrome', 'ready'], ['chrome', 'usage', true], ['chrome', 'usage', undefined], ['chrome', 'usageDetail'], ['chrome', 'aiUsage', 'codex', false], ['chrome', 'aiUsage', 'claude', true], ['chrome', 'claudeAuthDialog'],
   ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
-  ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'],
+  ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'], ['chrome', 'usageWinMenu', 'kimi', 'month-credit'],
+  ['chrome', 'aiUsage', 'kimi', false], ['chrome', 'usagePopShow', { right: 700, bottom: 36, kind: 'antigravity', sel: '' }], ['chrome', 'usagePopShow', { right: 760, bottom: 36, kind: 'kimi', sel: '' }],
+  ['chrome', 'usageConnect', 'claude'], ['chrome', 'usageConnect', 'codex'], ['chrome', 'usageConnect', 'kimi'],
+  ['overlay', 'usageOpen', 'claude'], ['overlay', 'usageOpen', 'codex'], ['overlay', 'usageOpen', 'kimi'], ['overlay', 'usageOpen', 'antigravity'],
   ['overlay', 'closeOverlay'], ['overlay', 'usagePopKeep'], ['overlay', 'usagePopLeave'], ['overlay', 'usagePopSize', 242], ['overlay', 'usageMargin', 5], ['overlay', 'usageMargin', NaN], ['overlay', 'usage', false],
   ...RUNS.map(a => ['overlay', 'run', a]),
 ];

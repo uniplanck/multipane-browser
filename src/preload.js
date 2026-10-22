@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('mpb', {
   usageWinMenu: (kind, sel) => send('usage-win-menu', kind, sel), onUsageWin: cb => listen('usage-win-chosen', (_, k, id) => cb(k, id)),
   usageDetail: () => ipcRenderer.invoke('usage:detail'),
   claudeAuthDialog: () => ipcRenderer.invoke('claude:auth-dialog'),
+  usageConnect: kind => send('usage-connect', kind), usageOpen: kind => send('usage-open', kind),
   aiUsage: (kind, force) => ipcRenderer.invoke('aiusage:get', kind, !!force),
   usage: force => ipcRenderer.invoke('usage:get', !!force),
   onState: cb => listen('state', (_, s) => cb(s)),

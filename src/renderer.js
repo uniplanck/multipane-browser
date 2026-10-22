@@ -456,25 +456,33 @@ mpb.ready();
 window.addEventListener('mouseup', () => { if (document.body.classList.contains('splitting')) { document.body.classList.remove('splitting', 'split-c', 'split-r'); mpb.splitEnd(); } });
 window.addEventListener('blur', () => { document.body.classList.remove('splitting', 'split-c', 'split-r'); });
 
-// ---- usage readouts: Codex / Claude / Grok. Each pill has its own mode (click cycles), number in a coloured frame. ----
+// ---- usage readouts (使用量表示): Codex / Claude / Kimi / Antigravity / Grok. Shown only while 設定 > 使用量表示 is on, and only the providers
+// turned on there (main's state.usage = { show, list: [{ id, src }] }); a hidden gauge reads nothing. Each pill has its own mode (click cycles),
+// number in a coloured frame. Not connected (src 'none') / a lapsed web sign-in: the click opens that provider's login window (main).
+// Antigravity (src 'info') has no web usage page: no number, its popover says where to look. ----
 (function(){
   const ICON={
     codex:'<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 6.2l2.4 1.8L5 9.8M8.9 10h2.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     claude:'<svg viewBox="0 0 16 16"><g stroke="#d97757" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.8v12.4M1.8 8h12.4M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></g></svg>',
+    kimi:'<svg viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 4.6v6.8M10.6 4.6 6.4 8l4.4 3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    antigravity:'<svg viewBox="0 0 16 16"><path d="M2.2 13.2 8 2.6l5.8 10.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.4 13.2c.6-2 1.5-3 2.6-3s2 1 2.6 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
     grok:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.3 10.7l5.4-5.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>'};
-  const NAME={codex:'Codex',claude:'Claude',grok:'Grok'};
-  const MODES={codex:['left','used'],claude:['left','used'],grok:['left','used','today']};
+  const NAME={codex:'Codex',claude:'Claude',kimi:'Kimi',antigravity:'Antigravity',grok:'Grok'};
+  const MODES={codex:['left','used'],claude:['left','used'],kimi:['left','used'],antigravity:['left'],grok:['left','used','today']};
   const seed=localStorage.getItem('mpb-usage-mode')==='used'?'used':'left';
   const R=Math.round, fmt=v=>v>=100?'MAX':String(v).padStart(2,'0');
+  const pills={};
   document.querySelectorAll('.pill.usage').forEach(btn=>{
     const kind=btn.dataset.kind, KEY='mpb-um-'+kind, modes=MODES[kind];
+    if(!modes) return;
     const L=window.MPB_ICONS&&window.MPB_ICONS[kind], ico=btn.querySelector('.uico');
     if(L&&L.mask) ico.innerHTML='<span class="mico" style="background:'+(L.color||'currentColor')+';-webkit-mask-image:url('+L.mask+');mask-image:url('+L.mask+')"></span>';
     else if(L&&L.img) ico.innerHTML='<img class="gico" alt="" src="'+L.img+'">';
     else ico.innerHTML=ICON[kind];
     ico.title=NAME[kind];
     let mode=localStorage.getItem(KEY); if(!modes.includes(mode)) mode=seed;
-    let last=null, det=null;
+    let last=null, det=null, src='off', started=false;
+    const on=()=>src!=='off'&&src!=='info';   // a gauge that reads numbers right now
     const WKEY='mpb-uwin-'+kind; let selId=localStorage.getItem(WKEY)||'';
     const defBucket=bs=>{const m=bs.filter(x=>x.main);const a=m.length?m:bs;return a.find(x=>x.five)||a.find(x=>x.weekly)||a[0]||null;};   // default: 5-hour window if present, else 1-week
     const pickBucket=bs=>{bs=bs||[];return bs.find(x=>x.id===selId)||defBucket(bs);};
@@ -492,36 +500,58 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
       const used=R(b.used), left=Math.max(0,100-used);
       return {v:mode==='used'?used:left,pct:mode==='used'?used:left};
     };
+    // not connected / web sign-in lapsed (click: login window) / Claude Code's local login expired (click: the re-auth dialog, as before)
+    const login=()=>src==='none'||!!(last&&last.needLogin&&(last.src==='web'||kind==='claude'));
     const render=()=>{
-      const c=calc(), u=btn.querySelector('.uval');
-      btn.className='pill usage mode-'+mode+(c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'')+(kind==='claude'&&last&&last.needLogin?' needlogin':'');
+      const c=on()?calc():null, u=btn.querySelector('.uval');
+      btn.hidden=src==='off';
+      btn.className='pill usage mode-'+mode+(src==='info'?' info':c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'')+(on()&&login()?' needlogin':'');
       if(!c){u.textContent='--';return;}
       u.textContent=fmt(c.v);
     };
     const load=async force=>{
+      if(!on()) return;
+      const was=src;
       try{
         if(kind==='grok'){last=await mpb.usage(force);det=await mpb.usageDetail();}
         else last=await mpb.aiUsage(kind,force);
       }catch(e){last={ok:false,err:String(e),buckets:[]};}
+      if(src!==was) return;   // the source changed meanwhile: that answer is not this gauge's any more
       render();
+    };
+    // main's state.usage: shown or not / where the numbers come from. The first time it shows: the first read after a moment (as at startup before)
+    pills[kind]=s=>{
+      if(s===src) return;
+      src=s; last=null; det=null; render();
+      if(!on()) return;
+      if(started) { load(false); return; }
+      started=true; setTimeout(()=>load(kind==='grok'),kind==='grok'?8000:1500); setTimeout(()=>{if(!last||!last.ok)load(kind==='grok');},30000);
     };
     let hold=null,held=false,popT=null;
     btn.onmousedown=()=>{held=false;hold=setTimeout(()=>{held=true;btn.classList.add('spin');load(true).then(()=>btn.classList.remove('spin'));},600);};
     btn.onmouseup=()=>clearTimeout(hold);
+    const popNow=()=>{clearTimeout(popT);const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind,sel:curId()});};
     btn.onclick=()=>{if(held)return;
+      if(src==='info'){popNow();return;}
+      if(src==='none'||(last&&last.needLogin&&last.src==='web')){clearTimeout(popT);mpb.usagePopLeave();mpb.usageConnect(kind);return;}
       if(kind==='claude'&&last&&last.needLogin){clearTimeout(popT);mpb.usagePopLeave();mpb.claudeAuthDialog().then(()=>{load(true);setTimeout(()=>load(true),20000);});return;}
       mode=modes[(modes.indexOf(mode)+1)%modes.length];localStorage.setItem(KEY,mode);render();if(kind==='grok'&&mode==='today'&&!det)load(false);};
     const curId=()=>{const b=kind==='grok'?null:(last&&last.ok?pickBucket(last.buckets):null);return b?b.id:'';};
-    btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(()=>{const r=btn.getBoundingClientRect();mpb.usagePopShow({right:r.right,bottom:r.bottom,kind,sel:curId()});},280);};
-    if(kind!=='grok'){
-      btn.oncontextmenu=e=>{e.preventDefault();clearTimeout(popT);mpb.usagePopLeave();const go=()=>mpb.usageWinMenu(kind,curId());(last&&last.buckets&&last.buckets.length)?go():load(false).then(go);};
+    btn.onmouseenter=()=>{clearTimeout(popT);popT=setTimeout(popNow,280);};
+    if(kind!=='grok'&&kind!=='antigravity'){
+      btn.oncontextmenu=e=>{e.preventDefault();clearTimeout(popT);mpb.usagePopLeave();const go=()=>mpb.usageWinMenu(kind,curId());(last&&last.buckets&&last.buckets.length)||!on()?go():load(false).then(go);};
       mpb.onUsageWin((k,id)=>{if(k!==kind)return;selId=id;localStorage.setItem(WKEY,id);render();});
     }
     btn.addEventListener('mouseleave',()=>{clearTimeout(hold);clearTimeout(popT);mpb.usagePopLeave();});
     window.addEventListener('focus',()=>load(false));
     mpb.onUsageUpdated(()=>load(false));
     setInterval(()=>load(kind==='grok'),5*60*1000);
-    if(kind==='grok') setInterval(()=>{mpb.usageDetail().then(d=>{det=d;render();}).catch(()=>{});},60000);
-    render(); setTimeout(()=>load(kind==='grok'),kind==='grok'?8000:1500); setTimeout(()=>{if(!last||!last.ok)load(kind==='grok');},30000);
+    if(kind==='grok') setInterval(()=>{if(on())mpb.usageDetail().then(d=>{det=d;render();}).catch(()=>{});},60000);
+    render();
+  });
+  mpb.onState(s=>{
+    const u=s&&s.usage; if(!u||!Array.isArray(u.list)) return;
+    const m={}; u.list.forEach(x=>{m[x.id]=x.src;});
+    Object.keys(pills).forEach(k=>pills[k](u.show&&m[k]?m[k]:'off'));
   });
 })();

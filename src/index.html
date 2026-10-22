@@ -16,9 +16,11 @@
   <button class="icon-btn" id="reopen" title="閉じたペインを開き直す (⌘⇧T)">↩</button>
   <button class="icon-btn" id="add" title="新しいペイン (⌘T)">＋</button>
   <button class="pill" id="cmdk" title="コマンドパレット (⌘K)"><span>検索・コマンド</span><kbd>⌘K</kbd></button>
-  <button class="pill usage" id="u-codex" data-kind="codex"><span class="uico"></span><span class="uval">--</span></button>
-  <button class="pill usage" id="u-claude" data-kind="claude"><span class="uico"></span><span class="uval">--</span></button>
-  <button class="pill usage" id="usage" data-kind="grok"><span class="uico"></span><span class="uval">--</span></button>
+  <button class="pill usage" id="u-codex" data-kind="codex" hidden><span class="uico"></span><span class="uval">--</span></button>
+  <button class="pill usage" id="u-claude" data-kind="claude" hidden><span class="uico"></span><span class="uval">--</span></button>
+  <button class="pill usage" id="u-kimi" data-kind="kimi" hidden><span class="uico"></span><span class="uval">--</span></button>
+  <button class="pill usage" id="u-antigravity" data-kind="antigravity" hidden><span class="uico"></span><span class="uval">--</span></button>
+  <button class="pill usage" id="usage" data-kind="grok" hidden><span class="uico"></span><span class="uval">--</span></button>
   <button class="icon-btn" id="approve-btn" title="承認Bot"><svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.8 15 4v4.6c0 3.6-2.5 6.2-6 7.6-3.5-1.4-6-4-6-7.6V4z"/><path d="M6 9.2l2.1 2.1L12.2 7"/></svg></button>
 </header>
 <nav id="favbar" aria-label="Grok Bot・お気に入り"><button id="fav-star" aria-label="Grok：Bot一覧を読み込み直す" title="Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12.3 5.1A5.3 5.3 0 1 0 10.9 12.2"/><path d="M4.6 13.6 13.6 2.6"/></svg></button><span id="gbar-note" role="status"></span><div id="favs"></div><span id="fav-hint">Grokボタンで Bot 一覧を読み込み</span></nav>

@@ -255,20 +255,40 @@ function upSize() { requestAnimationFrame(() => mpb.usagePopSize(up.offsetHeight
 let upKind = 'grok';
 const hm = t => new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 const remain = ms => { const m = Math.max(0, Math.floor(ms / 60000)); const d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}日${h}時間` : h ? `${h}時間${m % 60}分` : `${m}分`; };
+// Codex / Claude / Kimi (ai-usage.js view; src: 'local' = the opt-in local sign-in, 'web' = the app's own login, 'none' = not connected) and
+// Antigravity (no web usage page: a note and a link). Links are buttons: main opens the provider's fixed page in the default browser
+const UNAME = { codex: 'ChatGPT / Codex', claude: 'Claude', kimi: 'Kimi', antigravity: 'Google Antigravity' };
+const SRC_JA = { local: k => (k === 'claude' ? 'Claude Code の認証情報（Keychain・ローカル）' : 'Codex CLI の auth.json（ローカル）'), web: k => `${UNAME[k]} のWebログイン（このアプリの使用量表示専用）` };
+const uLink = (kind, label) => `<button class="ulink" data-open="${esc(kind)}">${esc(label)} ↗</button>`;
 function aiRender(d) {
   document.body.classList.add('upop');
-  const name = d.kind === 'codex' ? 'Codex' : 'Claude';
+  const name = UNAME[d.kind] || '';
+  if (d.kind === 'antigravity') {
+    up.innerHTML = `<h4>${name}</h4><div>使用量はWebで公開されていないため、数値は表示しません（ログイン・接続は不要）。</div>` +
+      `<div class="sm">使用量は Antigravity IDE の 設定 → Models（CLI では /usage）で確認してください。</div>${uLink('antigravity', 'プランと使用量の案内を開く')}`;
+    return upSize();
+  }
   const at = d.at ? new Date(d.at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) : '-';
   const rows = (d.buckets || []).map(b => {
     const used = Math.round(b.used), left = Math.max(0, 100 - used);
     const shown = !!d.sel && b.id === d.sel;
     return `<div class="row"><span>${shown ? '✓ ' : ''}${esc(b.label)}${shown ? ' <small style="color:#30d158">（表示中）</small>' : ''}</span><b>残り ${pc(left)} ／ 使用 ${pc(used)}</b></div>` +
-      `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : 'リセット時刻なし'}</div>`;
+      `<div class="sm">${b.resetAt ? `リセット ${esc(hm(b.resetAt))}（あと ${esc(remain(b.resetAt - Date.now()))}）` : b.resetText ? esc(b.resetText) : 'リセット時刻なし'}</div>`;
   }).join('');
-  up.innerHTML = `<h4>${name} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err || '')}（更新: ${esc(at)}）</div>` : '') + (d.ok ? rows : d.needLogin ? `<div style="color:#ff9f0a">Claudeの認証が切れています</div><div class="sm">このピルをクリックすると、再認証のダイアログが開きます。</div>` : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '')) +
-    `<hr><div class="sm" style="margin:0 0 2px">右クリックで表示する枠を選べます。表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div><div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
+  const web = d.src === 'web' || d.src === 'none';
+  const body = d.ok ? rows
+    : d.needConnect ? `<div style="color:#ff9f0a">未接続</div><div class="sm">このゲージをクリックすると ${esc(name)} のログイン用ウィンドウが開きます（通常のWebログイン。このアプリの使用量表示専用の保存領域に保存し、ペインのログインとは別）。ログインできたらそのウィンドウを閉じてください。</div>`
+    : d.noNum ? `<div style="color:#ff9f0a">接続済み・数値を読めません</div><div class="sm">使用量ページの表示から %（使用 / 残り）を読み取れませんでした。推定した数値は出しません。</div>`
+    : d.needLogin && d.src === 'web' ? `<div style="color:#ff9f0a">${esc(d.err || 'ログインが必要です')}</div><div class="sm">このゲージをクリックすると、ログイン用のウィンドウが開きます。</div>`
+    : d.needLogin ? `<div style="color:#ff9f0a">Claudeの認証が切れています</div><div class="sm">このピルをクリックすると、再認証のダイアログが開きます。</div>`
+    : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '');
+  up.innerHTML = `<h4>${esc(name)} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err || '')}（更新: ${esc(at)}）</div>` : '') + body +
+    (web && !d.ok && !d.needConnect ? uLink(d.kind, '使用量ページを開く') : '') +
+    `<hr><div class="sm" style="margin:0 0 2px">右クリックで表示する枠・接続・切断。表示の見方: 数字は2桁（100%はMAX）。塗り＝残り（緑50%以上／黄20〜49%／赤20%未満）、枠線＝使用（緑50%以下／黄〜80%／赤81%以上）。クリックで切替。</div>` +
+    (SRC_JA[d.src] ? `<div class="sm" style="margin:0 0 2px">取得元: ${esc(SRC_JA[d.src](d.kind))}</div>` : '') + `<div class="sm" style="margin:0">更新: ${esc(at)}　長押しで再取得</div>`;
   upSize();
 }
+up.addEventListener('click', e => { const b = e.target && e.target.closest ? e.target.closest('[data-open]') : null; if (b) { e.preventDefault(); mpb.usageOpen(b.dataset.open); } });
 mpb.onUsagePop(d => { document.body.classList.remove('approve'); if (document.activeElement && document.activeElement.id === 'up-margin') return; upKind = d.kind || 'grok'; if (upKind === 'grok') upRender(d); else aiRender(d); });
 up.addEventListener('mouseenter', () => mpb.usagePopKeep());
 document.documentElement.addEventListener('mouseleave', () => { if (document.activeElement && document.activeElement.id === 'up-margin') return; mpb.usagePopLeave(); });

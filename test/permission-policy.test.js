@@ -111,11 +111,24 @@ const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8
 const ready = main.slice(main.indexOf('app.whenReady().then('), main.indexOf('startup();', main.indexOf('app.whenReady().then(')));
 t('main.js: both the request and the check handler are set, and both ask PERM.decide', /setPermissionRequestHandler\(\(wc, perm, cb, d = \{\}\) => \{\s*const code = PERM\.decide\(perm, \{ role: permRole\(wc\), origin: d\.requestingUrl, origin2: d\.securityOrigin, main: d\.isMainFrame, top: topUrl\(wc\), media: d\.mediaTypes \}\);[\s\S]*?cb\(!code\);/.test(ready)
   && /setPermissionCheckHandler\(\(wc, perm, origin, d = \{\}\) =>\s*!permDenied\(perm, PERM\.decide\(perm, \{ role: permRole\(wc\), origin, main: d\.isMainFrame, top: wc \? topUrl\(wc\) : '', embedding: d\.embeddingOrigin, media: d\.mediaType \}\), wc\)\);/.test(ready));
-t('main.js: no other permission decision (no fixed allow list, no other handler)', !/const allowed = new Set|allowed\.has\(/.test(main) && (main.match(/setPermission\w+Handler\(/g) || []).length === 2 && !/setDevicePermissionHandler|setDisplayMediaRequestHandler/.test(main));
+// 使用量表示 (usage-web.js): the app's own login partitions (persist:usage-*) get the same two handlers, asking PERM.decide as the background
+// check ('probe': storage only), in usageSes; no other handler
+const fnOf = name => { const i = main.indexOf(`function ${name}(`); if (i < 0) return ''; let d = 0, j = main.indexOf('{', main.indexOf(')', i)); for (; j < main.length; j++) { if (main[j] === '{') d++; else if (main[j] === '}' && --d === 0) break; } return main.slice(i, j + 1); };
+const uses = fnOf('usageSes');
+t('main.js: no other permission decision (no fixed allow list, no other handler)', !/const allowed = new Set|allowed\.has\(/.test(main) && (main.match(/setPermission\w+Handler\(/g) || []).length === 4 && !/setDevicePermissionHandler|setDisplayMediaRequestHandler/.test(main)
+  && (uses.match(/setPermission\w+Handler\(/g) || []).length === 2 && (uses.match(/!PERM\.decide\(perm, \{ role,/g) || []).length === 2 && /const role = 'probe';/.test(uses));
+t('main.js: the usage login partitions: no download, Chrome\'s user agent', /ses\.on\('will-download', e => e\.preventDefault\(\)\);/.test(uses) && /ses\.setUserAgent\(chromeUA\(\)\);/.test(uses));
 t('main.js: the role comes from main\'s registry (not registered: a window a page opened; no page: a worker)', /const permRole = wc => \{ if \(!wc\) return 'worker'; try \{ const r = wcReg\.get\(wc\.id\); return r && r\.wc === wc \? r\.role : 'popup'; \} catch \{ return 'popup'; \} \};/.test(ready));
 t('main.js: will-download asks PERM.download (cancels otherwise) and saves under PERM.downloadName in ~/Downloads, never opened by itself', /on\('will-download', \(e, item, wc\) => \{\s*if \(permDenied\('download', PERM\.download\(permRole\(wc\)\), wc\)\) \{ e\.preventDefault\(\); return; \}\s*const dir = app\.getPath\('downloads'\); const name = PERM\.downloadName\(item\.getFilename\(\)\);/.test(ready)
   && /item\.setSavePath\(dest\)/.test(ready) && !/shell\.openPath|openExternal\(dest|\.openItem/.test(main) && /shell\.showItemInFolder\(dest\)/.test(ready));
 t('main.js: a refusal records a fixed code only (no origin / URL)', /diag\.rec\('perm\.deny', code, \{ p: p && p\.id \}, 600000\);/.test(ready) && !/dlog\('permission'[^\n]*(origin|getURL|requestingUrl)/.test(ready));
-t('main.js: the session is the shared default session (no partition / new session)', !/partition:|session\.fromPartition|fromPath\(/.test(main));
+// panes / UI / background check / 承認Bot / the Grok bar's read: the shared default session. The only other sessions are the usage display's own
+// login partitions (usage-web.js PROV: persist:usage-<kind>), opened in usageSes and used only by its login window and its hidden reader
+{ const U = require('../src/usage-web');
+  const parts = [...main.matchAll(/partition:\s*([^,}]+)/g)].map(m => m[1].trim());
+  t('main.js: the session is the shared default session except the usage login partitions', parts.length === 2 && parts.every(p => p === 'P.partition')
+    && (main.match(/session\.fromPartition\(/g) || []).length === 1 && /session\.fromPartition\(UW\.PROV\[k\]\.partition\)/.test(uses) && !/fromPath\(/.test(main)
+    && ['usageWebReadNow', 'usageConnect'].every(f => /partition: P\.partition/.test(fnOf(f)))
+    && Object.values(U.PROV).every(p => /^persist:usage-[a-z]+$/.test(p.partition)) && new Set(Object.values(U.PROV).map(p => p.partition)).size === Object.keys(U.PROV).length); }
 
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

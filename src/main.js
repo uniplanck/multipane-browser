@@ -87,6 +87,8 @@ function paneSave(p, now = Date.now()) {
   return snap ? { ...s, snap } : s;
 }
 const restorePlan = s => SS.plan(s, Date.now(), { enabled: settings.restoreSleep === true, ready: !!store && store.writable(), quote: settings.saveQuote === true });
+// ---- 使用量表示 (usage-config.js): settings.usageShow / usageProv decide which gauges the bar shows and where each one's numbers come from
+const UC = require('./usage-config');
 function stateDoc() {
   const wins = ctxs.map(c => c.snapshot());
   const first = wins[0] || lastClosedSnapshot || { layout: '2x2', focused: 0, panes: [] };
@@ -924,6 +926,7 @@ function sendState(cs = cells()) {
     layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
     canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
+    usage: UC.view(settings),                                // 使用量表示: which gauges show and where each one's numbers come from
     panes: panes.map((p, i) => {
       const wc = p.view.webContents, lt = lqView(p), rv = RP.view(p.rcv);   // its load in the queue (#31): waiting (with its place) / running; (#32) recovery
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -2431,20 +2434,22 @@ let popOpen = false, popTimer = null, popRect = null;
 function popBounds(h) { const [w] = win.getContentSize(); const W = 320; const x = Math.max(4, Math.min(w - W - 4, Math.round((popRect?.right || w) - W))); return { x, y: Math.round((popRect?.bottom || 40) + 4), width: W, height: Math.max(60, Math.min(520, Math.round(h || 360))) }; }
 let popKind = 'grok', popSel = '';
 function usageWinMenu(kind, sel) {
-  if (!['codex', 'claude'].includes(kind)) return;
+  if (!UC.WEB.includes(kind)) return;
   const c = AIU.peek(kind), bs = (c && c.buckets) || [];
   const pc = v => { const n = Math.round(v); return n >= 100 ? 'MAX' : String(n).padStart(2, '0') + '%'; };
   const tpl = bs.length ? bs.map(b => ({ label: `${b.label}　残り ${pc(Math.max(0, 100 - Math.round(b.used)))} ／ 使用 ${pc(b.used)}`, type: 'radio', checked: b.id === sel, click: () => win.webContents.send('usage-win-chosen', kind, b.id) }))
     : [{ label: c && c.err ? `取得できません: ${c.err}` : 'まだ取得していません', enabled: false }];
-  tpl.unshift({ label: `${kind === 'codex' ? 'Codex' : 'Claude'}: 表示する枠を選択`, enabled: false }, { type: 'separator' });
+  tpl.unshift({ label: `${UC.NAMES[kind]}: 表示する枠を選択`, enabled: false }, { type: 'separator' });
+  tpl.push({ type: 'separator' }, ...usageProvItems(kind));   // 接続… / 切断 / 使用量ページ (the same as 設定 > 使用量表示)
   Menu.buildFromTemplate(tpl).popup({ window: win });
 }
 function popShow(rect) {
   if (!overlay || overlayOpen) return;
-  if (rect && typeof rect === 'object') { popKind = ['codex', 'claude'].includes(rect.kind) ? rect.kind : 'grok'; popSel = String(rect.sel || '').slice(0, 120); }
+  if (rect && typeof rect === 'object') { popKind = [...UC.WEB, 'antigravity'].includes(rect.kind) ? rect.kind : 'grok'; popSel = String(rect.sel || '').slice(0, 120); }
   clearTimeout(popTimer); popRect = rect && typeof rect === 'object' ? { right: Number(rect.right) || 0, bottom: Number(rect.bottom) || 0 } : popRect;
   if (!popOpen) { popOpen = true; overlay.setBounds(popBounds(360)); bringOverlayToFront(); overlay.setVisible(true); }
-  overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : { kind: popKind, sel: popSel, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
+  overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : popKind === 'antigravity' ? { kind: popKind, src: UC.source(settings, popKind) }
+    : { kind: popKind, sel: popSel, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
 }
 function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) overlay.setVisible(false); }
 function popLater(ms = 350) { clearTimeout(popTimer); popTimer = setTimeout(popHide, ms); }
@@ -2735,6 +2740,7 @@ function buildMenu() {
       { label: '診断ログをファイルにも保存（userData/diagnostics・2MiB×3・7日。会話・名前・URLは記録しない）', type: 'checkbox', checked: settings.diagPersist === true, click: m => { settings.diagPersist = m.checked; diagSync(); save(); } },
       { label: 'grok.com/bot を開き直す補正（直接読み込みで真っ黒になる対策）', type: 'checkbox', checked: settings.grokFix, click: m => { settings.grokFix = m.checked; save(); } },
       { label: 'Grokの会話の画像をクリックしたらペインを最大化（画像を閉じると元に戻す）', type: 'checkbox', checked: settings.autoImg !== false, click: m => { settings.autoImg = m.checked; save(); } },
+      usageMenu(),
       { label: 'すべての未読をクリア', click: () => ctxs.forEach(k => k.clearAll()) } ] },
     { role: 'windowMenu', label: 'ウィンドウ' } ]));
 }
@@ -2809,6 +2815,11 @@ function startup() {
   const st = ld.status === 'ready' ? ld.doc : emptyDoc();   // recoveryRequired / unsupportedVersion: nothing is taken from the file
   settings = { ...settings, ...st.settings };
   if (!settings.notifV2) { settings.notifications = true; settings.notifV2 = true; }
+  // 使用量表示 (once, usageV2): a new install starts with no gauge and reads nothing; an install used before (panes.json existed, also an
+  // unreadable one, or the old gauges' settings) keeps its gauges, with the local sign-ins they used as checked opt-ins
+  { const existing = UC.existingInstall({ fileExisted: !(ld.status === 'ready' && ld.exists === false), settings });
+    const m = UC.migrate(settings, { existing });
+    if (m.changed) { settings = m.settings; save(); dlog('usage', 'v2 settings:', existing ? 'existing install, gauges kept' : 'new install, off'); } }
   if (!settings.splits || typeof settings.splits !== 'object') settings.splits = {};
   if (ld.status !== 'ready') dlog('state', ld.status, ld.reason, ld.errors.slice(0, 5).join('; '));
   else if (ld.fixes.length) dlog('state', 'repaired on load:', ld.fixes.join('; '));
@@ -2929,6 +2940,7 @@ function pbFields(buf) {
 }
 let usageCache = null, usageBusy = false;
 async function fetchUsage() {
+  if (UC.source(settings, 'grok') === 'off') return usageCache;   // 使用量表示 off / Grok off: nothing is read (one-click reload / day rollover too)
   if (usageBusy) return usageCache;
   usageBusy = true;
   try {
@@ -2993,13 +3005,168 @@ function usageDetail() {
   return d;
 }
 const AIU = require('./ai-usage');
-AIU.setOnChange(() => { ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} }); });
+const usageUpdated = () => ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} });
+AIU.setOnChange(usageUpdated);
+AIU.setup({ source: k => UC.source(settings, k), web: k => usageWebRead(k) });
 ipcHandle('aiusage:get', async (_, kind, force) => {
-  if (!['codex', 'claude'].includes(kind)) return null;
+  if (!UC.WEB.includes(kind)) return null;
   const r = await AIU.get(kind, !!force);
-  dlog('aiusage', kind, (r.ok ? 'ok ' : 'err ') + (r.stale ? 'STALE ' : '') + (r.buckets || []).map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') + (r.err ? ' | ' + r.err : ''));
+  if (r.src === 'local' || r.src === 'web') dlog('aiusage', kind, r.src, (r.ok ? 'ok ' : 'err ') + (r.stale ? 'STALE ' : '') + (r.buckets || []).map(b => `${b.label}=${Math.round(b.used * 10) / 10}%`).join(' ') + (r.err ? ' | ' + r.err : ''));
   return r;
 });
+
+// ---- 使用量表示: the app's own sign-in per provider (usage-web.js) ----
+// 接続… opens a login window: an ordinary web sign-in to the provider, in its own persistent partition (persist:usage-<kind>; never the panes'
+// defaultSession, nothing copied in or out, no cookie / token read by the app). Closing it reads the usage page once: not a sign-in page ->
+// connected (settings.usageProv[kind].web), then the gauge reads that page in a hidden window of the partition every ~10 min (one read at a time,
+// all providers). The numbers are only what the page's visible text says (usage-web.js parse); a page without them shows 接続済み・数値を読めません.
+// 切断 clears that partition's cookies / storage / cache only. Nothing is read while 使用量表示 or the provider is off.
+const UW = require('./usage-web');
+const usageLogin = {};                                       // kind -> its open login window
+const usageSesReady = new Set();
+function usageSes(k) {                                       // the partition's session, set up once: Chrome's UA (sign-in pages refuse Electron's), no
+  const ses = require('electron').session.fromPartition(UW.PROV[k].partition);   // permission but storage (permission-policy 'probe'), no download
+  if (usageSesReady.has(k)) return ses;
+  usageSesReady.add(k);
+  ses.setUserAgent(chromeUA());
+  const role = 'probe';
+  ses.setPermissionRequestHandler((wc, perm, cb, d = {}) => cb(!PERM.decide(perm, { role, origin: d.requestingUrl, main: d.isMainFrame, top: wc && !wc.isDestroyed() ? wc.getURL() : '' })));
+  ses.setPermissionCheckHandler((wc, perm, origin, d = {}) => !PERM.decide(perm, { role, origin, main: d.isMainFrame, top: wc && !wc.isDestroyed() ? wc.getURL() : '', embedding: d.embeddingOrigin }));
+  ses.on('will-download', e => e.preventDefault());
+  return ses;
+}
+const usageErr = (code, extra) => Object.assign(new Error(UW.NOTE[code] || UW.NOTE.ERROR), { code }, extra);
+let usageChain = Promise.resolve();
+function usageWebRead(k) {                                   // one hidden read at a time (all providers); kind -> buckets, or throws (auth / noNum / other)
+  const run = usageChain.then(() => usageWebReadNow(k));
+  usageChain = run.catch(() => {});
+  return run;
+}
+async function usageWebReadNow(k) {
+  const P = UW.PROV[k];
+  if (!P || quitting || !ctxs.some(c => !c.win.isDestroyed())) throw usageErr('ABORT');   // quitting / the last window closed
+  if (usageLogin[k] && !usageLogin[k].isDestroyed()) throw usageErr('BUSY');   // the user is signing in right now: closing the window reads
+  usageSes(k);
+  const t0 = Date.now(), bw = new BrowserWindow({ show: false, width: 1280, height: 900, skipTaskbar: true, focusable: false,
+    webPreferences: { partition: P.partition, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
+  const wc = bw.webContents, lists = [];
+  let code = 'ERROR';
+  try {
+    wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    guardNavigation(wc, 'probe');                            // web pages only, no browser / system app
+    for (let i = 0; i < P.pages.length; i++) {
+      const r = await usagePage(wc, k, P.pages[i]);
+      if (r.code === 'ABORT') { code = 'ABORT'; break; }
+      if (r.buckets) lists.push(r.buckets);
+      if (i === 0) { code = r.code; if (code !== 'OK' && code !== 'PAGE') break; }   // a later page only adds numbers it has
+    }
+  } catch { code = 'ERROR'; }
+  finally { try { if (!bw.isDestroyed()) bw.destroy(); } catch {} }
+  const buckets = UW.combine(lists);
+  dlog('usage web', k, code, buckets ? buckets.length : 0, Date.now() - t0 + 'ms');   // never the page's text / URL
+  if (buckets) return buckets;
+  if (code === 'AUTH' || code === 'MOVED') throw usageErr(code, { auth: true });
+  if (code === 'OK' || code === 'PAGE') throw usageErr('PAGE', { noNum: true });
+  throw usageErr(code);
+}
+// one page: load, then read its visible text every second until two reads in a row give the same numbers (the page has finished drawing them),
+// or it is a sign-in page, or READ_MS is over -> { code: OK | PAGE (no numbers) | AUTH | MOVED | TIMEOUT | ABORT, buckets? }
+async function usagePage(wc, k, url) {
+  appLoad(wc, url);
+  const end = Date.now() + UW.READ_MS;
+  let st = 'UNKNOWN', prev = '';
+  while (Date.now() < end) {
+    await sleep(UW.STEP_MS);
+    if (wc.isDestroyed() || quitting || !ctxs.some(c => !c.win.isDestroyed())) return { code: 'ABORT' };
+    const o = await Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(UW.WORLD, [{ code: UW.READ_JS }])), sleep(4000).then(() => null)]).catch(() => null);
+    if (!o || typeof o !== 'object') continue;
+    st = UW.pageState(k, url, String(o.href || ''));
+    if (st === 'AUTH' || st === 'MOVED') { if (o.ready === 'complete') return { code: st }; continue; }
+    if (st !== 'PAGE') continue;
+    const b = UW.parse(String(o.text || ''), Date.now()), key = b ? JSON.stringify(b.map(x => [x.id, x.used])) : '';
+    if (b && key === prev) return { code: 'OK', buckets: b };
+    prev = key;
+  }
+  return { code: st === 'PAGE' ? 'PAGE' : st === 'AUTH' || st === 'MOVED' ? st : 'TIMEOUT' };
+}
+function usageConnect(k) {
+  if (!UW.PROV[k] || quitting) return;
+  const open = usageLogin[k];
+  if (open && !open.isDestroyed()) { open.show(); open.focus(); return; }
+  usageSes(k);
+  const P = UW.PROV[k], wp = { partition: P.partition, contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false };
+  const bw = new BrowserWindow({ width: 1040, height: 800, title: UW.loginTitle(UC.NAMES[k]), autoHideMenuBar: true, webPreferences: wp });
+  usageLogin[k] = bw;
+  const wc = bw.webContents;
+  bw.on('page-title-updated', e => e.preventDefault());     // keeps saying what this window is for
+  guardNavigation(wc, 'popup');                              // any sign-in site, web pages only
+  // a sign-in popup (Google / Apple / SSO) opens as a child window of the same partition; anything else: the default browser
+  wc.setWindowOpenHandler(d => {
+    const r = NAV.windowOpen(d.url, { popup: true });
+    if (r.action === 'child') return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: bw, autoHideMenuBar: true, webPreferences: wp } };
+    if (r.action === 'browser' || r.action === 'system') openExt(d.url, 'usage login link'); else navBlocked(r.code, 'usage login window.open');
+    return { action: 'deny' };
+  });
+  bw.once('closed', () => { if (usageLogin[k] !== bw) return; delete usageLogin[k]; usageAfterLogin(k).catch(() => {}); });
+  appLoad(wc, P.pages[0]);                                   // not signed in: the site sends it to its sign-in, and back after
+  buildMenu();                                               // 切断 can close it meanwhile
+  dlog('usage', 'login window', k);
+}
+// the login window closed: read once (forced). A sign-in page / another page -> not connected; numbers or the usage page without numbers ->
+// connected. Nothing changes when the read itself failed (timeout / offline): 接続… again or the next read decides
+async function usageAfterLogin(k) {
+  if (quitting) return;
+  const was = !!UC.clean(settings.usageProv).prov[k].web;
+  AIU.forget(k);
+  settings = UC.set(settings, k, 'web', true); usageSync();
+  try { await AIU.get(k, true, 'web'); } catch {}             // the web reading itself, also while a local opt-in is the gauge's source
+  const v = AIU.peek(k, 'web');
+  const bad = !!(v && v.needLogin), ok = !!(v && (v.ok || v.noNum));
+  if (bad || (!ok && !was)) { settings = UC.set(settings, k, 'web', false); AIU.forget(k); }
+  usageSync();
+  dlog('usage', 'login closed', k, ok ? 'connected' : bad ? 'not signed in' : 'unknown');
+}
+async function usageDisconnect(k) {
+  if (!UW.PROV[k]) return;
+  const { response } = await dialog.showMessageBox({ type: 'question', message: `${UC.NAMES[k]} の使用量表示用ログインを切断しますか？`,
+    detail: 'このアプリの使用量表示専用の保存領域（Cookie・ストレージ・キャッシュ）だけを消します。ペインのログインや既定のブラウザには影響しません。',
+    buttons: ['切断', 'キャンセル'], defaultId: 1, cancelId: 1, noLink: true });
+  if (response !== 0) return;
+  const w = usageLogin[k]; delete usageLogin[k];             // an open login window: closed without a read
+  try { if (w && !w.isDestroyed()) w.destroy(); } catch {}
+  settings = UC.set(settings, k, 'web', false); AIU.forget(k); usageSync();
+  try { const ses = usageSes(k); await ses.clearStorageData(); await ses.clearCache(); await ses.clearAuthCache(); } catch (e) { dlog('usage', 'disconnect clear failed', k, e && e.name); }
+  dlog('usage', 'disconnected', k);
+}
+function usageSync() { save(); buildMenu(); broadcast(); usageUpdated(); }   // a usage setting changed: saved, menu, the bars (which gauges / source)
+function usageSet(k, field, v) { settings = UC.set(settings, k, field, v); usageSync(); }
+// one provider's items (設定 > 使用量表示, and the gauge's right-click menu)
+function usageProvItems(k) {
+  const p = UC.clean(settings.usageProv).prov[k], src = UC.source(settings, k), web = !!p.web, items = [];
+  if (UW.PROV[k]) {
+    items.push({ label: web ? `再ログイン…（${UC.NAMES[k]} のWebログイン・使用量表示専用）` : `接続…（${UC.NAMES[k]} にWebでログイン・使用量表示専用）`, click: () => usageConnect(k) });
+    items.push({ label: '切断（使用量表示用のログインを消す）', enabled: web || !!usageLogin[k], click: () => { usageDisconnect(k).catch(() => {}); } });
+  }
+  if (k === 'claude') items.push({ label: 'Claude Code の認証情報をKeychainから読む（ローカル・ONの間はこちらを優先）', type: 'checkbox', checked: !!p.local, click: m => usageSet(k, 'local', m.checked) });
+  if (k === 'codex') items.push({ label: 'Codex CLI の auth.json（~/.codex）を読む（ローカル・ONの間はこちらを優先）', type: 'checkbox', checked: !!p.local, click: m => usageSet(k, 'local', m.checked) });
+  if (UW.link(k)) items.push({ label: k === 'antigravity' ? '使用量の確認方法（Antigravity IDE の 設定 → Models）を既定のブラウザで開く' : '使用量ページを既定のブラウザで開く', click: () => openExt(UW.link(k), 'usage page') });
+  if (!items.length) items.push({ label: src === 'grok' ? 'grok.com のペインのログインで取得（従来どおり）' : '設定なし', enabled: false });
+  return items;
+}
+function usageMenu() {
+  const prov = UC.clean(settings.usageProv).prov;
+  const SRC = { local: 'ローカル', web: 'Web接続', none: '未接続', grok: 'Grokペイン', info: '数値なし' };
+  return { label: `使用量表示（${settings.usageShow === true ? 'オン' : 'オフ'}）`, submenu: [
+    { label: '使用量表示を表示（右上のゲージ。オフの間は何も読み取らない）', type: 'checkbox', checked: settings.usageShow === true, click: m => { settings.usageShow = m.checked; usageSync(); } },
+    { type: 'separator' },
+    ...UC.PROVIDERS.map(k => { const s = UC.source({ ...settings, usageShow: true }, k);
+      return { label: `${UC.NAMES[k]}（${prov[k].on ? SRC[s] || '' : '非表示'}）`, submenu: [
+        { label: 'ゲージを表示する', type: 'checkbox', checked: prov[k].on, click: m => usageSet(k, 'on', m.checked) },
+        { type: 'separator' }, ...usageProvItems(k)] }; }),
+  ] };
+}
+ipcOn('usage-connect', (r, kind) => { if (UC.source(settings, kind) !== 'off') usageConnect(kind); });   // a gauge's click (not connected / sign-in lapsed)
+ipcOn('usage-open', (r, kind) => { const u = UW.link(kind); if (u) openExt(u, 'usage page'); });         // the popover's link: a fixed URL per provider
 ipcHandle('claude:auth-dialog', async r => {
   const w = r.ctx.win;
   const repoll = () => AIU.get('claude', true).catch(() => {});
@@ -3027,4 +3194,5 @@ async function checkDayRollover() {
 }
 setInterval(() => { checkDayRollover().catch(() => {}); }, 15000);
 app.on('browser-window-focus', () => { checkDayRollover().catch(() => {}); });
-ipcHandle('usage:get', async (_, force) => (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());
+ipcHandle('usage:get', async (_, force) => UC.source(settings, 'grok') === 'off' ? { ok: false, off: true, err: '使用量表示はオフです' }
+  : (!force && usageCache?.ok && Date.now() - usageCache.at < 60000) ? usageCache : fetchUsage());

@@ -12,9 +12,14 @@
 // repair (the rows alone are read); validate() refuses them like rows that do not match.
 // (Grok bar) An optional top-level `grok` (grok-bots.js: the Bot list read with the Grok button, the user's names, pins; no new schema, an older
 // app ignores it): never fatal, cleaned as a repair (the Grok button reads the list again); validate() wants exactly what grok-bots clean() keeps.
+// (使用量表示) settings.usageShow / usageV2 (booleans) and settings.usageProv (usage-config.js: providers × on / web / local): optional, no new
+// schema (a file without them = before the redesign; main migrates it once). A non-boolean flag is dropped, a broken usageProv cleaned, as a
+// repair; validate() wants booleans and exactly what usage-config clean() keeps. Other settings are not looked at (as before).
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
 const GB = require('./grok-bots');
+const UC = require('./usage-config');
+const USAGE_FLAGS = ['usageShow', 'usageV2'];
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 
@@ -66,6 +71,10 @@ function validate(doc) {
   }
   if (doc.grok !== undefined && !GB.valid(doc.grok)) e.push('grok: not a clean Bot list');
   if (!isObj(doc.settings)) e.push('settings: not an object');
+  else {
+    USAGE_FLAGS.forEach(k => { if (doc.settings[k] !== undefined && typeof doc.settings[k] !== 'boolean') e.push(`settings.${k}: not a boolean`); });
+    if (doc.settings.usageProv !== undefined && !UC.valid(doc.settings.usageProv)) e.push('settings.usageProv: not a clean provider list');
+  }
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
   else Object.values(doc.workspaces).forEach((ws, i) => e.push(...groupErrors(ws, `workspaces#${i}`)));
   return e;
@@ -116,7 +125,13 @@ function migrate(raw) {
   if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixSnaps(fixStacks(fixRows(ws, `workspaces#${i}`), `workspaces#${i}`), `workspaces#${i}`, true)]));
   let grok;                                                    // (Grok bar) unusable entries dropped, the rest cut to the limits
   if (raw.grok != null) { const c = GB.clean(raw.grok); grok = c.grok; if (!c.same) fixes.push('grok: repaired'); }
-  const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings: raw.settings == null ? {} : raw.settings, workspaces };
+  let settings = raw.settings == null ? {} : raw.settings;
+  if (isObj(settings) && (USAGE_FLAGS.some(k => settings[k] !== undefined && typeof settings[k] !== 'boolean') || (settings.usageProv !== undefined && !UC.valid(settings.usageProv)))) {
+    settings = { ...settings };                              // (使用量表示) a bad flag: dropped (main decides again); a broken provider list: cleaned
+    USAGE_FLAGS.forEach(k => { if (settings[k] !== undefined && typeof settings[k] !== 'boolean') { delete settings[k]; fixes.push(`settings.${k}: not a boolean, dropped`); } });
+    if (settings.usageProv !== undefined && !UC.valid(settings.usageProv)) { settings.usageProv = UC.clean(settings.usageProv).prov; fixes.push('settings.usageProv: repaired'); }
+  }
+  const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings, workspaces };
   const errors = validate(doc);
   return errors.length ? fail('recoveryRequired', 'invalid', errors) : { ok: true, status: 'ready', doc, from, fixes };
 }

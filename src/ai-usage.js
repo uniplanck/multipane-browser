@@ -1,5 +1,9 @@
-// Read-only usage readouts for Codex (ChatGPT) and Claude Code, using the local CLI sign-ins.
-// Tokens are only held in memory for one request; they are never logged, stored or sent anywhere except the provider's own usage endpoint.
+// Read-only usage readouts for Codex (ChatGPT), Claude and Kimi. Where the numbers come from is main's decision (usage-config.js source()):
+//   'local' = explicit opt-in only (設定 > 使用量表示): the local CLI sign-ins (Codex CLI's ~/.codex/auth.json, Claude Code's Keychain item).
+//             Nothing here reads them unless that opt-in is on. Tokens are only held in memory for one request; they are never logged,
+//             stored or sent anywhere except the provider's own usage endpoint.
+//   'web'   = the provider's usage page read by main in the app's own login partition (usage-web.js; setup({ web })), saved as `<kind>:web`
+//   'off' / 'none' = nothing is read (not shown / not connected yet)
 const fs = require('fs'), os = require('os'), path = require('path');
 const { execFile } = require('child_process');
 
@@ -122,9 +126,14 @@ function openClaudeLoginInTerminal() {
 }
 
 // ---- fetch scheduling: shared on-disk state (no tokens), min interval, 429 back-off, single poller ----
-const MIN_GAP = 60000, FRESH = 180000, BACKOFF = [5, 10, 20, 30];   // minutes: 5 -> 10 -> 20 -> cap 30
+// state keys: 'codex' / 'claude' = the local sign-ins (as before), '<kind>:web' = the app's own login (a hidden page load: read less often)
+const MIN_GAP = 60000, FRESH = 180000, FRESH_WEB = 600000, BACKOFF = [5, 10, 20, 30];   // minutes: 5 -> 10 -> 20 -> cap 30
 const busy = {}, started = {};
 let onChange = null;
+let srcOf = () => 'off', webRead = null;                   // main: usage-config source(settings, kind) / the hidden-window reader (kind -> buckets)
+const keyOf = (k, src) => src === 'web' ? k + ':web' : k;
+const STUB = { off: '使用量表示はオフです', none: '未接続（ゲージをクリックしてログイン）', info: '' };
+const stub = (k, src) => ({ ok: false, src, err: STUB[src] ?? '', buckets: [], at: 0, nextAt: 0, ...(src === 'none' ? { needConnect: true } : {}), ...(src === 'off' ? { off: true } : {}) });
 const stateFile = () => { try { return path.join(require('electron').app.getPath('userData'), 'ai-usage-cache.json'); } catch { return null; } };
 const readAll = () => { const f = stateFile(); try { return f ? JSON.parse(fs.readFileSync(f, 'utf8')) : {}; } catch { return {}; } };
 const writeAll = o => { const f = stateFile(); if (!f) return; try { fs.writeFileSync(f + '.tmp', JSON.stringify(o)); fs.renameSync(f + '.tmp', f); } catch {} };
@@ -132,9 +141,11 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { re
 const stOf = k => { const s = readAll()[k]; return s && typeof s === 'object' ? s : {}; };
 const saveSt = (k, patch) => { const all = readAll(); all[k] = { ...(all[k] || {}), ...patch }; writeAll(all); return all[k]; };
 const clock = t => new Date(t).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit' });
-function view(k) {
+function view(k, src = k.endsWith(':web') ? 'web' : 'local') {
   const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
-  const base = { at: s.okAt || 0, nextAt: s.nextAt || 0 };
+  const base = { at: s.okAt || 0, nextAt: s.nextAt || 0, src };
+  // the page was read but says no number we can take (usage-web.js parse() null): no number at all, never the previous one
+  if (s.noNum && !s.err && !s.authErr) return { ok: false, noNum: true, err: '接続済み・数値を読めません', buckets: [], ...base };
   if (!has) return { ok: false, needLogin: !!s.authErr, err: s.err || 'まだ取得していません', buckets: [], ...base };
   const now = Date.now(), stale = !!(s.err || (s.okAt && now - s.okAt > 15 * 60000));
   let err = s.err || '';
@@ -147,22 +158,24 @@ const REAUTH_GAP = 10 * 60000;
 async function doFetch(k) {
   const now = Date.now(), prev = stOf(k);
   saveSt(k, { lastTry: now, leader: { pid: process.pid, at: now } });
-  const run = () => (k === 'codex' ? fetchCodex() : fetchClaude());
+  const web = k.endsWith(':web');
+  const run = () => (web ? (webRead ? webRead(k.slice(0, -4)) : Promise.reject(new Error('読み取りの準備ができていません'))) : k === 'codex' ? fetchCodex() : fetchClaude());
   try {
     let buckets;
     try { buckets = await run(); }
     catch (e) {
-      // expired / invalid Claude login: one silent refresh via the CLI, at most once per 10 min, never while rate-limited
+      // expired / invalid Claude login (local opt-in only): one silent refresh via the CLI, at most once per 10 min, never while rate-limited
       const limited = prev.nextAt && Date.now() < prev.nextAt;
       if (k === 'claude' && e && e.auth && !limited && Date.now() - (prev.refreshTry || 0) > REAUTH_GAP) {
         saveSt(k, { refreshTry: Date.now() });
         if (await claudeCliRefresh()) buckets = await run(); else throw e;
       } else throw e;
     }
-    saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false });
+    saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false, noNum: false });
   } catch (e) {
     const msg = String(e && e.message || e), fails = (prev.fails || 0) + 1;
-    if (e && e.status === 429) {
+    if (e && e.noNum) saveSt(k, { buckets: [], okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false, noNum: true });   // read, no number on the page
+    else if (e && e.status === 429) {
       const wait = Math.max((e.retryAfter || 0) * 1000, BACKOFF[Math.min(fails - 1, BACKOFF.length - 1)] * 60000);
       saveSt(k, { fails, nextAt: Date.now() + wait, err: msg + (e.retryAfter ? ` Retry-After ${e.retryAfter}s` : ' (Retry-Afterなし)') });
     } else if (e && e.auth) saveSt(k, { fails, err: msg, authErr: true });
@@ -170,21 +183,30 @@ async function doFetch(k) {
   }
   try { onChange && onChange(k); } catch {}
 }
-// force = explicit long-press only: skips the 60 s minimum interval (never the 429 back-off).
-async function get(k, force) {
+// force = explicit long-press / a sign-in just made only: skips the 60 s minimum interval (never the 429 back-off).
+// A lapsed web sign-in is not read again by itself (only forced: the gauge's click opens the login window, closing it reads once).
+// as = 'web': that source whatever the gauge uses now (main's check right after a sign-in in the login window)
+async function get(kind, force, as) {
+  const src = as === 'web' ? 'web' : srcOf(kind);
+  if (src !== 'local' && src !== 'web') return stub(kind, src);
+  const k = keyOf(kind, src), web = src === 'web';
   const now = Date.now();
   const first = !started[k]; started[k] = true;
   const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
-  const fresh = s.okAt && now - s.okAt < FRESH && !s.err;
-  const due = !fresh || force;
+  const fresh = s.okAt && now - s.okAt < (web ? FRESH_WEB : FRESH) && !s.err;
+  const due = (!fresh && !(web && s.authErr)) || force;
   const blocked = (s.nextAt && now < s.nextAt) || (!force && s.lastTry && now - s.lastTry < MIN_GAP) || (force && s.lastTry && now - s.lastTry < 5000);
   const other = s.leader && s.leader.pid !== process.pid && alive(s.leader.pid) && now - s.leader.at < 10 * 60000;   // another running instance is the poller
   if (due && !blocked && !other) {
-    if (!busy[k]) { const p = doFetch(k).finally(() => { delete busy[k]; }); busy[k] = p.then(() => view(k)); }
-    if (first && has) return view(k);   // right after a restart: show the saved value immediately, refresh in the background
+    if (!busy[k]) { const p = doFetch(k).finally(() => { delete busy[k]; }); busy[k] = p.then(() => view(k, src)); }
+    if (first && has) return view(k, src);   // right after a restart: show the saved value immediately, refresh in the background
     return busy[k];
   }
-  return view(k);
+  return view(k, src);
 }
-const peek = k => view(k);
-module.exports = { get, peek, claudeReauth, openClaudeLoginInTerminal, codexParse, claudeParse, setOnChange: f => { onChange = f; } };
+const peek = (kind, as) => { const src = as === 'web' ? 'web' : srcOf(kind); return src === 'local' || src === 'web' ? view(keyOf(kind, src), src) : stub(kind, src); };
+// 切断 / a new sign-in: the saved web reading of this kind is dropped (the local sign-in's entry stays as it was)
+const forget = kind => { const all = readAll(); if (all[kind + ':web']) { delete all[kind + ':web']; writeAll(all); } delete started[kind + ':web']; };
+// main: where each kind's numbers come from (usage-config.js source) and the hidden-window reader for 'web'
+function setup({ source, web }) { if (typeof source === 'function') srcOf = source; if (typeof web === 'function') webRead = web; }
+module.exports = { get, peek, forget, setup, claudeReauth, openClaudeLoginInTerminal, codexParse, claudeParse, setOnChange: f => { onChange = f; } };

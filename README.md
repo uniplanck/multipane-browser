@@ -26,10 +26,15 @@
 - **タブ**: 均等幅・名前編集・右クリックメニュー（閉じる / ペインごと閉じる / 複製 / 他を閉じる など）、コンパクトモード（⌘⇧C）
 - **保存レイアウト（ワークスペース）**: ペイン構成を名前付きで保存・ワンクリック切替
 - **一斉送信**（⌘⇧B / コマンドパレット）: 本文と送信先（Grokのペイン）を選んで「プレビュー」→ 送信先ごとの状態（送信可・起床待ち・スキップと理由）と件数を確認 →「このN件に送信」。下書き・添付・アップロード中・変換中・入力欄を確認できない・読み込み中・Botの会話を確認できない（返信の生成中を含む）ペインには送らず、入力欄の内容も変えない。スリープ中のペインは起こしてから同じ確認をする。送信先ごとに 未送信 / 準備中 / 送信開始 / 確認済み / 結果不明 / スキップ を表示し、「結果不明。チャットを確認してください」は自動で再送しない。取消は未送信分だけ
-- **使用量表示**: サブスクの使用量を「残 / 使」切替で表示（grok.comのログインセッションから読み取り専用で取得）
+- **使用量表示（右上のゲージ）**: 設定 >「使用量表示」>「使用量表示を表示」でON/OFF（**新規インストールは既定OFF**＝ゲージを出さず、何も読み取らない）。ONのときだけ、プロバイダごとに「ゲージを表示する」にしたものを表示（既定: ChatGPT / Codex・Claude・Grok。Kimi・Google Antigravity は手動でON）。ゲージは「残 / 使」切替（クリック）、ホバーで詳細、右クリックで表示する枠・接続・切断・使用量ページ
+  - **Claude / ChatGPT（Codex）/ Kimi**: 未接続のゲージ（または設定の「接続…」）をクリックすると、そのサービスのログイン用ウィンドウ（アプリ内・通常のWebログイン）が開く。ログインはプロバイダ別の専用領域（`persist:usage-claude` / `persist:usage-codex` / `persist:usage-kimi`）にだけ保存し、ペインのログイン（共有セッション）とは分ける（アプリは Cookie・トークンを読まない。その領域の権限はストレージのみ・ダウンロード不可）。ウィンドウを閉じると公式の使用量ページ（claude.ai/settings/usage、chatgpt.com/codex/settings/usage、kimi.com/membership/subscription。Kimi Code のコンソールは数値が読めたときだけ）を裏の非表示ウィンドウで1回開き、画面に表示されているテキストから「N% 使用 / 残り」・見出し（セッション / 5時間 / 週 / 月間クレジット / モデル別）・リセット時刻を読む。以後は約10分ごと（全プロバイダで同時1件）。ページが % を「使用」「残り」と明示していなければ数値は出さず「接続済み・数値を読めません」と使用量ページを開くリンクを表示（推定・補間はしない。前回の値も出さない）。ログイン画面に戻されたら「ログインが必要です」（クリックで再接続。自動では読み直さない）。「切断」はその専用領域の Cookie・ストレージ・キャッシュだけを消す
+  - **ローカルの認証情報（任意・既定OFF）**: 設定の「Claude Code の認証情報をKeychainから読む」「Codex CLI の auth.json を読む」をONにしたときだけ、従来どおり Keychain / `~/.codex/auth.json` のトークンで使用量を取得（ONの間はWeb接続より優先）。OFFの間は Keychain も auth.json も読まない
+  - **既存インストールの移行（1回だけ・`settings.usageV2`）**: `panes.json` があった（読めないファイルを含む）か、旧ゲージの設定（`usageBase` / `usageMargin`）があれば既存インストールとみなし、使用量表示をONにして上の2つのローカル読み取りをONにする（今までのゲージがそのまま出る。設定メニューにチェック済みで見える）。新規インストールはOFFのまま。2回目以降の起動では何もしない（ユーザーが変えた設定を戻さない）
+  - **Grok**: 従来どおり grok.com のペインのログインから読み取り専用で取得（使用量表示と Grok の「ゲージを表示する」がONのときだけ。一括更新・日付切替の再取得も同じ）。**Google Antigravity**: Webに使用量ページがないため数値は出さない（ログイン不要）。ホバーで「Antigravity IDE の 設定 → Models（CLI は /usage）で確認」と案内ページへのリンク
+  - 保存は `panes.json` の `settings.usageShow` / `usageV2` / `usageProv`（プロバイダごとの 表示・Web接続済み・ローカル読み取り の真偽値だけ。schema 1 のまま、古いバージョンは無視、壊れた値は読込時に修復）。判断は純関数 `src/usage-config.js`（既定・移行・取得元）と `src/usage-web.js`（ページ表・読み取りスクリプト・テキスト→数値）、テストは `node test/usage-config.test.js` / `node test/usage-web.test.js` / `node test/ai-usage-source.test.js`。ログイン後の各サービスの実際の画面は未確認のため、表示が読めないときは「数値を読めません」になる
 - **grokfix**: grok.com/bot の直リンクがサイドバーしか描画されない問題を、サイト内遷移で回避
 - 単一ペイン最大化（⌘\（JISは⌘¥も）・ヘッダーのダブルクリック）
-- 使用量ポップオーバー: ホバーで期限・残り・「今日使える目安」を表示（目安 = (残り% − 余裕) ÷ 日数、毎日9:00に日付切替）
+- 使用量ポップオーバー（Grok）: ホバーで期限・残り・「今日使える目安」を表示（目安 = (残り% − 余裕) ÷ 日数、毎日9:00に日付切替）
 - 一括更新（⌘⇧R）
 - **障害を区別した限定復旧**: 読み込みが遅いだけ（SLOW）・応答なし（HANG。遅いだけかもしれないので再読み込みしない）・読み込み失敗・ページの終了（renderer gone）を区別する。一時的な読み込み失敗（接続・DNS・タイムアウトなど）だけを自動で再読み込みし（1回目は約15秒後、2回目は約60秒後）、**1ペインにつき10分に2回まで**。永続的な失敗（証明書・ブロックなど）や ERR_ABORTED（意図したキャンセル）、サブフレームの失敗は再試行しない。ページが終了（クラッシュ等）したペインは自動では直さず、「停止」のプレースホルダーを出して手動の再読み込みを待つ（再読み込みで解除。入力中の下書きが戻らないことがある）。自動の再読み込みは入力保護（#11）とロードキュー（#31）を通る
 - 下端の余白: 最下段のペインの下の余白を 6px から 5px に変更（`BOTTOM_GAP`。ペイン間の隙間は変更なし）
@@ -77,7 +82,7 @@ npm run check:preload    # 生成物が最新か確認（変更しない。古�
   - 普段はメモリに最新1000件だけ（終了で消える）。設定 >「診断ログをファイルにも保存」か `MPB_DEBUG` のときだけ `userData/diagnostics/diag-0〜2.jsonl`（フォルダ0700・ファイル0600、1ファイル2MiB・3世代・7日）に非同期でまとめて書く。書けない（満杯・権限）ときも記録とアプリは止まらず、失敗は1回だけ記録して間隔をあけて再試行。オフにしてもファイルは消さず、整理するのはこのフォルダの `diag-N.jsonl` だけ（`pane-debug.log` は別物で、URLなどを含むことがある）
 
 ## English
-MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, subscription usage readout, and a workaround for grok.com bot deep links. Run with `npm install && npm start`. Not affiliated with xAI or X Corp.
+MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, an opt-in subscription usage readout (Claude / ChatGPT Codex / Kimi through an in-app sign-in kept in its own partition, Grok through its panes; off by default on a new install), and a workaround for grok.com bot deep links. Run with `npm install && npm start`. Not affiliated with xAI or X Corp.
 
 ## License
 MIT

@@ -44,7 +44,8 @@ const text = v => str(v, TEXT_MAX);
 const newName = v => text(v) && v.trim().slice(0, 60) !== '__proto__';  // a workspace name main stores as a key
 const axis = v => v === 'c' || v === 'r';
 const row = v => opt(v, x => int(x, 0, MAX_PANES));
-const kind = v => v === 'codex' || v === 'claude';
+const kind = v => v === 'codex' || v === 'claude' || v === 'kimi';           // a gauge whose numbers ai-usage.js reads (= usage-config WEB)
+const gauge = v => kind(v) || v === 'grok' || v === 'antigravity';           // any gauge of the bar (= usage-config PROVIDERS)
 const where = v => v === 'here' || v === 'new' || v === 'window';
 const gid = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v) && v !== '__proto__';   // a Bot / group of the Grok bar (its grok.com id)
 
@@ -143,8 +144,12 @@ const CHANNELS = {
   'gbot-menu': { roles: CHROME, shape: a => gid(a[0]), target: (a, w) => w.gbot(a[0]) },
   'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },
   'focus-other': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.winPane(a[0], a[1]) },   // a chip of a pane in another window
-  'usage-pop-show': { roles: CHROME, shape: ([r]) => obj(r) && num(r.right, -1e5, 1e5) && num(r.bottom, -1e5, 1e5) && (r.kind === 'grok' || kind(r.kind)) && opt(r.sel, text) },
+  'usage-pop-show': { roles: CHROME, shape: ([r]) => obj(r) && num(r.right, -1e5, 1e5) && num(r.bottom, -1e5, 1e5) && gauge(r.kind) && opt(r.sel, text) },
   'usage-win-menu': { roles: CHROME, shape: a => kind(a[0]) && opt(a[1], text) },
+  // 使用量表示: a gauge's click opens that provider's login window (main: only while the gauge is shown); the popover's link opens the
+  // provider's fixed usage / help page in the default browser (main has the URL; nothing but the kind comes from the page)
+  'usage-connect': { roles: UI, shape: a => kind(a[0]) },
+  'usage-open': { roles: UI, shape: a => kind(a[0]) || a[0] === 'antigravity' },
   'usage-pop-leave': { roles: UI },
   'usage-pop-keep': { roles: OVERLAY },
   'usage-pop-size': { roles: OVERLAY, shape: a => num(a[0], 0, 1e5) },
