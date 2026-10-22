@@ -10,8 +10,11 @@
 // (dock) A window / workspace may carry optional `stacks` next to `rows` (dock-layout.js: the panes stacked in each cell; no new schema, `rows`
 // still counts every pane, so an older app lays the stacked panes side by side). Stacks that do not fit the rows / the limits are dropped as a
 // repair (the rows alone are read); validate() refuses them like rows that do not match.
+// (Grok bar) An optional top-level `grok` (grok-bots.js: the Bot list read with the Grok button, the user's names, pins; no new schema, an older
+// app ignores it): never fatal, cleaned as a repair (the Grok button reads the list again); validate() wants exactly what grok-bots clean() keeps.
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
+const GB = require('./grok-bots');
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 
@@ -61,6 +64,7 @@ function validate(doc) {
       seen.add(f.url);
     });
   }
+  if (doc.grok !== undefined && !GB.valid(doc.grok)) e.push('grok: not a clean Bot list');
   if (!isObj(doc.settings)) e.push('settings: not an object');
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
   else Object.values(doc.workspaces).forEach((ws, i) => e.push(...groupErrors(ws, `workspaces#${i}`)));
@@ -110,7 +114,9 @@ function migrate(raw) {
   }
   let workspaces = raw.workspaces == null ? {} : raw.workspaces;
   if (isObj(workspaces)) workspaces = Object.fromEntries(Object.entries(workspaces).map(([n, ws], i) => [n, fixSnaps(fixStacks(fixRows(ws, `workspaces#${i}`), `workspaces#${i}`), `workspaces#${i}`, true)]));
-  const doc = { schema: SCHEMA_VERSION, windows, favorites, settings: raw.settings == null ? {} : raw.settings, workspaces };
+  let grok;                                                    // (Grok bar) unusable entries dropped, the rest cut to the limits
+  if (raw.grok != null) { const c = GB.clean(raw.grok); grok = c.grok; if (!c.same) fixes.push('grok: repaired'); }
+  const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings: raw.settings == null ? {} : raw.settings, workspaces };
   const errors = validate(doc);
   return errors.length ? fail('recoveryRequired', 'invalid', errors) : { ok: true, status: 'ready', doc, from, fixes };
 }
@@ -130,6 +136,7 @@ function serialize(doc) {
     layout: first.layout, focused: first.focused, urls: panes.map(s => s.url), panes, window: first.window,
     windows: doc.windows,
     favorites: doc.favorites,
+    ...(doc.grok ? { grok: doc.grok } : {}),
     settings: doc.settings, workspaces: doc.workspaces,
   }, null, 2);
 }

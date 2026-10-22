@@ -277,10 +277,55 @@ const onS = s => {
   }
 };
 mpb.onState(onS);
-const favs = $('#favs');
+// ---- お気に入りバー: [Grok button][pins][favorites = other URLs][the Bot list in grok.com's sections]. main reads the list (Grok button only) and
+// sends it on 'gbar' (G: pins / sections / busy / note); the bar is rebuilt only when that or the favorites change
+const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
+let G = null, gRev = 0, favKey = '';
+const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here';
+gbtn.onclick = () => { if (!(G && G.busy)) mpb.gbarRefresh(); };
+mpb.onGbar(v => {
+  G = v; gRev++;
+  gbtn.classList.toggle('busy', !!v.busy); gbtn.setAttribute('aria-busy', v.busy ? 'true' : 'false');
+  gbtn.title = v.busy ? 'Bot一覧を読み込み中…（grok.com を裏で開いています）' : `Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）${v.at ? `\n前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件` : ''}`;
+  gnote.textContent = v.busy ? '読み込み中…' : v.note || '';
+  renderFavs(S ? S.favorites || [] : []);
+});
+favs.addEventListener('wheel', e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { favs.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });   // the bar scrolls sideways
+function gIcon(b) {                                          // its icon (16 px round), or the first letter when there is none / it does not load
+  const l = document.createElement('span'); l.className = 'fic'; l.textContent = (Array.from(String(b.name).trim())[0] || '•').toUpperCase();
+  if (!b.icon) return l;
+  const im = document.createElement('img'); im.className = 'gic'; im.alt = ''; im.draggable = false; im.referrerPolicy = 'no-referrer';
+  im.addEventListener('error', () => im.replaceWith(l), { once: true }); im.src = b.icon;
+  return im;
+}
+function gbotBtn(b, pin) {
+  const el = document.createElement('button');
+  el.className = 'fav-btn gbot' + (pin ? ' gpin' : '') + (b.group ? ' grp' : '');
+  el.appendChild(gIcon(b));
+  el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(shortLabel(b.name, 10))}</span>${b.group ? '<span class="gmark">👥</span>' : ''}`);
+  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
+  el.onclick = e => mpb.gbotOpen(b.id, openWhere(e));
+  el.onauxclick = e => { if (e.button === 1) mpb.gbotOpen(b.id, 'new'); };
+  el.oncontextmenu = e => { e.preventDefault(); mpb.gbotMenu(b.id); };
+  if (pin) {                                                 // pins: drag one onto another to reorder (as the favorites)
+    el.draggable = true;
+    el.ondragstart = e => { e.dataTransfer.setData('text/x-mpb-gpin', b.id); el.classList.add('drag-src'); };
+    el.ondragend = () => el.classList.remove('drag-src');
+    el.ondragover = e => { if (e.dataTransfer.types.includes('text/x-mpb-gpin')) { e.preventDefault(); el.classList.add('drop-over'); } };
+    el.ondragleave = () => el.classList.remove('drop-over');
+    el.ondrop = e => { el.classList.remove('drop-over'); const from = e.dataTransfer.getData('text/x-mpb-gpin'); if (from) { e.preventDefault(); e.stopPropagation(); if (from !== b.id) mpb.gbotMove(from, b.id); } };
+  }
+  return el;
+}
+const mkEl = (cls, text) => { const e = document.createElement('span'); e.className = cls; if (text) e.textContent = text; return e; };
 function renderFavs(list) {
-  $('#fav-hint').style.display = list.length ? 'none' : '';
+  const key = JSON.stringify(list) + '|' + gRev;
+  if (key === favKey) return;
+  favKey = key;
+  const pins = G ? G.pins : [], secs = G ? G.sections : [];
+  $('#fav-hint').style.display = list.length || pins.length || secs.length ? 'none' : '';
   favs.innerHTML = '';
+  pins.forEach(b => favs.appendChild(gbotBtn(b, true)));
   list.forEach(f => {
     const b = document.createElement('button');
     b.className = 'fav-btn'; b.draggable = true;
@@ -297,6 +342,11 @@ function renderFavs(list) {
     b.ondragleave = () => b.classList.remove('drop-over');
     b.ondrop = e => { b.classList.remove('drop-over'); const from = Number(e.dataTransfer.getData('text/x-mpb-fav')); if (from) { e.preventDefault(); e.stopPropagation(); mpb.favMove(from, f.id); } };
     favs.appendChild(b);
+  });
+  if ((pins.length || list.length) && secs.length) favs.appendChild(mkEl('gsep'));
+  secs.forEach(s => {                                        // grok.com's own sections (the user's tabs), in the page's order
+    if (s.name) { const h = mkEl('gsec', shortLabel(s.name, 12)); h.title = s.name; favs.appendChild(h); }
+    s.items.forEach(b => favs.appendChild(gbotBtn(b, false)));
   });
 }
 // drop a link / URL text onto the favorites bar to add it

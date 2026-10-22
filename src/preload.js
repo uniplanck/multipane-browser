@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('mpb', {
   ready: () => send('ready'),
   favOpen: (id, where) => send('fav-open', id, where), favMenu: id => send('fav-menu', id),
   favMove: (a, b) => send('fav-move', a, b), favAdd: (url, label) => send('fav-add', String(url), String(label || '')),
+  gbarRefresh: () => send('gbar-refresh'), gbotOpen: (id, where) => send('gbot-open', id, where), gbotMenu: id => send('gbot-menu', id),   // Grok bar
+  gbotMove: (a, b) => send('gbot-move', a, b), onGbar: cb => listen('gbar', (_, v) => cb(v)),
   renamePane: id => send('rename-pane', id),
   chipMenu: id => send('chip-menu', id), wsMenu: () => send('ws-menu'),
   splitStart: (a, i, row) => send('split-start', a, i, row), syncCols: v => send('sync-cols', v), syncReset: () => send('sync-reset'), splitEnd: () => send('split-end'), splitReset: (a, row) => send('split-reset', a, row),

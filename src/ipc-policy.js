@@ -46,6 +46,7 @@ const axis = v => v === 'c' || v === 'r';
 const row = v => opt(v, x => int(x, 0, MAX_PANES));
 const kind = v => v === 'codex' || v === 'claude';
 const where = v => v === 'here' || v === 'new' || v === 'window';
+const gid = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v) && v !== '__proto__';   // a Bot / group of the Grok bar (its grok.com id)
 
 // pane:msgcount (pane-preload scanMessages -> readConversation): three counts; flags / quote / heading / fingerprint / method when the scan has them;
 // snap = the scan's snapshot (pane-rules SNAP): every item exactly one of its fixed codes + the bot id of the scanned path;
@@ -100,6 +101,7 @@ const ACTIONS = {
   'fav-open': { shape: x => id(x.id) && where(x.where), target: inFav },
   'fav-add': { shape: x => str(x.url, URL_MAX) && opt(x.label, text) },
   'fav-rename': { shape: x => id(x.id) && text(x.value), target: inFav },
+  'gbot-rename': { shape: x => gid(x.id) && text(x.value), target: (x, w) => w.gbot(x.id) },   // (Grok bar) '' = the page's own name again
   'recovery-restore': { shape: x => text(x.id) },
 };
 const action = a => obj(a[0]) && typeof a[0].type === 'string' && Object.hasOwn(ACTIONS, a[0].type) ? ACTIONS[a[0].type] : null;
@@ -135,6 +137,11 @@ const CHANNELS = {
   'fav-menu': { roles: CHROME, shape: a => id(a[0]), target: (a, w) => w.fav(a[0]) },
   'fav-move': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.fav(a[0]) && w.fav(a[1]) },
   'fav-add': { roles: CHROME, shape: a => str(a[0], URL_MAX) && text(a[1]) },
+  // Grok bar (grok-bots.js): read the list again (main runs one read at a time), open / menu of a listed Bot, a pin dragged onto another pin
+  'gbar-refresh': { roles: CHROME },
+  'gbot-open': { roles: CHROME, shape: a => gid(a[0]) && where(a[1]), target: (a, w) => w.gbot(a[0]) },
+  'gbot-menu': { roles: CHROME, shape: a => gid(a[0]), target: (a, w) => w.gbot(a[0]) },
+  'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },
   'focus-other': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.winPane(a[0], a[1]) },   // a chip of a pane in another window
   'usage-pop-show': { roles: CHROME, shape: ([r]) => obj(r) && num(r.right, -1e5, 1e5) && num(r.bottom, -1e5, 1e5) && (r.kind === 'grok' || kind(r.kind)) && opt(r.sel, text) },
   'usage-win-menu': { roles: CHROME, shape: a => kind(a[0]) && opt(a[1], text) },
@@ -154,6 +161,9 @@ const CHANNELS = {
   'pane:msgcount': { roles: ['pane', 'probe'], origin: GROK, shape: a => countOk(a[0]) },
   'pane:pc-opened': { roles: PANE, origin: GROK },
   'pane:pc-closed': { roles: PANE }, 'pane:msgmode-off': { roles: PANE }, 'pane:mutation': { roles: PANE },
+  // 画像クリックで最大化: the user clicked an image of a grok.com page; its viewer closed (true) / none was found (false)
+  'pane:img-opened': { roles: PANE, origin: GROK },
+  'pane:img-closed': { roles: PANE, shape: a => bool(a[0]) },
   'pane:interact': { roles: PANE }, 'pane:mouseup': { roles: PANE }, 'pane:typing': { roles: PANE },
   'pane:draft': { roles: PANE, shape: a => bool(a[0]) },
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
@@ -174,7 +184,7 @@ function docMatches(u, file) {
 const pageOk = (role, frame, origin) => Object.hasOwn(DOCS, role) ? docMatches(frame.url, DOCS[role]) : !origin || frame.origin === origin;
 
 // sender: { role: one of ROLES | null (not registered / destroyed), frame: { top, detached, url, origin } | null (gone) }
-// world:  { owned: sender's window (and pane) still open, pane(id), fav(id), ws(name), winPane(windowId, paneId) }
+// world:  { owned: sender's window (and pane) still open, pane(id), fav(id), gbot(id): a Bot of the Grok bar, ws(name), winPane(windowId, paneId) }
 function check(ch, sender, args, world) {
   const c = typeof ch === 'string' && Object.hasOwn(CHANNELS, ch) ? CHANNELS[ch] : null;
   if (!c) return 'E_CHANNEL';

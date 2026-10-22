@@ -402,6 +402,41 @@ function pcCheck() {
 function startPcObs() { try { new MutationObserver(() => { if (!pcObsT) pcObsT = setTimeout(pcCheck, 300); }).observe(document.documentElement, { childList: true, subtree: true }); } catch {} }
 if (document.documentElement) startPcObs(); else window.addEventListener('DOMContentLoaded', startPcObs);
 
+// ---- 画像クリックで最大化: the user's own click (isTrusted) on an image of a grok.com page -> main maximizes the pane like the cloud PC above
+// (settings.autoImg). Images only: at least IMG_MIN px both ways (no avatar / icon), not an svg file, not in the sidebar / header / nav / an avatar
+// stack / a dialog already open / a link (that opens a page, not a viewer). The click itself goes on to the page untouched (no preventDefault /
+// stopPropagation). The viewer the page opens
+// for it = a dialog that was not there before the click and holds an image / video; once it is gone, main gets img-closed(true) and gives back
+// only what it maximized itself. No viewer within IMG_WAIT ms: img-closed(false) (the pane stays maximized; ⌘\ / Esc / ⤡ as usual)
+const IMG_MIN = 48, IMG_WAIT = 1500, VIEWER = '[role="dialog"],[aria-modal="true"]';
+let imgT = null;
+function imgOf(t) {
+  if (!t || t.nodeType !== 1) return null;
+  if (t.tagName === 'IMG') return t;
+  const b = t.closest('button,[role="button"]'), im = b && b.querySelectorAll('img');   // a clickable wrapper over one image
+  return im && im.length === 1 ? im[0] : null;
+}
+function imgClicked(e) {
+  if (!e.isTrusted || e.button !== 0 || location.hostname !== 'grok.com') return;
+  const img = imgOf(e.target); if (!img) return;
+  if (img.closest(`[data-sidebar],header,nav,[data-testid="bot-avatar-stack"],a[href]:not([href^="#"]),${VIEWER}`)) return;
+  const r = img.getBoundingClientRect(), src = String(img.currentSrc || img.src || '');
+  if (r.width < IMG_MIN || r.height < IMG_MIN || /^data:image\/svg|\.svg(?:[?#]|$)/i.test(src)) return;
+  const before = new Set(document.querySelectorAll(VIEWER));
+  const viewer = () => [...document.querySelectorAll(VIEWER)].some(d => !before.has(d) && d.querySelector('img,video,canvas'));
+  ipcRenderer.send('pane:img-opened');
+  clearInterval(imgT);
+  let seen = false, waited = 0, gone = 0;
+  imgT = setInterval(() => {                 // a re-rendered viewer is still the viewer: closed only when none is there twice in a row
+    waited += 300;
+    if (viewer()) { seen = true; gone = 0; return; }
+    if (seen ? ++gone < 2 : waited < IMG_WAIT) return;
+    clearInterval(imgT); imgT = null;
+    ipcRenderer.send('pane:img-closed', seen);
+  }, 300);
+}
+window.addEventListener('click', e => { try { imgClicked(e); } catch {} }, true);
+
 // ---- per-pane zoom (main sends the zoom for THIS page; the site-wide zoom level stays at 100% so panes on the same site don't affect each other) ----
 // (#53) the legacy backend only: a pane on native isolated zoom (wc.setZoomFactor in main) never gets 'mpb:zoom', so this stays at 1 and does nothing
 

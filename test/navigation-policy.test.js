@@ -88,8 +88,11 @@ t('main.js: loadFile only for the bundled pages (index / overlay / new tab)', [.
 t('main.js: no hand-made host / scheme tests for links any more (AUTH_HOST, isGrokHost regex, protocol list)', !/AUTH_HOST|const isGrokHost|\(\^\|\\\.\)grok\\\.com\$|\^\(https\?\|mailto/.test(main));
 t('main.js: every window-open handler is decided by the policy (panes / popup: linkOpen; child windows: windowOpen child; probe / UI: deny)', (() => {
   const h = [...main.matchAll(/setWindowOpenHandler\(([^\n]*)/g)].map(m => m[1]);
-  return h.length === 5 && h.filter(s => s.startsWith('d => linkOpen(wc, d))')).length === 2 && h.some(s => /NAV\.windowOpen\(d\.url, \{ child: true \}\)/.test(s))
-    && h.some(s => s.startsWith("() => ({ action: 'deny' })")) && h.some(s => /navBlocked\('E_UI'/.test(s)); })());
+  return h.length === 6 && h.filter(s => s.startsWith('d => linkOpen(wc, d))')).length === 2 && h.some(s => /NAV\.windowOpen\(d\.url, \{ child: true \}\)/.test(s))
+    && h.filter(s => s.startsWith("() => ({ action: 'deny' })")).length === 2 && h.some(s => /navBlocked\('E_UI'/.test(s)); })());   // deny: the background check + the Grok bar's read
+t('main.js: the Grok bar\'s hidden read stays on grok.com (main-frame moves / redirects elsewhere stopped), opens no window, has no preload',
+  /wc\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\);/.test(fn('grokRefresh')) && /const stay = \(e, url\) => \{ if \(GB\.navOk\(url\)\) return; e\.preventDefault\(\);/.test(fn('grokRefresh'))
+  && /wc\.on\('will-navigate'[^\n]*stay\(e,/.test(fn('grokRefresh')) && /wc\.on\('will-redirect'[^\n]*stay\(e,/.test(fn('grokRefresh')) && !/preload:/.test(fn('grokRefresh')) && /appLoad\(wc, GB\.HOME\)/.test(fn('grokRefresh')));
 t('main.js: linkOpen asks the policy; mailto & co. need the click / key', /const r = NAV\.windowOpen\(d\.url, \{ popup: NAV\.popupFeatures\(d\.features\) \}\);/.test(fn('linkOpen')) && /openExt\(d\.url, 'system-handler', recentGesture\(wc\)\)/.test(fn('linkOpen')));
 t('main.js: guardNavigation covers will-navigate + will-redirect (main frame) through the policy', /wc\.on\('will-navigate'[\s\S]*NAV\.navigate\(url,[\s\S]*wc\.on\('will-redirect'[\s\S]*NAV\.redirect\(/.test(fn('guardNavigation')) && /openExt\(url, 'system-handler', recentGesture\(wc\)\)/.test(fn('guardNavigation')));
 t('main.js: guardNavigation on panes, the 承認Bot popup, the background check and windows pages open; the UI: guardUi', /setWindowOpenHandler\(d => linkOpen\(wc, d\)\);\s*guardNavigation\(wc\);/.test(main) && /guardNavigation\(wc, 'approve'\)/.test(main)
@@ -98,6 +101,6 @@ t('main.js: the click / key comes from the browser (input-event), not from the p
 t('main.js: a new / restored pane and the address bar refuse what appLoad refuses (new pane -> new tab; address bar -> nothing)', /url: paneStart\(normalize\(spec\.url\)\)/.test(fn('addPane')) && /if \(paneStart\(u\) !== u\) \{ navBlocked\([^}]*return; \}[^\n]*\n\s*guardRun\(/.test(fn('openIn')));
 t('main.js: the link menu opens only what the policy allows (explicit choice)', /enabled: panes\.length < MAX && !NAV\.appLoad\(params\.linkURL\)/.test(main) && /openExt\(params\.linkURL, 'link menu', true\)/.test(main) && /openExt\(paneUrl\(p\), 'pane menu'\)/.test(main));
 t('main.js: refusals record a fixed code only', /diag\.rec\('nav\.block', code, \{ p: p && p\.id \}, 60000\);/.test(fn('navBlocked')) && !/dlog\([^\n]*\burl\b/.test(fn('navBlocked')));
-t('main.js: the sandbox / isolation of every page main creates is unchanged', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 6 && !/sandbox: false|nodeIntegration: true|contextIsolation: false|webSecurity: false|allowRunningInsecureContent/.test(main));
+t('main.js: the sandbox / isolation of every page main creates is unchanged', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 7 && !/sandbox: false|nodeIntegration: true|contextIsolation: false|webSecurity: false|allowRunningInsecureContent/.test(main));
 
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

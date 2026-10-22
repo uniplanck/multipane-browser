@@ -90,7 +90,7 @@ const restorePlan = s => SS.plan(s, Date.now(), { enabled: settings.restoreSleep
 function stateDoc() {
   const wins = ctxs.map(c => c.snapshot());
   const first = wins[0] || lastClosedSnapshot || { layout: '2x2', focused: 0, panes: [] };
-  return { windows: wins.length ? wins : [first], favorites: favorites.map(({ url, label }) => ({ url, label })), settings, workspaces };
+  return { windows: wins.length ? wins : [first], favorites: favorites.map(({ url, label }) => ({ url, label })), grok, settings, workspaces };
 }
 function saveNow() { if (store?.writable()) store.save(stateDoc()); }
 const storeState = () => store ? { status: store.info().status, saveError: store.info().saveError } : null;
@@ -212,6 +212,7 @@ const ipcWorld = r => ({
   owned: !!r && ctxs.includes(r.ctx) && !r.ctx.win.isDestroyed() && (!r.pane || r.ctx.panes.includes(r.pane)),
   pane: id => !!r && r.ctx.panes.some(p => p.id === id),
   fav: id => favorites.some(f => f.id === id),
+  gbot: id => grok.bots.some(b => b.id === id),
   ws: name => Object.hasOwn(workspaces, name),
   winPane: (wid, pid) => ctxs.some(c => !c.win.isDestroyed() && c.win.id === wid && c.panes.some(p => p.id === pid)),
 });
@@ -240,6 +241,7 @@ function addFavorite(url, label) {
   url = String(url || '').trim(); if (!url) return;
   if (!/^[a-z]+:\/\//i.test(url)) url = normalize(url);
   if (url === NEWTAB) return;
+  { const r = GB.addUrl(grok, url); if (r.pinned) { grok = r.grok; gbChanged(); return; } }   // (Grok bar) a listed Bot / group: pinned next to the Grok button
   const ex = favorites.find(f => f.url === url);
   if (ex) { if (label) ex.label = label.slice(0, 60); }
   else favorites.push({ id: nextFavId++, url, label: String(label || '').slice(0, 60) || defaultFavLabel(url) });
@@ -250,6 +252,79 @@ function moveFavorite(a, b) {
   const i = favorites.findIndex(f => f.id === a), j = favorites.findIndex(f => f.id === b);
   if (i < 0 || j < 0 || i === j) return;
   const [f] = favorites.splice(i, 1); favorites.splice(j, 0, f); favChanged();
+}
+// ---- Grok ボタン＋Bot一覧 (grok-bots.js): the favorites bar shows every Grok Bot / group of the account in grok.com's own sections, read only when
+// the Grok button is pressed (one read at a time, all windows) from the sidebar of https://grok.com/ in a hidden window of the shared session;
+// kept in panes.json `grok` with the user's names and pins (pins also sit right of the Grok button). Ordinary favorites (other URLs) stay as
+// before, after the pins. The bar gets the list on its own channel ('gbar': icons are data URLs, too big for every state message)
+const GB = require('./grok-bots');
+let grok = GB.empty();
+let gbRun = false, gbNote = '', gbNoteTimer = null;          // a read running / its last outcome, shown a moment in the bar
+const gbView = () => ({ ...GB.view(grok), busy: gbRun, note: gbNote });
+function gbPush(c) { const v = gbView(); (c ? [c] : ctxs).forEach(k => { try { if (!k.win.isDestroyed()) k.win.webContents.send('gbar', v); } catch {} }); }
+function gbChanged() { save(); gbPush(); }
+function gbSay(text, ms) { gbNote = text; clearTimeout(gbNoteTimer); if (text) gbNoteTimer = setTimeout(() => { gbNote = ''; gbPush(); }, ms); gbPush(); }
+const gbJs = (wc, code, ms = 5000) => Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(GB.WORLD, [{ code }])), sleep(ms).then(() => null)]).catch(() => null);
+// The hidden window: grok.com only (a move anywhere else is stopped and ends the read: a sign-in page = AUTH), no window.open, muted, the
+// background-check role (storage only, no other permission / download, no preload so no IPC). Whatever it clicked is undone before it closes
+// (GB.RESTORE_JS: さらに表示 / the sidebar toggle / sidebarOpen exactly as found). A failure keeps the list as it was and says why in the bar.
+async function grokRefresh() {
+  if (gbRun) { diag.rec('gbar', 'BUSY'); return; }
+  if (quitting) return;
+  gbRun = true; gbSay('', 0);
+  const t0 = Date.now(), bw = new BrowserWindow({ show: false, width: 1400, height: 900, skipTaskbar: true, focusable: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, spellcheck: false } });
+  const wc = bw.webContents;
+  let rs = GB.start(t0), code = 'ERROR', bots = [], left = '', back = null, undone = false, m = null;
+  regWc(wc, 'probe', { ctx: null });
+  const stay = (e, url) => { if (GB.navOk(url)) return; e.preventDefault(); if (!left) left = String(url || '') || 'about:blank'; };
+  const undo = async () => { if (undone || !GB.touched(rs) || wc.isDestroyed()) return; undone = true; back = await gbJs(wc, GB.RESTORE_JS(rs), 4000); };
+  try {
+    wc.setAudioMuted(true); wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('will-navigate', (e, u) => { if (e.isMainFrame !== false) stay(e, typeof u === 'string' ? u : e.url); });
+    wc.on('will-redirect', (e, u, inPlace, isMain) => { if ((typeof e.isMainFrame === 'boolean' ? e.isMainFrame : isMain) === true) stay(e, typeof u === 'string' ? u : e.url); });
+    appLoad(wc, GB.HOME);
+    for (;;) {
+      await sleep(400);
+      if (wc.isDestroyed() || quitting || !ctxs.some(c => !c.win.isDestroyed())) { code = 'ABORT'; break; }   // quitting / the last window closed
+      const o = await gbJs(wc, GB.STATE_JS);
+      const d = GB.decide(rs, { ...(o && typeof o === 'object' ? o : { ready: false }), left }, Date.now()); rs = d.rs;
+      if (d.act === 'open') await gbJs(wc, GB.CLICK_JS('trigger'));
+      else if (d.act === 'more') await gbJs(wc, GB.CLICK_JS('more'));
+      else if (d.act === 'collect') { bots = GB.parse(o); code = bots.length ? 'OK' : 'EMPTY'; break; }
+      else if (d.act !== 'wait') { code = d.act; break; }
+    }
+    await undo();                                            // the shared sidebar state back first, then the icons
+    if (code === 'OK') bots = GB.withIcons(bots, await gbJs(wc, GB.ICONS_JS(bots.map(b => b.icon)), 6000));   // none in time: the image URLs as they are
+  } catch (e) { code = 'ERROR'; dlog('grok bar', 'read error', e && e.name); }
+  finally {
+    await undo().catch(() => {});
+    unregWc(r => r.wc === wc);
+    try { if (!bw.isDestroyed()) bw.destroy(); } catch {}
+    gbRun = false;
+  }
+  const restoreOk = !GB.touched(rs) || !!(back && back.ok);
+  if (!restoreOk) diag.rec('gbar', 'RESTORE_FAIL');
+  if (code === 'OK') {
+    m = GB.merge(grok, bots, Date.now());
+    const a = GB.absorbFavs(m.grok, favorites);              // a favorite that is a listed Bot's URL: now its pin
+    grok = a.grok; favorites = a.keep;
+    save(); broadcast();
+  }
+  diag.rec('gbar', code, { n: bots.length, ms: Date.now() - t0 });
+  dlog('grok bar', code, bots.length, Date.now() - t0 + 'ms', m ? `+${m.added} -${m.removed} ~${m.changed}` : '', restoreOk ? '' : 'sidebar state not confirmed back');
+  gbSay(GB.note(code, m) + (restoreOk ? '' : '・grok.com のサイドバーの開閉を戻せませんでした'), code === 'OK' && restoreOk ? 6000 : 12000);
+}
+// once: the favorites from before the Grok bar are kept in userData/favorites.backup-<日時>.json, then the bar starts empty (the Grok button
+// fills it). Only from a panes.json read as ready, and only once that file is written (a failed write: the favorites stay, tried at the next start)
+function gbMigrate() {
+  const b = GB.migration(favorites, new Date());
+  if (b.file) {
+    try { fs.writeFileSync(path.join(app.getPath('userData'), b.file), b.text, { flag: 'wx' }); }
+    catch (e) { dlog('grok bar', 'favorites backup failed', e.code || ''); return; }
+  }
+  favorites = []; settings.favGrokV1 = true; save();
+  diag.rec('gbar', 'MIGRATED', { n: b.n });
 }
 
 // ---- auto reload (through the input guard, #11: never while the page holds input; tried again on the next tick) ----
@@ -751,6 +826,15 @@ function setPcMax(p, on) {
   if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.pcMaxedPane = true; } else p.pcMaxedPane = false; }
   else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id) toggleMaximize(p.id); }
   p.view.webContents.send('mpb:pc', on);
+}
+// 画像クリックで最大化 (pane-preload img-opened / img-closed): maximized like the cloud PC (no size-cap CSS); p.imgMaxedPane = this maximized it (a pane
+// already maximized stays as it is). The viewer closed: given back only then; no viewer found: the flags go, the pane stays maximized
+function setImgMax(p, on, back = true) {
+  if (!p || p.view.webContents.isDestroyed() || on === !!p.imgMax) return;
+  dlog(`pane${p.id}`, 'imgmax', on, back);
+  p.imgMax = on;
+  if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.imgMaxedPane = true; } else p.imgMaxedPane = false; }
+  else { const mine = p.imgMaxedPane; p.imgMaxedPane = false; if (back && mine && maximizedId === p.id) toggleMaximize(p.id); }
 }
 function togglePc(id) { const p = byId(id ?? panes[focused]?.id); if (p && isBotUrl(p.view.webContents.getURL())) setPcMax(p, !p.pcMax); }
 const pcItem = p => ({ label: p.pcMax ? 'クラウドPCを元のサイズに戻す' : 'クラウドPCを最大化', accelerator: 'CmdOrCtrl+Shift+P', enabled: isBotUrl(p.view.webContents.getURL()), click: () => setPcMax(p, !p.pcMax) });
@@ -1715,7 +1799,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
   // the pane moved to another page by itself / by the user while a load of it waits (#31): that load was for the old page -> cancelled
   const urlMoved = () => { const t = lqView(p), u = wc.getURL(); if (t && t.state === 'wait' && t.url && !isBlankUrl(u) && !sameTarget(t.url, u)) lq.cancel(t.id, 'URL'); };
   wc.on('did-navigate', urlMoved); wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) urlMoved(); });
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); if (p.imgMax) setImgMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1878,6 +1962,7 @@ function handleKey(input, pane) {
     if (dock) { dockEnd('ESC'); return true; }                // (dock) a header drag: cancelled, nothing changes
     if (overlayOpen) { closeOverlay(); return true; }
     if (pane?.pcMax) return false;                         // Esc closes the page's computer view first (the pane then returns to normal)
+    if (pane?.imgMax) return false;                        // the same for an image viewer opened by a click (img-closed gives the pane back)
     if (maximizedId != null) { toggleMaximize(maximizedId); return true; }
     return false;
   }
@@ -2109,6 +2194,7 @@ function runAction(a) {
     case 'fav-add': closeOverlay(); addFavorite(String(a.url || ''), String(a.label || '')); break;
     case 'fav-add-current': { closeOverlay(); const p = panes[focused]; if (p && paneUrl(p)) addFavorite(paneUrl(p), p.name || displayTitle(p)); break; }
     case 'fav-rename': { const f = favorites.find(x => x.id === a.id); if (f) { f.label = String(a.value || '').slice(0, 60); favChanged(); } closeOverlay(); break; }
+    case 'gbot-rename': grok = GB.rename(grok, a.id, String(a.value || '')); gbChanged(); closeOverlay(); break;   // (Grok bar) '' = the page's own name
     case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: [{ url: String(a.url || '') }] }); break;
     case 'recovery-restore': closeOverlay(); recoveryRestore(win, String(a.id || '')); break;
     case 'recovery-fresh': closeOverlay(); recoveryFresh(win); break;
@@ -2399,13 +2485,17 @@ on('split-reset', (axis, row) => splitReset(String(axis), row == null ? undefine
 on('palette', () => openOverlay('palette'));
 on('overlay-run', a => runAction(a));
 on('overlay-close', () => closeOverlay());
-on('ready', () => { sendState(); sendMem(); });
+on('ready', () => { sendState(); sendMem(); gbPush(ctx); });
 on('save-retry', () => saveNow());
 on('recovery-open', () => { if (store && store.info().status !== 'ready' && !store.info().frozen) openOverlay('recovery', { recovery: recoveryInfo() }); });
 on('fav-open', (id, where) => openFavorite(id, where));
 on('fav-menu', id => favMenu(id));
 on('fav-move', (a, b) => moveFavorite(a, b));
 on('fav-add', (url, label) => addFavorite(String(url || ''), String(label || '')));
+on('gbar-refresh', () => grokRefresh());                     // (Grok bar) the Grok button; a read already running: nothing new
+on('gbot-open', (id, where) => openGrokBot(id, where));
+on('gbot-menu', id => gbotMenu(id));
+on('gbot-move', (a, b) => { const g = GB.movePin(grok, a, b); if (g !== grok) { grok = g; gbChanged(); } });
 on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id, value: p.name || chipDefault(p) }); });
 // from web content (pane-preload): p = the pane main registered for the sending page (checked by ipcGate: own window, top frame, payload)
 paneOn('pane:msgcount', (p, c) => onMsgCount(p, IPC.msgCount(c)));
@@ -2414,6 +2504,11 @@ paneOn('pane:pc-opened', p => {                              // the page's compu
   if (maximizedId === p.id || settings.autoPc !== false) setPcMax(p, true);   // already maximised: just relax the size caps (no maximize / restore dance)
 });
 paneOn('pane:pc-closed', p => { if (p.pcMax) setPcMax(p, false); });
+paneOn('pane:img-opened', p => {                             // the user clicked an image of a grok.com page (settings.autoImg)
+  if (p.imgMax || p.pcMax || p.sleeping || settings.autoImg === false || !/^https:\/\/grok\.com\//.test(p.view.webContents.getURL())) return;
+  setImgMax(p, true);
+});
+paneOn('pane:img-closed', (p, viewer) => { if (p.imgMax) setImgMax(p, false, viewer === true); });
 paneOn('pane:msgmode-off', p => resetCounts(p));
 paneOn('pane:mutation', p => markActivity(p, 'dom'));
 paneOn('pane:interact', p => { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); });
@@ -2423,8 +2518,8 @@ paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
 paneOn('pane:editing', (p, v) => { p.editing = !!v; });
 paneOn('pane:ime', (p, v) => { p.ime = v === true; });       // #11: no page is thrown away during an IME composition
 // ---- favorites (global list, opened in this window) ----
-function openFavorite(id, where = 'here') {
-  const f = favorites.find(x => x.id === id); if (!f) return;
+function openFavorite(id, where = 'here', f = favorites.find(x => x.id === id)) {   // f: (Grok bar) a listed Bot as a favorite
+  if (!f) return;
   if (where === 'window') { makeWindow({ layout: '2x2', panes: [{ url: f.url, name: f.label }] }); return; }
   if (where === 'new' || !panes[focused]) { newPane(f.url); const p = panes[panes.length - 1]; if (p && !p.name && f.label) { p.name = f.label; sendState(); } return; }
   openIn(panes[focused], f.url, 'NAVIGATE', p => {
@@ -2433,6 +2528,8 @@ function openFavorite(id, where = 'here') {
     focusPane(panes.indexOf(p), { clear: false });
   });
 }
+// (Grok bar) a listed Bot / group: the same as a favorite, named as the bar shows it
+function openGrokBot(id, where = 'here') { const b = grok.bots.find(x => x.id === id); if (b) openFavorite(null, where, { id: 'g:' + b.id, url: b.url, label: GB.nameOf(grok, b) }); }
 function favMenu(id) {
   const f = favorites.find(x => x.id === id); if (!f) return;
   Menu.buildFromTemplate([
@@ -2443,6 +2540,19 @@ function favMenu(id) {
     { label: '名前を変更…', click: () => openOverlay('fav-rename', { id, value: f.label }) },
     { label: 'URLをコピー', click: () => clipboard.writeText(f.url) },
     { label: 'お気に入りから削除', click: () => { favorites = favorites.filter(x => x.id !== id); favChanged(); } },
+  ]).popup({ window: win });
+}
+function gbotMenu(id) {                                       // (Grok bar) a Bot / group of the list or the pins
+  const b = grok.bots.find(x => x.id === id); if (!b) return;
+  const pinned = grok.pins.includes(id);
+  Menu.buildFromTemplate([
+    { label: '選択中のペインで開く', click: () => openGrokBot(id, 'here') },
+    { label: '新しいペインで開く', accelerator: isMac ? 'Cmd+Click' : 'Ctrl+Click', registerAccelerator: false, enabled: panes.length < MAX, click: () => openGrokBot(id, 'new') },
+    { label: '別ウィンドウで開く', accelerator: 'Shift+Click', registerAccelerator: false, click: () => openGrokBot(id, 'window') },
+    { type: 'separator' },
+    { label: '名前を変更…', click: () => openOverlay('gbot-rename', { id, value: GB.nameOf(grok, b), orig: b.name }) },
+    { label: 'お気に入り（Grokボタンの右にも表示）', type: 'checkbox', checked: pinned, click: () => { grok = GB.pin(grok, id, !pinned); gbChanged(); } },
+    { label: 'URLをコピー', click: () => clipboard.writeText(b.url) },
   ]).popup({ window: win });
 }
 function chipDefault(p) { return displayTitle(p); }
@@ -2598,6 +2708,7 @@ function buildMenu() {
       { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },
       { label: '診断ログをファイルにも保存（userData/diagnostics・2MiB×3・7日。会話・名前・URLは記録しない）', type: 'checkbox', checked: settings.diagPersist === true, click: m => { settings.diagPersist = m.checked; diagSync(); save(); } },
       { label: 'grok.com/bot を開き直す補正（直接読み込みで真っ黒になる対策）', type: 'checkbox', checked: settings.grokFix, click: m => { settings.grokFix = m.checked; save(); } },
+      { label: 'Grokの会話の画像をクリックしたらペインを最大化（画像を閉じると元に戻す）', type: 'checkbox', checked: settings.autoImg !== false, click: m => { settings.autoImg = m.checked; save(); } },
       { label: 'すべての未読をクリア', click: () => ctxs.forEach(k => k.clearAll()) } ] },
     { role: 'windowMenu', label: 'ウィンドウ' } ]));
 }
@@ -2646,7 +2757,7 @@ function diagEnv() {
   return { versions: { app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, os: process.getSystemVersion?.() },
     platform: process.platform, arch: process.arch, packaged: app.isPackaged,
     settings: { notifications: !!settings.notifications, sleepWaiting: settings.sleepWaiting !== false, sleepCheck: settings.sleepCheck !== false, grokFix: !!settings.grokFix,
-      autoPc: settings.autoPc !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
+      autoPc: settings.autoPc !== false, autoImg: settings.autoImg !== false, syncCols: settings.syncCols !== false, debugLog: !!settings.debugLog, diagPersist: settings.diagPersist === true, theme: settings.theme, memSaver: MEM_MODE,
       globalZoom: gZoom(), sleepMinutes: settings.sleepMinutes, usageMargin: settings.usageMargin, quietHours: NP.quietOf(settings.quietHours).on,
       restoreSleep: settings.restoreSleep === true, saveQuote: settings.saveQuote === true },
     counts: { windows: ctxs.length, panes: all.length, bots: all.filter(p => p.msgMode).length, sleeping: all.filter(p => p.sleeping).length },
@@ -2680,7 +2791,9 @@ function startup() {
   diagSync();                                              // files only when asked (settings.diagPersist / MPB_DEBUG)
   workspaces = st.workspaces;
   favorites = st.favorites.slice(0, 100).map(f => ({ id: nextFavId++, url: f.url, label: String(f.label || '').slice(0, 60) || defaultFavLabel(f.url) }));
-  let wins = st.windows;                                   // migrate() has already turned the old single-window format into windows[]
+  grok = st.grok || GB.empty();                            // (Grok bar) the list as last read (never read at startup: the Grok button does)
+  if (ld.status === 'ready' && !settings.favGrokV1) gbMigrate();   // once: the old favorites to their backup file, the bar starts empty
+  let wins = st.windows;                                  // migrate() has already turned the old single-window format into windows[]
   if (process.env.MPB_DEMO) {
     wins = [{ layout: '5x2', focused: 0, panes: ['https://example.com', 'https://www.wikipedia.org', 'https://news.ycombinator.com', 'https://github.com',
       'https://www.electronjs.org', 'https://developer.mozilla.org', 'https://www.python.org', 'https://nodejs.org',

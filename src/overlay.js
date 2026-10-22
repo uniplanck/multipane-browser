@@ -18,6 +18,7 @@ function build() {
   const v = q.value.trim(), out = [];
   if (mode === 'rename') return [{ sec: 'ペインの名前', label: v ? `「${v}」に変更` : '名前を消す（ページのタイトルを表示）', icon: '✎', act: { type: 'rename', id: ctx.id, value: v } }];
   if (mode === 'fav-rename') return [{ sec: 'お気に入りの名前', label: v ? `「${v}」に変更` : '名前を入力してください', icon: '★', act: v ? { type: 'fav-rename', id: ctx.id, value: v } : null }];
+  if (mode === 'gbot-rename') return [{ sec: 'Botの表示名（このバーだけ・grok.com は変わりません）', label: v && v !== ctx.orig ? `「${v}」に変更` : `元の名前「${ctx.orig || ''}」に戻す`, icon: '✦', act: { type: 'gbot-rename', id: ctx.id, value: v } }];
   if (mode === 'ws-rename') return [{ sec: `「${ctx.name}」の名前を変更`, label: v ? `「${v}」に変更` : '名前を入力してください', icon: '✎', act: v ? { type: 'ws-rename', name: ctx.name, value: v } : null }];
   if (mode === 'ws-save') return [{ sec: 'ワークスペースを保存', label: v ? `「${v}」として現在のペイン構成を保存` : '名前を入力してください', icon: '⧉', act: v ? { type: 'ws-save', value: v } : null }];
   if (mode === 'recovery') {                     // panes.json unreadable: every choice is confirmed again in main before anything is written
@@ -146,7 +147,7 @@ mpb.onOverlayOpen(o => {
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
   q.value = o.value || ''; q.readOnly = mode === 'recovery' || mode === 'diag';
-  q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
+  q.placeholder = mode === 'fav-rename' ? 'お気に入りの名前' : mode === 'gbot-rename' ? `表示名（空欄で元の名前「${o.orig || ''}」）` : mode === 'rename' ? 'ペインの名前（空欄でタイトル表示）' : mode === 'ws-save' ? 'ワークスペース名（例: 監視セットA）'
     : mode === 'recovery' ? '構成の復旧（↑↓で選んで ↵・選んだあとに確認があります）' : mode === 'diag' ? '診断（会話・名前・URLは記録していません）'
     : mode === 'queue' ? '対応キュー（↑↓で選んで ↵ でそのペインへ・文字で絞り込み・esc で閉じる）'
     : 'ペイン・コマンドを検索、URLやGrok BotのURLを貼り付け…';

@@ -169,7 +169,7 @@ const rankOf = tk => tk.data.rank;
     .map(m => [m[0], enclosing(m.index), main.slice(m.index - 60, m.index + 60).replace(/\s+/g, ' ')]);
   const ALLOWED = { loadInto: 'its definition', appLoad: 'its definition (#72)', reloadPane: 'the reload / wake task body', fixLoad: 'part of a running load, else its own task', navTo: 'another URL: a task (new tab: local)', goHist: 'inside its task',
     openLink: 'inside its task', addPane: 'a task (new tab: local)', probePane: 'the background check task (own window)', sleepPane: 'about:blank: an unload', ensureApprove: '承認Bot popup (not a pane)',
-    linkOpen: '承認Bot popup link (not a pane)', makeWindow: 'the window UI / overlay files' };
+    linkOpen: '承認Bot popup link (not a pane)', makeWindow: 'the window UI / overlay files', grokRefresh: 'Grok bar: its own hidden window (not a pane), one read at a time, by the Grok button only' };
   const stray = calls.filter(([, f]) => !Object.hasOwn(ALLOWED, f));
   t(`main: every load call is a queue task or a named exception (${calls.length} calls)`, calls.length >= 12 && stray.length === 0);
   if (stray.length) console.log('   stray:', stray);

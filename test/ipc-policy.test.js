@@ -21,8 +21,8 @@ const SND = {
   approve: { role: 'approve', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
 };
 const as = (who, f) => ({ ...SND[who], frame: { ...SND[who].frame, ...f } });
-// the sender's window: panes 1, 2, 3 / favorites 1, 2 / workspace 'A'; another window (id 2) has pane 7
-const world = (o = {}) => ({ owned: true, pane: i => [1, 2, 3].includes(i), fav: i => [1, 2].includes(i), ws: n => Object.hasOwn({ A: 1 }, n), winPane: (w, p) => w === 2 && p === 7, ...o });
+// the sender's window: panes 1, 2, 3 / favorites 1, 2 / Grok bar Bots 'b1', 'b-2' / workspace 'A'; another window (id 2) has pane 7
+const world = (o = {}) => ({ owned: true, pane: i => [1, 2, 3].includes(i), fav: i => [1, 2].includes(i), gbot: i => ['b1', 'b-2'].includes(i), ws: n => Object.hasOwn({ A: 1 }, n), winPane: (w, p) => w === 2 && p === 7, ...o });
 const W = world();
 const chk = (ch, who, args = [], w = W) => P.check(ch, typeof who === 'string' ? SND[who] : who, args, w);
 const ROLE_SENDER = { chrome: 'chrome', overlay: 'overlay', pane: 'pane', probe: 'probe', approve: 'approve' };
@@ -41,10 +41,11 @@ const SAMPLE = {
   'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
   'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []],
   'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]],
+  'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
-for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume']) SAMPLE[ch] = ['chrome', []];
-for (const ch of ['pane:pc-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
+for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh']) SAMPLE[ch] = ['chrome', []];
+for (const ch of ['pane:pc-opened', 'pane:img-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
 
 // ---- allowed ----
 t(`every channel has a sample (${CH.length} channels)`, CH.every(ch => SAMPLE[ch]) && Object.keys(SAMPLE).every(ch => P.CHANNELS[ch]));
@@ -84,6 +85,15 @@ t('msgcount only from https://grok.com', chk('pane:msgcount', 'pane', [COUNT]) =
   && ['https://example.com', 'http://grok.com', 'https://grok.com.evil.example', 'https://x.grok.com', 'https://grok.com:8443', 'null', 'file://', ''].every(o => chk('pane:msgcount', as('pane', { origin: o }), [COUNT]) === 'E_PAGE' && chk('pane:msgcount', as('probe', { origin: o }), [COUNT]) === 'E_PAGE'));
 t('newtab page cannot report counts', chk('pane:msgcount', 'newtab', [COUNT]) === 'E_PAGE');
 t('pc-opened only from grok.com', chk('pane:pc-opened', 'pane') === null && chk('pane:pc-opened', 'web') === 'E_PAGE');
+t('画像クリック: img-opened only from grok.com (not the newtab page / a probe); img-closed = a boolean only', chk('pane:img-opened', 'pane') === null && chk('pane:img-opened', 'web') === 'E_PAGE' && chk('pane:img-opened', 'newtab') === 'E_PAGE'
+  && chk('pane:img-opened', 'probe') === 'E_ROLE' && chk('pane:img-closed', 'pane', [false]) === null && [1, 'true', null, undefined, {}].every(v => chk('pane:img-closed', 'pane', [v]) === 'E_PAYLOAD'));
+t('Grok bar: open / menu / move / rename name a listed Bot by its grok.com id; where here / new / window; refresh has no payload; chrome only (rename: overlay)',
+  ['here', 'new', 'window'].every(w => chk('gbot-open', 'chrome', ['b1', w]) === null) && chk('gbot-open', 'chrome', ['b1', 'tab']) === 'E_PAYLOAD'
+  && ['', 'a/b', '../x', 'x'.repeat(65), '__proto__', 5, null, undefined].every(v => chk('gbot-menu', 'chrome', [v]) === 'E_PAYLOAD' && chk('gbot-open', 'chrome', [v, 'here']) === 'E_PAYLOAD')
+  && chk('gbot-menu', 'chrome', ['b3']) === 'E_TARGET' && chk('gbot-move', 'chrome', ['b1', 'b3']) === 'E_TARGET' && chk('gbot-move', 'chrome', ['b1']) === 'E_PAYLOAD'
+  && chk('overlay-run', 'overlay', [{ type: 'gbot-rename', id: 'b3', value: 'x' }]) === 'E_TARGET' && chk('overlay-run', 'overlay', [{ type: 'gbot-rename', id: 'b1', value: 5 }]) === 'E_PAYLOAD'
+  && chk('overlay-run', 'chrome', [{ type: 'gbot-rename', id: 'b1', value: 'x' }]) === 'E_ROLE'
+  && ['gbar-refresh', 'gbot-open', 'gbot-menu', 'gbot-move'].every(ch => ['overlay', 'pane', 'probe'].every(w => chk(ch, w, SAMPLE[ch][1]) === 'E_ROLE')));
 t('coarse pane signals from any site and the newtab page', ['pane:typing', 'pane:interact', 'pane:mouseup', 'pane:msgmode-off', 'pane:pc-closed'].every(ch => chk(ch, 'web') === null && chk(ch, 'newtab') === null) && chk('pane:draft', 'newtab', [false]) === null && chk('pane:editing', 'web', [true]) === null);
 // how Chromium and Node escape a packaged path can differ: compare as paths
 { const f = '/Applications/Multi Pane ブラウザ (1).app/Contents/Resources/app.asar/src/index.html';
@@ -142,6 +152,7 @@ const RUNS = [
   { type: 'bc-preview', text: 'こんにちは', ids: [1, 3] }, { type: 'bc-send', pid: 5 }, { type: 'bc-cancel', bid: 6 }, { type: 'bc-reset' }, { type: 'toggle-notifications' },
   { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },
   { type: 'queue-open' }, { type: 'queue-pick', id: 3, ref: 'bot:abc' }, { type: 'queue-pick', id: 1, ref: '' },
+  { type: 'gbot-rename', id: 'b1', value: '新しい名前' }, { type: 'gbot-rename', id: 'b-2', value: '' },
 ];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
 t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(a => a.type === k)));
@@ -185,7 +196,7 @@ t('favorites must exist', chk('fav-open', 'chrome', [3, 'here']) === 'E_TARGET' 
 t('focus-other: an existing window + its pane', chk('focus-other', 'chrome', [3, 7]) === 'E_TARGET' && chk('focus-other', 'chrome', [2, 1]) === 'E_TARGET');
 
 // ---- order and side effects: nothing about the world is looked at before the sender / frame / page / payload pass ----
-{ let looked = 0; const spy = world({ pane: () => { looked++; return true; }, fav: () => { looked++; return true; }, ws: () => { looked++; return true; }, winPane: () => { looked++; return true; } });
+{ let looked = 0; const spy = world({ pane: () => { looked++; return true; }, fav: () => { looked++; return true; }, gbot: () => { looked++; return true; }, ws: () => { looked++; return true; }, winPane: () => { looked++; return true; } });
   chk('reload', { role: null, frame: SND.chrome.frame }, [1], spy); chk('reload', 'pane', [1], spy); chk('reload', as('chrome', { top: false }), [1], spy); chk('reload', as('chrome', { url: 'https://e.com/' }), [1], spy);
   chk('reload', 'chrome', ['1'], spy); chk('overlay-run', 'chrome', [{ type: 'bc-preview', text: 'x', ids: [1] }], spy); chk('reload', 'chrome', [1], world({ owned: false, pane: spy.pane }));
   t('rejected before the target check: the world is never consulted', looked === 0);
@@ -277,6 +288,7 @@ const CALLS = [
   ['chrome', 'renamePane', 1], ['chrome', 'chipMenu', 2], ['chrome', 'syncReset'], ['chrome', 'syncCols', false], ['chrome', 'syncCols', true],
   ['chrome', 'splitStart', 'c', 1, undefined], ['chrome', 'splitStart', 'c', 2, 1], ['chrome', 'splitStart', 'r', 1, undefined], ['chrome', 'splitReset', 'c', undefined], ['chrome', 'splitReset', 'c', 0], ['chrome', 'splitEnd'],
   ['chrome', 'favOpen', 1, 'here'], ['chrome', 'favOpen', 2, 'new'], ['chrome', 'favOpen', 1, 'window'], ['chrome', 'favMenu', 1], ['chrome', 'favMove', 2, 1], ['chrome', 'favAdd', 'https://example.com/', ''],
+  ['chrome', 'gbarRefresh'], ['chrome', 'gbotOpen', 'b1', 'here'], ['chrome', 'gbotOpen', 'b-2', 'new'], ['chrome', 'gbotOpen', 'b1', 'window'], ['chrome', 'gbotMenu', 'b1'], ['chrome', 'gbotMove', 'b-2', 'b1'],
   ['chrome', 'ready'], ['chrome', 'usage', true], ['chrome', 'usage', undefined], ['chrome', 'usageDetail'], ['chrome', 'aiUsage', 'codex', false], ['chrome', 'aiUsage', 'claude', true], ['chrome', 'claudeAuthDialog'],
   ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
   ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'],

@@ -75,6 +75,10 @@ const QUEUE_CODES = ['OPEN', 'PICK', 'GONE', 'MOVED'];
 // the pane), nothing that way / nothing listed, a pane not on screen yet waited for, given the keyboard once shown / the wait dropped (the user
 // moved / too late), a key held back from the pane that kept the keyboard. Never a name / URL / key typed
 const PANE_NAV_CODES = ['MOVE', 'EDGE', 'QUEUE', 'NONE', 'WAIT', 'FOCUS', 'DROP', 'HELD'];
+// (Grok bar, grok-bots.js CODES; checked by test/grok-bots.test.js) a read of the Bot list (n = Bots, ms): read / not signed in / timeout / none
+// found / the ボット section closed / left grok.com / error / cut short / a press while one runs; the old favorites moved to their backup once (n);
+// the sidebar state not confirmed back. Never a name / URL / icon
+const GBAR_CODES = ['OK', 'AUTH', 'TIMEOUT', 'EMPTY', 'COLLAPSED', 'OFFSITE', 'ERROR', 'ABORT', 'BUSY', 'MIGRATED', 'RESTORE_FAIL'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -120,6 +124,7 @@ const EVENTS = {
   bcast: { ja: '一斉送信', r: BCAST_CODES },
   queue: { ja: '対応キュー', r: QUEUE_CODES },
   nav: { ja: 'キーボードでのペイン移動', r: PANE_NAV_CODES },
+  gbar: { ja: 'Bot一覧の読み込み（Grokボタン）', r: GBAR_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -192,9 +197,9 @@ function planRotation({ files, now, incoming = 0, fileMax = FILE_MAX, gens = GEN
 
 // ---- what the summary / screen may show about the app (everything else in `x` is ignored) ----
 const VER_RE = /^[0-9][0-9A-Za-z.+-]{0,31}$/;
-const SETTINGS = { notifications: 'bool', quietHours: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', restoreSleep: 'bool', saveQuote: 'bool', grokFix: 'bool', autoPc: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
+const SETTINGS = { notifications: 'bool', quietHours: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', restoreSleep: 'bool', saveQuote: 'bool', grokFix: 'bool', autoPc: 'bool', autoImg: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
   theme: ['system', 'dark', 'light'], memSaver: ['off', 'std', 'max'], globalZoom: [0.3, 3], sleepMinutes: [0, 1440], usageMargin: [0, 50] };
-const SET_JA = { notifications: '通知', quietHours: '静音時間', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', restoreSleep: 'スリープ状態の復元', saveQuote: '引用の保存', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化',
+const SET_JA = { notifications: '通知', quietHours: '静音時間', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', restoreSleep: 'スリープ状態の復元', saveQuote: '引用の保存', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化', autoImg: '画像クリックで最大化',
   syncCols: '列幅の同期', debugLog: 'デバッグログ', diagPersist: '診断ログのファイル保存', theme: 'テーマ', memSaver: 'メモリ節約', globalZoom: '全体ズーム', sleepMinutes: 'スリープまでの分', usageMargin: '使用量の余裕%' };
 const STORE_STATUS = ['ready', 'recoveryRequired', 'unsupportedVersion'];
 function safeEnv(x) {
@@ -377,5 +382,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, GBAR_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };
