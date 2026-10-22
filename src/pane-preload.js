@@ -447,6 +447,22 @@ function imgClicked(e) {
 }
 window.addEventListener('click', e => { try { imgClicked(e); } catch {} }, true);
 
+// ---- 画像ビューアの拡大: in grok.com's image viewer (the dialog an image click opens: caption, the picture, ‹ ›, thumbnails, close) the picture
+// fills the area the viewer leaves it (the flex-1 box between caption and thumbnails) with object-fit: contain - aspect kept, larger than its own
+// size if need be - instead of stopping at its own size / 95vw. CSS only, so it follows every window / pane resize. Only the <img> changes (its
+// box = the area; the shadow would frame the empty part, so none): caption, thumbnails, arrows and close keep their places. Tailwind names may
+// change: each rule needs two of three signs (zoom-out wrapper, flex-1 area, object-contain img) and is a rule of its own. Never matched: an image
+// outside a dialog (the chat), in a button / link (thumbnails), round (avatars), cropped (object-cover), or in a box holding several images.
+const IMG_DLG = ':is([role="dialog"],[aria-modal="true"])', IMG_AREA = 'div:not(:has(> img ~ img))';
+const IMG_PIC = 'img:not([class~="rounded-full"]):not([class~="object-cover"]):not(button img):not(a img):not([role="button"] img)';
+const IMG_VIEW_CSS = [
+  `${IMG_DLG} [class~="cursor-zoom-out"] ${IMG_AREA}[class~="flex-1"] > ${IMG_PIC}`,             // today: zoom-out wrapper + flex-1 area
+  `${IMG_DLG} [class~="cursor-zoom-out"] > ${IMG_AREA} > ${IMG_PIC}[class~="object-contain"]`,    // the area's classes changed
+  `${IMG_DLG} ${IMG_AREA}[class~="flex-1"] > ${IMG_PIC}[class~="object-contain"]`,                   // the wrapper's classes changed
+].map(s => `${s}{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;min-width:0 !important;min-height:0 !important;object-fit:contain !important;box-shadow:none !important}`).join('\n');
+function imgViewCss() { if (location.hostname === 'grok.com') { try { webFrame.insertCSS(IMG_VIEW_CSS); } catch {} } }
+if (document.documentElement) imgViewCss(); else window.addEventListener('DOMContentLoaded', imgViewCss);
+
 // ---- per-pane zoom (main sends the zoom for THIS page; the site-wide zoom level stays at 100% so panes on the same site don't affect each other) ----
 // (#53) the legacy backend only: a pane on native isolated zoom (wc.setZoomFactor in main) never gets 'mpb:zoom', so this stays at 1 and does nothing
 
