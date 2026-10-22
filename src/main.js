@@ -419,12 +419,13 @@ const APPROVE_URL = 'https://grok.com/bot/5674ea26-494f-49a0-acc1-f55ce2dd9c94';
 const APPROVE_KEEP_MS = 5 * 60000;                                                   // keep the hidden popup page this long for a fast reopen, then free its memory
 
 // ---- links opened from page content (bot output, citations, attachments, popups) ----
-// Like the native Grok Bot app: ordinary web links open in the default browser; grok.com links stay in the pane; sign-in / OAuth popups get a
-// real child window (window.opener keeps working); blob:/data: previews open in a child window; mailto/tel go to the system handler.
+// Like the native Grok Bot app: web links that leave grok.com open in the default browser (target=_blank, window.open, and a plain link on a
+// grok.com page); grok.com links stay in the pane; sign-in / OAuth popups (window features, a sign-in host) get a real child window
+// (window.opener keeps working); blob:/data: previews open in a child window; mailto goes to Mail; tel / sms / facetime / app schemes: nothing.
 // (#72) navigation-policy.js decides from the parsed URL (scheme + exact host / sub-domain, never a prefix of the text; no user name / password;
 // javascript: / file: / chrome: ... refused) and main acts on it - the same policy for window.open (linkOpen), same-frame moves and redirects
-// (guardNavigation; the UI never moves: guardUi), every loadURL main starts (appLoad) and shell.openExternal (openExt: http(s), or mailto / tel /
-// sms / facetime right after the user's click / key in that page or from main's own menu). A refused one does nothing (diagnostics: nav.block).
+// (guardNavigation; the UI never moves: guardUi), every loadURL main starts (appLoad) and shell.openExternal (openExt: http(s), or mailto right
+// after the user's click / key in that page or from main's own menu). A refused one does nothing (diagnostics: nav.block).
 const NAV = require('./navigation-policy');
 const PERM = require('./permission-policy');                 // site permissions / downloads (app.whenReady)
 const gestureAt = new Map();                                 // webContents id -> the user's last click / key in it ('input-event': from the browser, not the page)
@@ -458,7 +459,6 @@ function linkOpen(wc, d) {
     return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: owner, autoHideMenuBar: true, title: 'MultiPane Browser',
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } } };
   };
-  if (r.action === 'system') { openExt(d.url, 'system-handler', recentGesture(wc)); return { action: 'deny' }; }
   if (r.action === 'child') { dlog('link', 'popup / auth window'); return childWin(); }
   if (r.action === 'pane') {
     dlog('link', 'same-site, stays in pane', d.url.slice(0, 120));
@@ -466,7 +466,7 @@ function linkOpen(wc, d) {
     if (c) c.openLink(wc, d.url); else appLoad(wc, d.url);
     return { action: 'deny' };
   }
-  if (r.action === 'browser') openExt(d.url, 'external-browser');
+  if (r.action === 'browser') openExt(d.url, 'external-browser', recentGesture(wc));   // mailto: only right after a click / key
   else navBlocked(r.code, 'window.open', wc);
   return { action: 'deny' };
 }
@@ -479,18 +479,17 @@ app.on('web-contents-created', (e, c) => {            // child windows (auth pop
 });
 // (#72) where a page may take itself: will-navigate (a link without target / a script, main frame) and will-redirect (a server redirect of the
 // main frame); child frames and resources are not limited (CDNs, sign-in frames). kind: pane / approve / probe (the hidden check: no browser,
-// no system app) / popup (a window a page opened). A plain link inside a bot page that leaves grok.com must not replace the bot: the browser
+// no system app) / popup (a window a page opened). A plain link inside a grok.com page that leaves grok.com must not replace it: the browser
 function guardNavigation(wc, kind = 'pane') {
   const own = kind === 'pane' || kind === 'approve';
   if (own) trackGesture(wc);
   wc.on('will-navigate', (e, url0) => {
     if (e.isMainFrame === false) return;
     const url = typeof url0 === 'string' ? url0 : e.url;
-    const r = NAV.navigate(url, { bot: own && /^https:\/\/grok\.com\/bot\//.test(wc.getURL()) });
+    const r = NAV.navigate(url, { pane: own, from: wc.getURL() });
     if (r.action === 'allow') return;
     e.preventDefault();
-    if (r.action === 'system') openExt(url, 'system-handler', recentGesture(wc));
-    else if (r.action === 'browser') openExt(url, 'external-browser (same-frame link)');
+    if (r.action === 'browser') openExt(url, 'external-browser (same-frame link)', recentGesture(wc));   // mailto: only right after a click / key
     else navBlocked(r.code, 'navigate', wc);
   });
   wc.on('will-redirect', (e, url0, inPlace, isMain0) => {
@@ -1840,7 +1839,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
     const items = [];
     if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX && !NAV.appLoad(params.linkURL), click: () => addPane({ url: params.linkURL }) },   // (#72) web links only
       { label: 'リンクをコピー', click: () => clipboard.writeText(params.linkURL) },
-      { label: 'ブラウザで開く', enabled: !NAV.external(params.linkURL, { gesture: true }).code, click: () => openExt(params.linkURL, 'link menu', true) }, { type: 'separator' });   // http(s) / mailto ... (the user's own choice)
+      { label: 'ブラウザで開く', enabled: !NAV.external(params.linkURL, { gesture: true }).code, click: () => openExt(params.linkURL, 'link menu', true) }, { type: 'separator' });   // http(s) / mailto (the user's own choice)
     if (params.selectionText) items.push({ label: 'コピー', accelerator: 'CmdOrCtrl+C', registerAccelerator: false, click: () => params.isEditable ? wc.copy() : copySel(p) });   // this pane, as ⌘C (a field: the browser's copy)
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
     if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
@@ -3100,11 +3099,11 @@ function usageConnect(k) {
   const wc = bw.webContents;
   bw.on('page-title-updated', e => e.preventDefault());     // keeps saying what this window is for
   guardNavigation(wc, 'popup');                              // any sign-in site, web pages only
-  // a sign-in popup (Google / Apple / SSO) opens as a child window of the same partition; anything else: the default browser
+  // a sign-in popup (Google / Apple / SSO; any web page) opens as a child window of the same partition; anything else: refused
   wc.setWindowOpenHandler(d => {
-    const r = NAV.windowOpen(d.url, { popup: true });
+    const r = NAV.windowOpen(d.url, { login: true });
     if (r.action === 'child') return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: bw, autoHideMenuBar: true, webPreferences: wp } };
-    if (r.action === 'browser' || r.action === 'system') openExt(d.url, 'usage login link'); else navBlocked(r.code, 'usage login window.open');
+    if (r.action === 'browser') openExt(d.url, 'usage login link'); else navBlocked(r.code, 'usage login window.open');
     return { action: 'deny' };
   });
   bw.once('closed', () => { if (usageLogin[k] !== bw) return; delete usageLogin[k]; usageAfterLogin(k).catch(() => {}); });

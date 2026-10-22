@@ -1,7 +1,8 @@
 // node test/navigation-policy.test.js — navigation / link / external-open policy (#72): src/navigation-policy.js parses every URL and compares
-// scheme + hostname (exact or at a sub-domain boundary), refuses user names / passwords and dangerous schemes, and keeps today's routing for
-// ordinary links (grok.com in the pane, sign-in popups in a child window, other web links in the browser, mailto & co. to the Mac's app after
-// a click / key). Contract with the real main.js: every loadURL / shell.openExternal goes through the policy, the UI never moves.
+// scheme + hostname (exact or at a sub-domain boundary), refuses user names / passwords and dangerous schemes, and routes links: grok.com in
+// the pane, sign-in popups in a child window, every other web link (window.open / target=_blank / a plain link on a grok.com page) in the
+// default browser, mailto to Mail after a click / key, tel / sms / facetime / app schemes nowhere; the usage sign-in windows as before.
+// Contract with the real main.js: every loadURL / shell.openExternal goes through the policy, the UI never moves.
 const fs = require('fs'), path = require('path');
 const N = require('../src/navigation-policy');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
@@ -22,13 +23,22 @@ t('sign-in hosts: exact or sub-domain only', ['https://accounts.google.com/o', '
   && ['https://notgoogle.com/', 'https://google.com.evil.com/', 'https://evilx.com/', 'https://x.ai.evil.com/', 'https://googleusercontent.com.evil/', 'https://apple.co/'].every(u => !N.isAuthHost(new URL(u).hostname)));
 t('hostIn: no empty host, no non-string', !N.hostIn('', N.GROK) && !N.hostIn(undefined, N.GROK) && !N.hostIn(5, N.GROK) && !N.hostIn('com', N.GROK));
 t('parse: bad / empty / non-string / too long -> null', [undefined, null, '', 'not a url', 5, {}, 'https://' + 'a'.repeat(N.URL_MAX)].every(u => N.parse(u) === null) && N.parse('https://grok.com/').hostname === 'grok.com');
+t('grok page: a web page on grok.com / a sub-domain (any path), nothing else', ['https://grok.com/bot/abc', 'https://grok.com/', 'https://grok.com/c/1', 'http://grok.com/x', 'https://www.grok.com/project/1'].every(N.isGrokPage)
+  && ![...SPOOF, 'https://accounts.x.ai/sign-in', 'about:blank', 'file:///Users/x/newtab.html', 'blob:https://grok.com/1', 'https://u@grok.com/', '', null, undefined].some(N.isGrokPage));
 
-// ---- window.open / target=_blank of a pane / the 承認Bot popup: today's routing kept ----
-t('grok.com link -> this pane; with popup features -> child window', act(WO('https://grok.com/bot/abc'), 'pane') && act(WO('https://grok.com/c/1', { popup: true }), 'child') && act(WO('http://grok.com/'), 'pane') && act(WO('https://assets.grok.com/x.png'), 'pane'));
-t('sign-in hosts -> child window; any popup -> child window', act(WO('https://accounts.google.com/o/oauth2/auth?x=1'), 'child') && act(WO('https://x.com/i/oauth2/authorize'), 'child') && act(WO('https://example.com/', { popup: true }), 'child'));
+// ---- window.open / target=_blank of a pane / the 承認Bot popup ----
+const POP = { popup: true }, LOGIN = { login: true };
+t('grok.com link -> this pane; with popup features -> child window', act(WO('https://grok.com/bot/abc'), 'pane') && act(WO('https://grok.com/c/1', POP), 'child') && act(WO('http://grok.com/'), 'pane') && act(WO('https://assets.grok.com/x.png'), 'pane'));
+t('sign-in / OAuth popup (window features + a sign-in host) -> child window, as before', ['https://accounts.google.com/o/oauth2/auth?x=1', 'https://x.com/i/oauth2/authorize', 'https://appleid.apple.com/auth/authorize', 'https://accounts.x.ai/sign-in', 'https://checkout.stripe.com/c/pay']
+  .every(u => act(WO(u, POP), 'child')));
+t('a plain link (no window features) to a sign-in host -> the default browser (x.com post / google.com / github.com ...)', ['https://x.com/someone/status/1', 'https://www.google.com/search?q=x', 'https://github.com/a/b', 'https://support.apple.com/x', 'https://accounts.google.com/']
+  .every(u => act(WO(u), 'browser')));
+t('a popup with window features to any other site -> the default browser (no Electron window)', ['https://example.com/', 'https://www.facebook.com/sharer/sharer.php?u=x', ...SPOOF.filter(u => N.parse(u))].every(u => act(WO(u, POP), 'browser')));
 t('other web links -> the default browser', ['https://example.com/a?b=1#c', 'http://example.org/', 'https://en.wikipedia.org/wiki/Grok', ...SPOOF.filter(u => N.parse(u))].every(u => act(WO(u), 'browser')));
 t('blob: / data: / about:blank -> child window (previews), as before', act(WO('blob:https://grok.com/1234-5678'), 'child') && act(WO('data:image/png;base64,AAAA'), 'child') && act(WO('about:blank'), 'child'));
-t('mailto / tel / sms / facetime -> system (openExt checks the click / key)', ['mailto:a@example.com', 'tel:+81300000000', 'sms:+81300000000', 'facetime:a@example.com', 'MAILTO:a@example.com'].every(u => act(WO(u), 'system')));
+t('mailto -> browser (openExt: Mail, after a click / key), with or without popup features', ['mailto:a@example.com', 'MAILTO:a@example.com', 'mailto:a@b.c?subject=x'].every(u => act(WO(u), 'browser') && act(WO(u, POP), 'browser')));
+const NOAPP = ['tel:+81300000000', 'sms:+81300000000', 'facetime:a@example.com', 'facetime-audio:a@example.com', 'TEL:1', 'callto:1', 'skype:x', 'zoommtg://zoom.us/join', 'vscode://file/x', 'myapp://open'];
+t(`tel / sms / facetime / custom app schemes -> deny E_SCHEME (${NOAPP.length}), also as a popup`, NOAPP.every(u => act(WO(u), 'deny', 'E_SCHEME') && act(WO(u, POP), 'deny', 'E_SCHEME')));
 const DANGER = ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'javascript://%0aalert(1)', 'vbscript:msgbox(1)', 'file:///etc/passwd', 'file://localhost/Users/x/a.html', 'chrome://settings', 'chrome-extension://abc/x.html',
   'devtools://devtools/bundled/inspector.html', 'view-source:https://grok.com/', 'filesystem:https://grok.com/temporary/x', 'ftp://example.com/', 'ws://example.com/', 'wss://example.com/', 'about:config', 'about:blank#x',
   'smb://server/share', 'afp://server/share', 'x-apple.systempreferences:com.apple.preference', 'slack://open', 'itms-apps://x', 'mpb:newtab'];
@@ -41,13 +51,20 @@ t('a window a page opened: http(s) -> browser, everything else -> deny', act(WO(
   && act(WO('mailto:a@b.c', { child: true }), 'deny', 'E_SCHEME') && act(WO('about:blank', { child: true }), 'deny', 'E_SCHEME') && act(WO('data:text/html,x', { child: true }), 'deny', 'E_SCHEME')
   && act(WO('https://u:p@example.com/', { child: true }), 'deny', 'E_USERINFO') && act(WO('javascript:1', { child: true }), 'deny', 'E_SCHEME'));
 t('popup features: width / height / popup', N.popupFeatures('width=500,height=600') && N.popupFeatures('popup') && N.popupFeatures('left=1, height=2') && !N.popupFeatures('') && !N.popupFeatures('noopener') && !N.popupFeatures(undefined) && !N.popupFeatures('popupx=1'));
+t('usage sign-in window (persist:usage-*): any web popup -> its child window, as before (sign-in pages / Google / SSO)', ['https://claude.ai/login', 'https://accounts.google.com/o/oauth2/auth', 'https://auth.openai.com/x', 'https://sso.example.com/', 'https://grok.com/', 'about:blank', 'blob:https://claude.ai/1']
+  .every(u => act(WO(u, LOGIN), 'child')) && act(WO('mailto:a@b.c', LOGIN), 'browser') && ['tel:1', 'javascript:1', 'file:///x', 'myapp://x'].every(u => act(WO(u, LOGIN), 'deny', 'E_SCHEME')) && act(WO('https://u@claude.ai/', LOGIN), 'deny', 'E_USERINFO'));
 
 // ---- will-navigate (main frame) ----
-const BOT = { bot: true };
-t('bot page: grok.com / sign-in stay, other web links -> browser', act(NV('https://grok.com/bot/other', BOT), 'allow') && act(NV('https://accounts.x.ai/sign-in', BOT), 'allow') && act(NV('https://accounts.google.com/', BOT), 'allow')
-  && act(NV('https://example.com/', BOT), 'browser') && SPOOF.filter(u => N.parse(u)).every(u => act(NV(u, BOT), 'browser')));
-t('bot page: mailto & co. -> system; other pages: as before (left to Chromium, whose openExternal is refused)', ['mailto:a@b.c', 'tel:1', 'sms:1', 'facetime:a'].every(u => act(NV(u, BOT), 'system') && act(NV(u), 'allow')));
-t('any page: web links allowed (non-bot pages browse freely)', ['https://example.com/', 'http://example.org/x', 'https://grok.com/'].every(u => act(NV(u), 'allow')));
+const BOT = { pane: true, from: 'https://grok.com/bot/abc' }, GPAGES = ['https://grok.com/', 'https://grok.com/c/1', 'https://grok.com/project/x', 'https://grok.com/bot/abc?x=1#y'];
+t('grok.com page: grok.com / sign-in stay, other web links -> browser', act(NV('https://grok.com/bot/other', BOT), 'allow') && act(NV('https://accounts.x.ai/sign-in', BOT), 'allow') && act(NV('https://accounts.google.com/', BOT), 'allow')
+  && act(NV('https://checkout.stripe.com/c/pay', BOT), 'allow') && act(NV('https://example.com/', BOT), 'browser') && SPOOF.filter(u => N.parse(u)).every(u => act(NV(u, BOT), 'browser')));
+t('any grok.com page of a pane (home / chat / project, not only /bot/): a link that leaves grok.com -> browser', GPAGES.every(f => act(NV('https://example.com/', { pane: true, from: f }), 'browser') && act(NV('https://grok.com/bot/x', { pane: true, from: f }), 'allow')));
+t('pane: mailto -> browser (openExt: Mail after a click / key) on any page; tel / sms / facetime / app schemes -> deny', ['mailto:a@b.c', 'MAILTO:x@y.z'].every(u => act(NV(u, BOT), 'browser') && act(NV(u, { pane: true, from: 'https://example.com/' }), 'browser'))
+  && NOAPP.every(u => act(NV(u, BOT), 'deny', 'E_SCHEME') && act(NV(u, { pane: true }), 'deny', 'E_SCHEME')));
+t('background check / a window a page opened (usage sign-in too): no app (mailto / tel ... -> deny), web pages allowed', ['mailto:a@b.c', ...NOAPP].every(u => act(NV(u), 'deny', 'E_SCHEME'))
+  && ['https://example.com/', 'https://accounts.google.com/o', 'https://claude.ai/settings/usage', 'https://sso.example.com/saml'].every(u => act(NV(u), 'allow') && act(NV(u, { from: 'https://grok.com/' }), 'allow')));
+t('pane on a page the user opened elsewhere (address bar / new tab / sign-in page): web links allowed as before', ['https://example.com/', 'http://example.org/x', 'https://grok.com/'].every(u => act(NV(u), 'allow')
+  && ['https://example.com/', 'file:///Users/x/newtab.html', 'https://accounts.x.ai/sign-in', 'about:blank', ''].every(f => act(NV(u, { pane: true, from: f }), 'allow'))));
 t('blob: of the page / about:blank: allowed as before', act(NV('blob:https://grok.com/1'), 'allow') && act(NV('blob:https://grok.com/1', BOT), 'allow') && act(NV('about:blank', BOT), 'allow'));
 t('any page: dangerous schemes (file: from the new-tab page, data:, chrome: ...) -> deny E_SCHEME', [...DANGER, 'data:text/html,<b>x</b>'].every(u => act(NV(u), 'deny', 'E_SCHEME') && act(NV(u, BOT), 'deny', 'E_SCHEME')));
 t('any page: user name / password -> deny E_USERINFO (not even to the browser)', USERINFO.every(u => act(NV(u), 'deny', 'E_USERINFO') && act(NV(u, BOT), 'deny', 'E_USERINFO')));
@@ -63,16 +80,20 @@ t('app loads: javascript: / file: / data: / chrome: / other about: / user names 
   && USERINFO.every(u => N.appLoad(u) === 'E_USERINFO') && ['', 'grok.com', null].every(u => N.appLoad(u) === 'E_URL'));
 const EX = (u, g) => N.external(u, { gesture: g });
 t('external: http(s) -> the parsed URL (with or without a click)', EX('https://example.com/a b', false).href === 'https://example.com/a%20b' && EX('http://EXAMPLE.com/', false).href === 'http://example.com/' && EX('https://grok.com/', true).code === null);
-t('external: mailto / tel / sms / facetime only right after a click / key', ['mailto:a@b.c?subject=x y', 'tel:+81', 'sms:+81', 'facetime:a@b.c'].every(u => EX(u, true).code === null && EX(u, true).href.startsWith(u.slice(0, 4).toLowerCase()) && EX(u, false).code === 'E_GESTURE' && EX(u, false).href === '')
+t('external: mailto only right after a click / key', ['mailto:a@b.c?subject=x y', 'MAILTO:a@b.c'].every(u => EX(u, true).code === null && EX(u, true).href.startsWith('mailto:') && EX(u, false).code === 'E_GESTURE' && EX(u, false).href === '')
   && N.external('mailto:a@b.c').code === 'E_GESTURE' && N.external('mailto:a@b.c', { gesture: 1 }).code === 'E_GESTURE');
+t('external: only http / https / mailto - tel / sms / facetime / app schemes refused, even after a click', NOAPP.every(u => EX(u, true).code === 'E_SCHEME' && EX(u, true).href === '' && EX(u, false).code === 'E_SCHEME'));
+{ const OUT = ['https://example.com/', 'mailto:a@b.c', 'tel:1', 'file:///etc/passwd', 'javascript:alert(1)', 'myapp://x', 'data:text/html,x'];   // what a pane's link may hand to openExternal
+  const handed = u => [WO(u), WO(u, POP), NV(u, BOT)].some(r => r.action === 'browser') && !EX(u, true).code;
+  t('pane links reach openExternal only for http / https / mailto', J(OUT.filter(handed)) === J(['https://example.com/', 'mailto:a@b.c'])); }
 t('external: anything else refused, even after a click (file: would launch an app, smb: mounts a share)', [...DANGER, 'data:text/html,x', 'blob:https://grok.com/1', 'about:blank'].every(u => EX(u, true).code === 'E_SCHEME' && EX(u, true).href === '')
   && USERINFO.every(u => EX(u, true).code === 'E_USERINFO') && EX('', true).code === 'E_URL' && EX(undefined, true).code === 'E_URL');
 t('gesture: click / key types only; recent = within GESTURE_MS, not in the future', ['mouseDown', 'mouseUp', 'keyDown', 'rawKeyDown'].every(N.isGesture) && !['mouseMove', 'mouseWheel', 'char', 'keyUp', 'mouseEnter', undefined, 'toString'].some(N.isGesture)
   && N.gestureOk(1000, 1000) && N.gestureOk(1000, 1000 + N.GESTURE_MS) && !N.gestureOk(1000, 1001 + N.GESTURE_MS) && !N.gestureOk(2000, 1000) && !N.gestureOk(undefined, 1000) && !N.gestureOk(0, 10) && !N.gestureOk(NaN, 1));
 t('codes: every result code is a known one with a short Japanese reason', Object.entries(N.REJECT).every(([k, v]) => /^E_[A-Z]+$/.test(k) && typeof v === 'string' && v.length <= 30 && /[぀-ヿ一-鿿]/.test(v)));
 { const all = [];
-  for (const u of [...SPOOF, ...DANGER, ...USERINFO, ...APP_OK, '', 'mailto:a@b.c', 'data:x,y']) for (const o of [{}, BOT, { ui: true }, { popup: true }, { child: true }]) {
-    all.push(WO(u, o).code, NV(u, o).code, N.redirect(u), N.appLoad(u), N.external(u, { gesture: !!o.bot }).code); }
+  for (const u of [...SPOOF, ...DANGER, ...USERINFO, ...APP_OK, ...NOAPP, '', 'mailto:a@b.c', 'data:x,y']) for (const o of [{}, BOT, { ui: true }, POP, LOGIN, { child: true }]) {
+    all.push(WO(u, o).code, NV(u, o).code, N.redirect(u), N.appLoad(u), N.external(u, { gesture: !!o.pane }).code); }
   const seen = new Set(all.filter(Boolean));
   t('results are null or a known code (never a URL)', all.every(c => c === null || Object.hasOwn(N.REJECT, c)));
   t(`every reject code is reachable (${[...seen].sort().join(' ')})`, Object.keys(N.REJECT).every(k => seen.has(k))); }
@@ -90,15 +111,18 @@ t('main.js: every window-open handler is decided by the policy (panes / popup: l
   const h = [...main.matchAll(/setWindowOpenHandler\(([^\n]*)/g)].map(m => m[1]);
   return h.length === 8 && h.filter(s => s.startsWith('d => linkOpen(wc, d))')).length === 2 && h.some(s => /NAV\.windowOpen\(d\.url, \{ child: true \}\)/.test(s))
     && h.filter(s => s.startsWith("() => ({ action: 'deny' })")).length === 3 && h.some(s => /navBlocked\('E_UI'/.test(s))   // deny: the background check + the Grok bar's read + the usage reader
-    && /wc\.setWindowOpenHandler\(d => \{\s*const r = NAV\.windowOpen\(d\.url, \{ popup: true \}\);/.test(fn('usageConnect')); })());   // the usage login window: sign-in popups as child windows
+    && /wc\.setWindowOpenHandler\(d => \{\s*const r = NAV\.windowOpen\(d\.url, \{ login: true \}\);/.test(fn('usageConnect')); })());   // the usage login window: sign-in popups as child windows
 t('main.js: the usage display\'s login window and hidden reader go through guardNavigation + appLoad, the reader opens no window and has no preload',
   /guardNavigation\(wc, 'popup'\)/.test(fn('usageConnect')) && /appLoad\(wc, P\.pages\[0\]\)/.test(fn('usageConnect')) && /guardNavigation\(wc, 'probe'\)/.test(fn('usageWebReadNow'))
   && /wc\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\);/.test(fn('usageWebReadNow')) && /appLoad\(wc, url\)/.test(fn('usagePage')) && !/preload:/.test(fn('usageWebReadNow') + fn('usageConnect')));
 t('main.js: the Grok bar\'s hidden read stays on grok.com (main-frame moves / redirects elsewhere stopped), opens no window, has no preload',
   /wc\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\);/.test(fn('grokRefresh')) && /const stay = \(e, url\) => \{ if \(GB\.navOk\(url\)\) return; e\.preventDefault\(\);/.test(fn('grokRefresh'))
   && /wc\.on\('will-navigate'[^\n]*stay\(e,/.test(fn('grokRefresh')) && /wc\.on\('will-redirect'[^\n]*stay\(e,/.test(fn('grokRefresh')) && !/preload:/.test(fn('grokRefresh')) && /appLoad\(wc, GB\.HOME\)/.test(fn('grokRefresh')));
-t('main.js: linkOpen asks the policy; mailto & co. need the click / key', /const r = NAV\.windowOpen\(d\.url, \{ popup: NAV\.popupFeatures\(d\.features\) \}\);/.test(fn('linkOpen')) && /openExt\(d\.url, 'system-handler', recentGesture\(wc\)\)/.test(fn('linkOpen')));
-t('main.js: guardNavigation covers will-navigate + will-redirect (main frame) through the policy', /wc\.on\('will-navigate'[\s\S]*NAV\.navigate\(url,[\s\S]*wc\.on\('will-redirect'[\s\S]*NAV\.redirect\(/.test(fn('guardNavigation')) && /openExt\(url, 'system-handler', recentGesture\(wc\)\)/.test(fn('guardNavigation')));
+t('main.js: linkOpen asks the policy and follows it (browser: openExt with the click / key for mailto; no window of its own for other sites)', /const r = NAV\.windowOpen\(d\.url, \{ popup: NAV\.popupFeatures\(d\.features\) \}\);/.test(fn('linkOpen'))
+  && /if \(r\.action === 'browser'\) openExt\(d\.url, 'external-browser', recentGesture\(wc\)\);/.test(fn('linkOpen')) && count(fn('linkOpen'), /return childWin\(\)/g) === 1 && /if \(r\.action === 'child'\) \{[^}]*return childWin\(\); \}/.test(fn('linkOpen'))
+  && !/'system'/.test(fn('linkOpen') + fn('guardNavigation') + fn('usageConnect')));
+t('main.js: guardNavigation covers will-navigate + will-redirect (main frame) through the policy, with the page it is on', /wc\.on\('will-navigate'[\s\S]*NAV\.navigate\(url, \{ pane: own, from: wc\.getURL\(\) \}\)[\s\S]*wc\.on\('will-redirect'[\s\S]*NAV\.redirect\(/.test(fn('guardNavigation'))
+  && /if \(r\.action === 'allow'\) return;\s*e\.preventDefault\(\);\s*if \(r\.action === 'browser'\) openExt\(url, '[^']+', recentGesture\(wc\)\);/.test(fn('guardNavigation')) && /const own = kind === 'pane' \|\| kind === 'approve';/.test(fn('guardNavigation')));
 t('main.js: guardNavigation on panes, the 承認Bot popup, the background check and windows pages open; the UI: guardUi', /setWindowOpenHandler\(d => linkOpen\(wc, d\)\);\s*guardNavigation\(wc\);/.test(main) && /guardNavigation\(wc, 'approve'\)/.test(main)
   && /guardNavigation\(wc, 'probe'\)/.test(fn('probePane')) && /guardNavigation\(cw, 'popup'\)/.test(main) && /guardUi\(win\.webContents\)/.test(main) && /guardUi\(overlay\.webContents\)/.test(main));
 t('main.js: the click / key comes from the browser (input-event), not from the page', /wc\.on\('input-event', \(e, i\) => \{ if \(NAV\.isGesture\(i && i\.type\)\) gestureAt\.set\(id, Date\.now\(\)\); \}\);/.test(fn('trackGesture')) && !/gestureAt\.set/.test(main.replace(fn('trackGesture'), '')));
