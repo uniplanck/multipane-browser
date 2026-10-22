@@ -15,10 +15,13 @@
 // (使用量表示) settings.usageShow / usageV2 (booleans) and settings.usageProv (usage-config.js: providers × on / web / local): optional, no new
 // schema (a file without them = before the redesign; main migrates it once). A non-boolean flag is dropped, a broken usageProv cleaned, as a
 // repair; validate() wants booleans and exactly what usage-config clean() keeps. Other settings are not looked at (as before).
+// (Grok bar 表示モード) settings.gbarMode (gbar-mode.js: 'normal' / 'semi' / 'compact'): optional, no new schema (none = 通常). Anything else is
+// repaired to 'normal'; validate() wants one of the modes.
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
 const GB = require('./grok-bots');
 const UC = require('./usage-config');
+const GM = require('./gbar-mode');
 const USAGE_FLAGS = ['usageShow', 'usageV2'];
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
@@ -74,6 +77,7 @@ function validate(doc) {
   else {
     USAGE_FLAGS.forEach(k => { if (doc.settings[k] !== undefined && typeof doc.settings[k] !== 'boolean') e.push(`settings.${k}: not a boolean`); });
     if (doc.settings.usageProv !== undefined && !UC.valid(doc.settings.usageProv)) e.push('settings.usageProv: not a clean provider list');
+    if (doc.settings.gbarMode !== undefined && !GM.isMode(doc.settings.gbarMode)) e.push('settings.gbarMode: not a mode');
   }
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
   else Object.values(doc.workspaces).forEach((ws, i) => e.push(...groupErrors(ws, `workspaces#${i}`)));
@@ -130,6 +134,9 @@ function migrate(raw) {
     settings = { ...settings };                              // (使用量表示) a bad flag: dropped (main decides again); a broken provider list: cleaned
     USAGE_FLAGS.forEach(k => { if (settings[k] !== undefined && typeof settings[k] !== 'boolean') { delete settings[k]; fixes.push(`settings.${k}: not a boolean, dropped`); } });
     if (settings.usageProv !== undefined && !UC.valid(settings.usageProv)) { settings.usageProv = UC.clean(settings.usageProv).prov; fixes.push('settings.usageProv: repaired'); }
+  }
+  if (isObj(settings) && settings.gbarMode !== undefined && !GM.isMode(settings.gbarMode)) {   // (表示モード) unknown: back to 通常
+    settings = { ...settings, gbarMode: 'normal' }; fixes.push('settings.gbarMode: not a mode, set to normal');
   }
   const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings, workspaces };
   const errors = validate(doc);

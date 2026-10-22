@@ -278,20 +278,25 @@ const onS = s => {
 };
 mpb.onState(onS);
 // ---- お気に入りバー: [Grok button][pins][favorites = other URLs][the Bot list in grok.com's sections]. main reads the list (Grok button only) and
-// sends it on 'gbar' (G: pins / sections / busy / note); the bar is rebuilt only when that or the favorites change
+// sends it on 'gbar' (G: pins / sections / busy / note / mode); the bar is rebuilt only when that or the favorites change.
+// 表示モード (gbar-mode.js; main keeps it): a right-click on the Grok button takes the next one, 通常 → セミコンパクト → コンパクト → 通常
 const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
-let G = null, gRev = 0, favKey = '';
+let G = null, gRev = 0, favKey = '', gMode = 'normal';
 const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here';
+// a name as the mode shows it: 通常 = as before (up to max columns), セミコンパクト = 4 units (コンパクト: no name, see gbotBtn / renderFavs)
+const gLabel = (s, max) => (gMode === 'semi' ? GbarMode.truncate(s) : shortLabel(s, max));
 gbtn.onclick = () => { if (!(G && G.busy)) mpb.gbarRefresh(); };
+gbtn.oncontextmenu = e => { e.preventDefault(); mpb.gbarMode(); };
 mpb.onGbar(v => {
-  G = v; gRev++;
+  G = v; gRev++; gMode = GbarMode.normMode(v.mode);
   gbtn.classList.toggle('busy', !!v.busy); gbtn.setAttribute('aria-busy', v.busy ? 'true' : 'false');
-  gbtn.title = v.busy ? 'Bot一覧を読み込み中…（grok.com を裏で開いています）' : `Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）${v.at ? `\n前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件` : ''}`;
+  gbtn.title = (v.busy ? 'Bot一覧を読み込み中…（grok.com を裏で開いています）' : `Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）${v.at ? `\n前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件` : ''}`)
+    + `\n右クリック: 表示を切替（${GbarMode.LABEL[gMode]} → ${GbarMode.LABEL[GbarMode.nextMode(gMode)]}）`;
   gnote.textContent = v.busy ? '読み込み中…' : v.note || '';
   renderFavs(S ? S.favorites || [] : []);
 });
 function gIcon(b) {                                          // its icon (16 px round), or the first letter when there is none / it does not load
-  const l = document.createElement('span'); l.className = 'fic'; l.textContent = (Array.from(String(b.name).trim())[0] || '•').toUpperCase();
+  const l = document.createElement('span'); l.className = 'fic'; l.textContent = GbarMode.initial(b.name);   // a whole character (emoji, marks)
   if (!b.icon) return l;
   const im = document.createElement('img'); im.className = 'gic'; im.alt = ''; im.draggable = false; im.referrerPolicy = 'no-referrer';
   im.addEventListener('error', () => im.replaceWith(l), { once: true }); im.src = b.icon;
@@ -301,7 +306,7 @@ function gbotBtn(b, pin) {
   const el = document.createElement('button');
   el.className = 'fav-btn gbot' + (pin ? ' gpin' : '') + (b.group ? ' grp' : '');
   el.appendChild(gIcon(b));
-  el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(shortLabel(b.name, 10))}</span>${b.group ? '<span class="gmark">👥</span>' : ''}`);
+  if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>${b.group ? '<span class="gmark">👥</span>' : ''}`);   // コンパクト: the icon only
   el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
   el.onclick = e => mpb.gbotOpen(b.id, openWhere(e));
   el.onauxclick = e => { if (e.button === 1) mpb.gbotOpen(b.id, 'new'); };
@@ -367,6 +372,7 @@ function renderFavs(list) {
   favKey = key;
   const pins = G ? G.pins : [], secs = G ? G.sections : [];
   $('#fav-hint').style.display = list.length || pins.length || secs.length ? 'none' : '';
+  favs.classList.toggle('gm-semi', gMode === 'semi'); favs.classList.toggle('gm-compact', gMode === 'compact');   // (表示モード) before anything is measured
   favs.innerHTML = '';
   pins.forEach(b => favs.appendChild(gbotBtn(b, true)));
   const els = [], keys = [], sec = [];                       // the paged items: favorites (no section), then each section's Bots
@@ -374,8 +380,8 @@ function renderFavs(list) {
     const b = document.createElement('button');
     b.className = 'fav-btn'; b.draggable = true;
     let host = ''; try { host = new URL(f.url).hostname; } catch {}
-    const isBot = /grok\.com$/.test(host) && /\/bot\//.test(f.url);
-    b.innerHTML = `<span class="flabel">${esc(shortLabel(f.label || host))}</span>`;
+    const isBot = /grok\.com$/.test(host) && /\/bot\//.test(f.url), name = f.label || host;
+    b.innerHTML = gMode === 'compact' ? `<span class="fic">${esc(GbarMode.initial(name))}</span>` : `<span class="flabel">${esc(gLabel(name))}</span>`;   // no icon of its own: コンパクト shows its first letter
     b.title = `${f.label}\n${f.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・削除）／ ドラッグで並べ替え`;
     b.onclick = e => mpb.favOpen(f.id, e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here');
     b.onauxclick = e => { if (e.button === 1) mpb.favOpen(f.id, 'new'); };
@@ -390,7 +396,7 @@ function renderFavs(list) {
   const heads = secs.map((s, k) => {                         // grok.com's own sections (the user's tabs), in the page's order
     s.items.forEach(b => { els.push(gbotBtn(b, false)); keys.push('b' + b.id); sec.push(k); });
     if (!s.name) return null;
-    const h = mkEl('gsec', shortLabel(s.name, 12)); h.title = s.name; return h;
+    const h = mkEl('gsec', gMode === 'compact' ? GbarMode.truncate(s.name, 2) : gLabel(s.name, 12)); h.title = s.name; return h;   // コンパクト: 2 units
   });
   GP = { pinN: pins.length, els, keys, sec, heads, sep: mkEl('gsep'), w: -1, ok: false, pages: [], page: 0 };
   gLayout();

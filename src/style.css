@@ -127,6 +127,12 @@ body.docking .pane .dockshot[src]{display:block}
 .gmark{flex:none;font-size:9px;opacity:.75}
 .gsec{flex:none;padding:0 2px 0 6px;color:var(--dim);font-size:10px;font-weight:600;white-space:nowrap}
 .gsep{flex:none;width:1px;height:16px;margin:0 4px;background:var(--line2)}
+/* 表示モード (right-click on the Grok button; gbar-mode.js): セミコンパクト = icon + a name of 4 units, smaller headings; コンパクト = the icon only
+   (none: its first letter), headings of 2 units; 次へ › stays as it is. Every mode is measured again for the pages (the class is set before) */
+#favs.gm-semi .fav-btn:not(#gbar-next){padding:0 6px}
+#favs.gm-semi .fav-btn.gbot{padding:0 6px 0 3px;gap:4px}
+#favs.gm-compact .fav-btn:not(#gbar-next){padding:0 3px;gap:0}
+#favs.gm-semi .gsec,#favs.gm-compact .gsec{font-size:9px;padding:0 1px 0 4px}
 .fav-btn{display:flex;align-items:center;gap:5px;width:auto;max-width:96px;overflow:hidden;white-space:nowrap;flex:none;height:22px;border:1px solid var(--line);background:var(--ctl);border-radius:6px;padding:0 8px;color:var(--text);transition:background .12s,transform .12s}
 .fav-btn:hover{background:var(--ctl-hi)}
 .fav-btn:active{transform:scale(.97)}

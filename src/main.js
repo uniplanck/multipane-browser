@@ -258,13 +258,16 @@ function moveFavorite(a, b) {
 // ---- Grok ボタン＋Bot一覧 (grok-bots.js): the favorites bar shows every Grok Bot / group of the account in grok.com's own sections, read only when
 // the Grok button is pressed (one read at a time, all windows) from the sidebar of https://grok.com/ in a hidden window of the shared session;
 // kept in panes.json `grok` with the user's names and pins (pins also sit right of the Grok button). Ordinary favorites (other URLs) stay as
-// before, after the pins. The bar gets the list on its own channel ('gbar': icons are data URLs, too big for every state message)
+// before, after the pins. The bar gets the list on its own channel ('gbar': icons are data URLs, too big for every state message), with its
+// 表示モード (gbar-mode.js, settings.gbarMode: 通常 / セミコンパクト / コンパクト; a right-click on the Grok button takes the next one, all windows)
 const GB = require('./grok-bots');
+const GM = require('./gbar-mode');
 let grok = GB.empty();
 let gbRun = false, gbNote = '', gbNoteTimer = null;          // a read running / its last outcome, shown a moment in the bar
-const gbView = () => ({ ...GB.view(grok), busy: gbRun, note: gbNote });
+const gbView = () => ({ ...GB.view(grok), busy: gbRun, note: gbNote, mode: GM.normMode(settings.gbarMode) });
 function gbPush(c) { const v = gbView(); (c ? [c] : ctxs).forEach(k => { try { if (!k.win.isDestroyed()) k.win.webContents.send('gbar', v); } catch {} }); }
 function gbChanged() { save(); gbPush(); }
+function gbModeNext() { settings.gbarMode = GM.nextMode(settings.gbarMode); save(); gbPush(); }   // 表示モード: kept in panes.json, every bar redrawn
 function gbSay(text, ms) { gbNote = text; clearTimeout(gbNoteTimer); if (text) gbNoteTimer = setTimeout(() => { gbNote = ''; gbPush(); }, ms); gbPush(); }
 const gbJs = (wc, code, ms = 5000) => Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(GB.WORLD, [{ code }])), sleep(ms).then(() => null)]).catch(() => null);
 // The hidden window: grok.com only (a move anywhere else is stopped and ends the read: a sign-in page = AUTH), no window.open, muted, the
@@ -2522,6 +2525,7 @@ on('fav-menu', id => favMenu(id));
 on('fav-move', (a, b) => moveFavorite(a, b));
 on('fav-add', (url, label) => addFavorite(String(url || ''), String(label || '')));
 on('gbar-refresh', () => grokRefresh());                     // (Grok bar) the Grok button; a read already running: nothing new
+on('gbar-mode', () => gbModeNext());                         // (Grok bar) a right-click on the Grok button: the next 表示モード
 on('gbot-open', (id, where) => openGrokBot(id, where));
 on('gbot-menu', id => gbotMenu(id));
 on('gbot-move', (a, b) => { const g = GB.movePin(grok, a, b); if (g !== grok) { grok = g; gbChanged(); } });
