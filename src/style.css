@@ -114,8 +114,10 @@ body.docking .pane .dockshot[src]{display:block}
 @keyframes gspin{to{transform:rotate(360deg)}}
 #gbar-note{flex:none;max-width:360px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dim);font-size:11px}
 #gbar-note:empty{display:none}
-#favs{display:flex;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:none;min-width:0;flex:1}
-#favs::-webkit-scrollbar{display:none}
+/* one page of the bar at a time (renderer.js / gbar-pages.js): no sideways scroll; a fixed height so a page change never resizes it */
+#favs{display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0;flex:1;height:22px}
+#gbar-next{margin-left:auto;color:var(--dim);font-size:11.5px}
+#gbar-next:hover{color:var(--text)}
 #fav-hint{color:var(--dim);font-size:11px;position:absolute;left:46px;pointer-events:none}
 #gbar-note:not(:empty)~#fav-hint{display:none!important}
 .fav-btn.gbot{max-width:136px;padding:0 7px 0 4px}

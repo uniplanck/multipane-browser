@@ -290,7 +290,6 @@ mpb.onGbar(v => {
   gnote.textContent = v.busy ? '読み込み中…' : v.note || '';
   renderFavs(S ? S.favorites || [] : []);
 });
-favs.addEventListener('wheel', e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { favs.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });   // the bar scrolls sideways
 function gIcon(b) {                                          // its icon (16 px round), or the first letter when there is none / it does not load
   const l = document.createElement('span'); l.className = 'fic'; l.textContent = (Array.from(String(b.name).trim())[0] || '•').toUpperCase();
   if (!b.icon) return l;
@@ -318,6 +317,50 @@ function gbotBtn(b, pin) {
   return el;
 }
 const mkEl = (cls, text) => { const e = document.createElement('span'); e.className = cls; if (text) e.textContent = text; return e; };
+// ページ送り (gbar-pages.js): the pins always stay; the rest (favorites, then the sections' Bots) is cut into pages that fit the bar, each page
+// starting with its section's heading. 次へ › at the right end goes to the next page (after the last: the first); no button when all fits. Redone
+// when the bar's width or the list changes: it stays on the page that holds the item 次へ last went to (gone: the first page). No sideways scroll
+let GP = null, gAnchor = null;                               // GP: the paged part (elements, widths, pages, page); gAnchor: that item's key
+const gNext = document.createElement('button');
+gNext.id = 'gbar-next'; gNext.className = 'fav-btn'; gNext.textContent = '次へ ›';
+gNext.onclick = () => { if (!GP || GP.pages.length < 2) return; GP.page = (GP.page + 1) % GP.pages.length; gAnchor = GP.keys[GP.pages[GP.page][0]]; gShow(); };
+function gMeasure() {                                        // every element once in the bar (none shrinks): its width with its margins
+  const gap = parseFloat(getComputedStyle(favs).columnGap) || 0;
+  const ow = e => { const cs = getComputedStyle(e); return e.getBoundingClientRect().width + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0); };
+  favs.append(...GP.els, ...GP.heads.filter(Boolean), GP.sep, gNext);
+  GP.pinW = [...favs.children].slice(0, GP.pinN).reduce((a, e) => a + ow(e) + gap, 0);
+  GP.ws = GP.els.map(ow);
+  GP.o = { gap, sec: GP.sec, head: GP.heads.map(h => (h ? ow(h) : 0)), sep: ow(GP.sep), lead: GP.pinN > 0 };
+  GP.btnW = gNext.getBoundingClientRect().width;             // not its margin (auto: it stands at the right end)
+  GP.ok = GP.btnW > 0;                                       // read while the bar had no size: again once it has one
+}
+function gLayout() {
+  if (!GP) return;
+  const w = favs.getBoundingClientRect().width;
+  if (!w || (w === GP.w && GP.ok)) return;
+  if (!GP.ok) gMeasure();
+  GP.w = w;
+  GP.pages = GbarPages.pages(GP.ws, w - GP.pinW, GP.btnW, GP.o);
+  const at = GbarPages.pageOf(GP.pages, GP.keys.indexOf(gAnchor));
+  GP.page = at < 0 ? 0 : at;
+  if (at < 0) gAnchor = null;
+  gShow();
+}
+function gShow() {                                           // the page after the pins (the same elements: their handlers stay)
+  const [from, to] = GP.pages[GP.page] || [0, 0], n = GP.pages.length, out = [];
+  for (let j = from; j < to; j++) {
+    const b = GbarPages.before(j, from, GP.o);
+    if (b.sep) out.push(GP.sep);
+    if (b.head >= 0 && GP.heads[b.head]) out.push(GP.heads[b.head]);
+    out.push(GP.els[j]);
+  }
+  if (n > 1) { out.push(gNext); gNext.title = `ページ ${GP.page + 1}/${n}：クリックで${GP.page + 1 < n ? '次のページへ' : '先頭のページへ戻る'}`; }
+  const now = [...favs.children].slice(GP.pinN);
+  if (now.length === out.length && now.every((e, i) => e === out[i])) return;
+  while (favs.children.length > GP.pinN) favs.lastElementChild.remove();
+  favs.append(...out);
+}
+new ResizeObserver(() => gLayout()).observe(favs);
 function renderFavs(list) {
   const key = JSON.stringify(list) + '|' + gRev;
   if (key === favKey) return;
@@ -326,6 +369,7 @@ function renderFavs(list) {
   $('#fav-hint').style.display = list.length || pins.length || secs.length ? 'none' : '';
   favs.innerHTML = '';
   pins.forEach(b => favs.appendChild(gbotBtn(b, true)));
+  const els = [], keys = [], sec = [];                       // the paged items: favorites (no section), then each section's Bots
   list.forEach(f => {
     const b = document.createElement('button');
     b.className = 'fav-btn'; b.draggable = true;
@@ -341,13 +385,15 @@ function renderFavs(list) {
     b.ondragover = e => { if (e.dataTransfer.types.includes('text/x-mpb-fav')) { e.preventDefault(); b.classList.add('drop-over'); } };
     b.ondragleave = () => b.classList.remove('drop-over');
     b.ondrop = e => { b.classList.remove('drop-over'); const from = Number(e.dataTransfer.getData('text/x-mpb-fav')); if (from) { e.preventDefault(); e.stopPropagation(); mpb.favMove(from, f.id); } };
-    favs.appendChild(b);
+    els.push(b); keys.push('f' + f.id); sec.push(null);
   });
-  if ((pins.length || list.length) && secs.length) favs.appendChild(mkEl('gsep'));
-  secs.forEach(s => {                                        // grok.com's own sections (the user's tabs), in the page's order
-    if (s.name) { const h = mkEl('gsec', shortLabel(s.name, 12)); h.title = s.name; favs.appendChild(h); }
-    s.items.forEach(b => favs.appendChild(gbotBtn(b, false)));
+  const heads = secs.map((s, k) => {                         // grok.com's own sections (the user's tabs), in the page's order
+    s.items.forEach(b => { els.push(gbotBtn(b, false)); keys.push('b' + b.id); sec.push(k); });
+    if (!s.name) return null;
+    const h = mkEl('gsec', shortLabel(s.name, 12)); h.title = s.name; return h;
   });
+  GP = { pinN: pins.length, els, keys, sec, heads, sep: mkEl('gsep'), w: -1, ok: false, pages: [], page: 0 };
+  gLayout();
 }
 // drop a link / URL text onto the favorites bar to add it
 const fb = $('#favbar');
