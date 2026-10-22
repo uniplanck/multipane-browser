@@ -529,6 +529,10 @@ const AQ = require('./attention-queue');
 // ---- キーボードでのペイン移動 (#51, pane-navigation.js): ⌘⌥←→↑↓ by position, ⌘⇧J to the next item of the 対応キュー; the same focus / wake as a
 // click (makeWindow: navKey / moveFocus / queueNext / navGo). Memory only (a pending move: navWait)
 const PN = require('./pane-navigation');
+// ---- 選択部分だけコピー (copy-policy.js): ⌘C / the pane menu's コピー with a selection in the page (the preload reports one: p.sel) -> main
+// copies it itself and checks the clipboard (makeWindow: copySel). copySeq: a newer copy drops an older one's check (one clipboard for all windows)
+const CB = require('./copy-policy');
+let copySeq = 0;
 // ---- ドッキング型の並べ替え (dock-layout.js): a pane dragged by its header onto another one's top / bottom (stacked in its cell) / left / right
 // (a cell of its own) or onto the band at the top / bottom edge of the rows (a row of its own); the rows with stacked cells (window / workspace
 // `stacks`, optional). makeWindow: dock* (the drag, its views hidden behind stills, the preview), grid / applyGrid (the rows as pane ids)
@@ -967,7 +971,7 @@ function focusPane(i, { clear = true } = {}) {
   if (maximizedId != null && maximizedId !== p.id) { maximizedId = p.id; relayout(true); }
   setFocused(i);
   if (clear) clearUnread(p);
-  p.view.webContents.focus();
+  if (!p.view.webContents.isFocused()) p.view.webContents.focus();   // it has the keyboard already (clicked into): not focused again (a focus can drop its selection)
 }
 // p.glow – orange highlight; cleared by real interaction with the pane.
 // p.unread – badge. Generic sites: content changes since cleared. grok.com chats (p.msgMode): bot messages since user's last send.
@@ -1777,7 +1781,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, ...ZP.restore(spec, gZoom()),      // zoom / zoomIndiv (older saves had per-pane zoom only: those panes stay individual)
     lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false,
-    inputRev: 0, ime: false };                               // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page
+    inputRev: 0, ime: false, sel: false };                   // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page; a selection (copySel)
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   p.rcv = RP.createRec();                                    // (#32) its failures / planned reload (memory only)
   win.contentView.addChildView(view);
@@ -1799,7 +1803,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
   // the pane moved to another page by itself / by the user while a load of it waits (#31): that load was for the old page -> cancelled
   const urlMoved = () => { const t = lqView(p), u = wc.getURL(); if (t && t.state === 'wait' && t.url && !isBlankUrl(u) && !sameTarget(t.url, u)) lq.cancel(t.id, 'URL'); };
   wc.on('did-navigate', urlMoved); wc.on('did-navigate-in-page', (e, u, isMain) => { if (isMain) urlMoved(); });
-  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); if (p.imgMax) setImgMax(p, false); });
+  wc.on('did-navigate', () => { if (p.sleeping) return; p.snap = null; p.msgMode = false; p.lastUserCount = null; p.unread = 0; p.glow = false; p.working = false; p.waiting = false; p.done = false; p.hasDraft = false; p.ime = false; p.sel = false; p.reqQuote = ''; p.pageH1 = ''; p.pageHdr = ''; p.favicon = ''; if (p.pcMax) setPcMax(p, false); if (p.imgMax) setImgMax(p, false); });
   wc.on('did-navigate-in-page', () => { if (p.sleeping) return; p.lastUserCount = null; if (!isBotUrl(wc.getURL())) resetCounts(p); });
   wc.on('did-stop-loading', () => { p.loadedAt = Date.now(); });
   wc.on('page-title-updated', () => { if (p.sleeping) return; sendState(); markActivity(p, 'title'); });
@@ -1813,7 +1817,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
   // (#32) failures told apart (recovery-policy.js): a failed main-frame load (transient: reloaded by itself, bounded; else manual), the renderer
   // gone (manual: the 'stopped' placeholder), unresponsive (noted only). ERR_ABORTED, a child frame and a load that is only slow are no failure
   wc.on('did-fail-load', (e, code, desc, url, isMain) => { if (isMain && !p.sleeping) diag.rec('pane.load', DIAG.netCode(code), { p: p.id, ms: loadMs() }); dlog(`pane${p.id}`, 'did-fail-load', code, desc, url, isMain ? 'main' : 'sub'); recoverFail(p, code, url, isMain); });
-  wc.on('render-process-gone', (e, d) => { p.ime = false; diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); recoverGone(p, d && d.reason); });
+  wc.on('render-process-gone', (e, d) => { p.ime = false; p.sel = false; diag.rec('pane.gone', DIAG.goneCode(d && d.reason), { p: p.id }); dlog(`pane${p.id}`, 'render-process-gone', JSON.stringify(d)); recoverGone(p, d && d.reason); });
   wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); recoverHang(p, true); });
   wc.on('responsive', () => { diag.rec('pane.hang', 'RESPONSIVE', { p: p.id }); dlog(`pane${p.id}`, 'responsive'); recoverHang(p, false); });
   wc.on('did-navigate', () => recoverPage(p));
@@ -1827,13 +1831,14 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
   wc.on('before-input-event', (e, input) => {
     if (navHolds(p, input)) { if (!handleKey(input, p)) diag.rec('nav', 'HELD', { p: p.id }, 60000); e.preventDefault(); return; }   // (#51) meant for the pane being woken: not typed here
     if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault();   // a key typed: the input revision moves (#11)
+    if (CB.copyKey(input, { mac: isMac, sel: p.sel, ime: p.ime })) { e.preventDefault(); copySel(p); }   // ⌘C with a selection in the page: main copies it (the page / menu never get the key)
   });
   wc.on('context-menu', (e, params) => {
     const items = [];
     if (params.linkURL) items.push({ label: 'リンクを新しいペインで開く', enabled: panes.length < MAX && !NAV.appLoad(params.linkURL), click: () => addPane({ url: params.linkURL }) },   // (#72) web links only
       { label: 'リンクをコピー', click: () => clipboard.writeText(params.linkURL) },
       { label: 'ブラウザで開く', enabled: !NAV.external(params.linkURL, { gesture: true }).code, click: () => openExt(params.linkURL, 'link menu', true) }, { type: 'separator' });   // http(s) / mailto ... (the user's own choice)
-    if (params.selectionText) items.push({ role: 'copy', label: 'コピー' });
+    if (params.selectionText) items.push({ label: 'コピー', accelerator: 'CmdOrCtrl+C', registerAccelerator: false, click: () => params.isEditable ? wc.copy() : copySel(p) });   // this pane, as ⌘C (a field: the browser's copy)
     if (params.isEditable) items.push({ role: 'cut', label: '切り取り' }, { role: 'paste', label: '貼り付け' });
     if (isBotUrl(wc.getURL())) items.push({ type: 'separator' }, pcItem(p));
     items.push({ type: 'separator' }, { label: '戻る', enabled: wc.navigationHistory.canGoBack(), click: () => goHist(p, -1) },
@@ -1951,6 +1956,26 @@ function resetPaneZoom(p) { if (p && p.zoomIndiv) setZoom(p, 1); }
 function setZoomIndiv(p, on) { if (!p) return; p.zoomIndiv = !!on; if (!on) applyZoom(p, gZoom()); sendState(); save(); }
 
 function focusUrlBar() { win.webContents.focus(); win.webContents.send('focus-url', panes[focused]?.id); }
+// 選択部分だけコピー (copy-policy.js): the selection is read in an own world first (page scripts cannot change what it uses), then this pane's
+// normal copy (wc.copy: the page's copy event as usual); a clipboard that is clearly not that selection afterwards gets the selection as plain
+// text. Never focuses the pane (a focus drops the selection on grok.com); the text is never logged
+async function copySel(p) {
+  const wc = p.view.webContents, seq = ++copySeq;
+  if (wc.isDestroyed()) return;
+  let sel = '';
+  try { sel = await Promise.race([wc.executeJavaScriptInIsolatedWorld(CB.WORLD, [{ code: CB.SEL_JS }]), sleep(CB.READ_MS).then(() => '')]); } catch {}
+  if (seq !== copySeq || wc.isDestroyed()) return;           // a newer copy runs
+  sel = typeof sel === 'string' ? sel : '';
+  const before = clipboard.readText();
+  wc.copy();
+  if (!CB.norm(sel)) return;                                 // nothing read (none / a field / the page busy): the page's copy alone, as before
+  let clip = before, changed = false;
+  for (let t = 0; t < CB.WAIT_MS && !changed; t += CB.STEP_MS) { await sleep(CB.STEP_MS); if (seq !== copySeq) return; clip = clipboard.readText(); changed = clip !== before; }
+  const text = CB.fix({ sel, clip, changed });
+  if (text == null) return;
+  clipboard.writeText(text);
+  dlog(`pane${p.id}`, 'copy: selection written as plain text', changed ? 'differed' : 'no copy');
+}
 function handleKey(input, pane) {
   if (input.type !== 'keyDown') return false;
   // (#51) ⌘⌥←→↑↓ / ⌘⇧J first (⌘⇧J before ⌘J). An IME composition / a modal overlay: left to the page or field as it is; a held key: one move only
@@ -2517,6 +2542,7 @@ paneOn('pane:typing', p => { p.lastTyping = Date.now(); p.lastInteract = Date.no
 paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
 paneOn('pane:editing', (p, v) => { p.editing = !!v; });
 paneOn('pane:ime', (p, v) => { p.ime = v === true; });       // #11: no page is thrown away during an IME composition
+paneOn('pane:sel', (p, v) => { p.sel = v === true; });       // 選択部分だけコピー: ⌘C goes to copySel while true
 // ---- favorites (global list, opened in this window) ----
 function openFavorite(id, where = 'here', f = favorites.find(x => x.id === id)) {   // f: (Grok bar) a listed Bot as a favorite
   if (!f) return;

@@ -203,6 +203,16 @@ let imeOn = false;
 const reportIme = on => { if (on !== imeOn) { imeOn = on; ipcRenderer.send('pane:ime', on); } };
 window.addEventListener('compositionstart', () => reportIme(true), true);
 window.addEventListener('compositionend', () => reportIme(false), true);
+// A selection in the page outside any field (選択部分だけコピー, copy-policy.js): main then copies it itself on ⌘C. Sent on change only; a
+// field's own selection (input / textarea / contenteditable) is not one (the browser's copy as before)
+let selOn = false;
+function selNow() {
+  const s = document.getSelection(), ae = document.activeElement;
+  if (!s || s.isCollapsed || !s.rangeCount || (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName))) return false;
+  const n = s.anchorNode, el = n && (n.nodeType === 1 ? n : n.parentElement);
+  return !(el && el.isContentEditable);
+}
+window.addEventListener('selectionchange', () => { let on = false; try { on = selNow(); } catch {} if (on !== selOn) { selOn = on; ipcRenderer.send('pane:sel', on); } }, true);
 
 // Real user interaction in this pane (clears its update highlight).
 window.addEventListener('mousedown', () => ipcRenderer.send('pane:interact'), true);

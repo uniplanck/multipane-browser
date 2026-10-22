@@ -168,6 +168,7 @@ const CHANNELS = {
   'pane:draft': { roles: PANE, shape: a => bool(a[0]) },
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
   'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
+  'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored

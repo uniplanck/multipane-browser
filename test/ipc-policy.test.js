@@ -40,7 +40,7 @@ const SAMPLE = {
   'usage-pop-leave': ['overlay', []], 'usage-pop-keep': ['overlay', []], 'usage-pop-size': ['overlay', [242]], 'overlay-close': ['overlay', []],
   'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
   'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []],
-  'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]],
+  'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]], 'pane:sel': ['pane', [true]],
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
@@ -63,7 +63,7 @@ t('a web pane cannot change settings / other panes (UI channels)', ['navigate', 
 t('the UI cannot fake pane signals', ['pane:msgcount', 'pane:interact', 'pane:draft'].every(ch => chk(ch, 'chrome', SAMPLE[ch][1]) === 'E_ROLE' && chk(ch, 'overlay', SAMPLE[ch][1]) === 'E_ROLE'));
 t('chrome-only channels from the overlay -> E_ROLE', chk('navigate', 'overlay', [1, 'x']) === 'E_ROLE' && chk('focus-other', 'overlay', [2, 7]) === 'E_ROLE' && chk('claude:auth-dialog', 'overlay') === 'E_ROLE');
 t('overlay-only channels from the chrome bar -> E_ROLE', chk('overlay-close', 'chrome') === 'E_ROLE' && chk('usage:margin', 'chrome', [5]) === 'E_ROLE' && chk('usage-pop-size', 'chrome', [10]) === 'E_ROLE');
-t('probe sending other pane signals -> E_ROLE (ignored)', ['pane:draft', 'pane:editing', 'pane:ime', 'pane:msgmode-off', 'pane:interact'].every(ch => chk(ch, 'probe', SAMPLE[ch][1]) === 'E_ROLE'));
+t('probe sending other pane signals -> E_ROLE (ignored)', ['pane:draft', 'pane:editing', 'pane:ime', 'pane:sel', 'pane:msgmode-off', 'pane:interact'].every(ch => chk(ch, 'probe', SAMPLE[ch][1]) === 'E_ROLE'));
 
 // ---- frame: child / gone / detached ----
 t('child frame -> E_FRAME on every channel', CH.every(ch => chk(ch, as(SAMPLE[ch][0], { top: false }), SAMPLE[ch][1]) === 'E_FRAME'));
@@ -117,7 +117,7 @@ t('set-reload: reload choices only', P.RELOAD_CHOICES.every(m => chk('set-reload
 t('split-start: axis c/r, splitter 1..MAX, row none or 0..MAX', chk('split-start', 'chrome', ['r', 1, undefined]) === null && chk('split-start', 'chrome', ['c', P.MAX_PANES, null]) === null && chk('split-start', 'chrome', ['c', 2, 0]) === null && chk('split-start', 'chrome', ['c', 2, P.MAX_PANES]) === null
   && pay('split-start', 'chrome', ['x', 1]) && pay('split-start', 'chrome', ['c', 0]) && pay('split-start', 'chrome', ['c', P.MAX_PANES + 1]) && pay('split-start', 'chrome', ['c', 1.5]) && pay('split-start', 'chrome', ['c', 1, -1]) && pay('split-start', 'chrome', ['c', 1, P.MAX_PANES + 1]) && pay('split-start', 'chrome', ['c', 1, '0']));
 t('split-reset: axis + optional row', chk('split-reset', 'chrome', ['c', 0]) === null && chk('split-reset', 'chrome', ['c', undefined]) === null && pay('split-reset', 'chrome', ['', 0]) && pay('split-reset', 'chrome', ['c', 2.5]));
-t('sync-cols / draft / editing / ime / usage:get: booleans only', [1, 0, 'true', null, undefined].every(v => pay('sync-cols', 'chrome', [v]) && pay('pane:draft', 'pane', [v]) && pay('pane:editing', 'pane', [v]) && pay('pane:ime', 'pane', [v]) && pay('usage:get', 'chrome', [v])));
+t('sync-cols / draft / editing / ime / sel / usage:get: booleans only', [1, 0, 'true', null, undefined].every(v => pay('sync-cols', 'chrome', [v]) && pay('pane:draft', 'pane', [v]) && pay('pane:editing', 'pane', [v]) && pay('pane:ime', 'pane', [v]) && pay('pane:sel', 'pane', [v]) && pay('usage:get', 'chrome', [v])));
 t('usage-pop-show: finite rect + kind + optional selection', chk('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'codex' }]) === null && chk('usage-pop-show', 'chrome', [{ right: 0, bottom: 0, kind: 'claude', sel: 'x'.repeat(P.TEXT_MAX) }]) === null
   && pay('usage-pop-show', 'chrome', [{ bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: Infinity, bottom: 2, kind: 'grok' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2e5, kind: 'grok' }])
   && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'gpt' }]) && pay('usage-pop-show', 'chrome', [{ right: 1, bottom: 2, kind: 'grok', sel: 'x'.repeat(P.TEXT_MAX + 1) }]) && pay('usage-pop-show', 'chrome', [[1, 2]]) && pay('usage-pop-show', 'chrome', [null]));
