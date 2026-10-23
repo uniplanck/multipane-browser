@@ -1,7 +1,7 @@
 // 新規ペインはGrok: an empty new pane (＋ / ⌘T / the palette's 新しい空のペイン / ⌘N and the palette's 新しいウィンドウ / the panes a layout preset
 // adds / the pane that replaces the last one closed / an empty workspace or window) opens https://grok.com/ instead of the local new-tab page, and
 // on that pane's first grok.com page its sidebar is opened once: only when the page shows it closed, by a click on grok.com's own toggle
-// ([data-sidebar="trigger"], as the user would) - never again for that pane (later pages, reloads, wakes, the user closing it). Pure rules and
+// ([data-sidebar="trigger"] or, on a narrow page, the header button "サイドバーを切り替え" / "Toggle Sidebar", as the user would) - never again for that pane (later pages, reloads, wakes, the user closing it). Pure rules and
 // the fixed page-side code, no electron (test/new-pane.test.js); main.js runs them (addPane / sbOpen).
 // The toggle makes grok.com store its state for the next load (`sidebarOpen` in localStorage - shared by every pane of the default session - and
 // the shadcn sidebar cookie if it ever uses one): what was there right before the click is put back right after it, so every other pane loads its
@@ -80,7 +80,7 @@ function sidebarState(doc, win) {
     return !!r && r.width >= 160 && r.height > 0 && r.right > 40 && r.left < W - 40;
   };
   const side = all('[data-sidebar="sidebar"]').filter(e => near(e, 'data-side') !== 'right');
-  return { ready: doc.readyState === 'complete', trig: all('[data-sidebar="trigger"]').length > 0, sb: side.some(shown) ? 'open' : side.length ? 'closed' : 'none' };
+  return { ready: doc.readyState === 'complete', trig: all('[data-sidebar="trigger"],button[aria-label="サイドバーを切り替え"],button[aria-label="Toggle Sidebar"],button[aria-label="Toggle sidebar"]').length > 0, sb: side.some(shown) ? 'open' : side.length ? 'closed' : 'none' };
 }
 // what grok.com stores of the sidebar -> { ls: sidebarOpen or null, ck: { name: value or null } }. Self-contained
 function keepOf(doc, win) {
@@ -114,7 +114,7 @@ function clean(b) {
 const STATE_JS = `(()=>{/*mpb:np-state*/return Object.assign((${sidebarState})(document,window),{keep:(${keepOf})(document,window)});})()`;
 // CLICK_JS: the toggle on screen (else the first one) clicked once -> { clicked, keep: what was stored right before the click }
 const CLICK_JS = `(()=>{/*mpb:np-open*/const W=Number(window.innerWidth)||0;const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.right>0&&r.left<W;};
-const ts=Array.from(document.querySelectorAll('[data-sidebar="trigger"]'));const t=ts.find(vis)||ts[0];if(!t)return{clicked:false};
+const ts=Array.from(document.querySelectorAll('[data-sidebar="trigger"],button[aria-label="サイドバーを切り替え"],button[aria-label="Toggle Sidebar"],button[aria-label="Toggle sidebar"]'));const t=ts.find(vis)||ts[0];if(!t)return{clicked:false};
 const keep=(${keepOf})(document,window);t.click();return{clicked:true,keep};})()`;
 const RESTORE_JS = b => `(()=>{/*mpb:np-restore*/return (${putBack})(document,window,${JSON.stringify(clean(b))},${keepOf});})()`;
 

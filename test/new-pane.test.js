@@ -66,7 +66,7 @@ function page(clock, o = {}) {
     if (pg.mode === 'desktop') { S.store.set('sidebarOpen', String(pg.open)); if (o.cookie) S.jar.set('sidebar_state', String(pg.open)); } };
   const els = () => {
     sync(); const out = [];
-    if (!o.noToggle) out.push(mk({ 'data-sidebar': 'trigger' }, { left: 270, right: 290, width: 20, height: 20 }, null, toggle));
+    if (!o.noToggle) { const tg = mk(o.ariaToggle ? { 'aria-label': o.ariaToggle } : { 'data-sidebar': 'trigger' }, { left: 270, right: 290, width: 20, height: 20 }, null, toggle); if (o.ariaToggle) tg.tag = 'BUTTON'; out.push(tg); }
     if (pg.mode === 'desktop') {
       const wrap = mk({ 'data-state': pg.open ? 'expanded' : 'collapsed', 'data-side': 'left' }, { left: 0, right: 0, width: 0, height: 900 });
       out.push(mk({ 'data-sidebar': 'sidebar' }, pg.open ? { left: 0, right: 256, width: 256, height: 900 } : { left: -256, right: 0, width: 256, height: 900 }, mk({}, {}, wrap)));
@@ -74,7 +74,7 @@ function page(clock, o = {}) {
     return out;
   };
   const document = { get readyState() { return clock.t >= readyAt ? 'complete' : 'loading'; },
-    querySelectorAll: sel => { const m = sel.match(/^\[data-sidebar="(\w+)"\]$/); return m ? els().filter(e => e.attrs['data-sidebar'] === m[1]) : []; },
+    querySelectorAll: sel => els().filter(e => sel.split(',').some(one => { const m = one.match(/^\[data-sidebar="(\w+)"\]$/); const b = one.match(/^button\[aria-label="([^"]+)"\]$/); return m ? e.attrs['data-sidebar'] === m[1] : b ? e.tag === 'BUTTON' && e.attrs['aria-label'] === b[1] : false; })),
     get cookie() { return [...S.jar].map(([k, v]) => k + '=' + v).join('; '); },
     set cookie(s) { const [kv, ...at] = String(s).split(';').map(x => x.trim()), i = kv.indexOf('='); pg.log.push(pg.name + ':cookie');
       if (at.some(a => /^max-age=0$/i.test(a))) S.jar.delete(kv.slice(0, i)); else S.jar.set(kv.slice(0, i), kv.slice(i + 1)); } };
@@ -91,10 +91,11 @@ function page(clock, o = {}) {
 }
 { const clock = { t: 0 }, st = pg => JSON.parse(J(NEWP.sidebarState(pg.document, pg.window)));
   t('state: desktop collapsed (off screen, wrapper collapsed) -> closed, toggle there', J(st(page(clock, { ls: 'false' }))) === J({ ready: true, trig: true, sb: 'closed' }));
+  t('state: the header toggle without data-sidebar (aria-label サイドバーを切り替え / Toggle Sidebar) counts; a button with another label does not', J(st(page(clock, { ls: 'false', ariaToggle: 'サイドバーを切り替え' }))) === J({ ready: true, trig: true, sb: 'closed' }) && st(page(clock, { ls: 'false', ariaToggle: 'Toggle Sidebar' })).trig === true && st(page(clock, { ls: 'false', ariaToggle: 'その他' })).trig === false);
   t('state: desktop expanded -> open', st(page(clock, { ls: 'true' })).sb === 'open');
   t('state: narrow page, drawer closed -> none; its sheet open -> open', st(page(clock, { mode: 'mobile' })).sb === 'none' && (pg => { pg.document.querySelectorAll('[data-sidebar="trigger"]')[0].click(); return st(pg).sb === 'open'; })(page(clock, { mode: 'mobile' })));
   const el = (attrs, rect, parent) => ({ attrs, parentElement: parent || null, getAttribute: k => Object.hasOwn(attrs, k) ? attrs[k] : null, hasAttribute: k => Object.hasOwn(attrs, k), getBoundingClientRect: () => rect });
-  const doc = els => ({ readyState: 'complete', querySelectorAll: sel => els.filter(e => sel === `[data-sidebar="${e.attrs['data-sidebar']}"]`) });
+  const doc = els => ({ readyState: 'complete', querySelectorAll: sel => els.filter(e => sel.split(',').includes(`[data-sidebar="${e.attrs['data-sidebar']}"]`)) });
   const W = { innerWidth: 1000, localStorage: { getItem: () => null } }, R = { left: 0, right: 256, width: 256, height: 900 };
   t('state: as narrow as its icons (48 px, no data-state) -> closed', NEWP.sidebarState(doc([el({ 'data-sidebar': 'sidebar' }, { left: 0, right: 48, width: 48, height: 900 })]), W).sb === 'closed');
   t('state: a right-hand sidebar only -> not the one (none)', NEWP.sidebarState(doc([el({ 'data-sidebar': 'sidebar' }, R, el({ 'data-side': 'right' }, R))]), W).sb === 'none');
