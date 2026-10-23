@@ -264,6 +264,11 @@ const GB = require('./grok-bots');
 const GM = require('./gbar-mode');
 let grok = GB.empty();
 let gbRun = false, gbNote = '', gbNoteTimer = null;          // a read running / its last outcome, shown a moment in the bar
+// ---- 新規ペインはGrok (new-pane.js): an empty new pane opens https://grok.com/ and its sidebar is opened once on its first page (makeWindow:
+// addPane / sbOpen). sbLock: the run that has clicked grok.com's toggle until it has put `sidebarOpen` back (one in all windows; the Grok bar's
+// read starts none while it runs, and reads nothing while one holds it)
+const NEWP = require('./new-pane');
+let sbLock = null;
 const gbView = () => ({ ...GB.view(grok), busy: gbRun, note: gbNote, mode: GM.normMode(settings.gbarMode) });
 function gbPush(c) { const v = gbView(); (c ? [c] : ctxs).forEach(k => { try { if (!k.win.isDestroyed()) k.win.webContents.send('gbar', v); } catch {} }); }
 function gbChanged() { save(); gbPush(); }
@@ -292,6 +297,7 @@ async function grokRefresh() {
     for (;;) {
       await sleep(400);
       if (wc.isDestroyed() || quitting || !ctxs.some(c => !c.win.isDestroyed())) { code = 'ABORT'; break; }   // quitting / the last window closed
+      if (sbLock && Date.now() - t0 < GB.TIMEOUT_MS) continue;   // a new pane's sidebar opening holds sidebarOpen: found / clicked only after it has put it back
       const o = await gbJs(wc, GB.STATE_JS);
       const d = GB.decide(rs, { ...(o && typeof o === 'object' ? o : { ready: false }), left }, Date.now()); rs = d.rs;
       if (d.act === 'open') await gbJs(wc, GB.CLICK_JS('trigger'));
@@ -812,7 +818,7 @@ function applyPreset(key) {
   guardRun('LAYOUT', () => panes.slice(want), () => {          // the panes past the preset are closed: asked first when one holds input (#11)
     layout = key; maximizedId = null;
     while (panes.length > want) closePane(panes[panes.length - 1].id, true);
-    while (panes.length < want) addPane({ url: '' }, { focus: false });
+    while (panes.length < want) addPane({ url: '' }, { focus: false, from: 'fill' });
     rowLens = null; stackLens = null;                     // a preset re-initialises the rows (no stacked cells)
     setFocused(Math.min(focused, panes.length - 1));
     relayout(true); save();
@@ -1275,6 +1281,45 @@ function onGrokLoad(p) {
   if (p.grokSkipOnce) { p.grokSkipOnce = false; return; }
   const m = url.match(GROK_BOT_RE);
   if (m) grokFix(p, url, m[1], false);
+}
+// 新規ペインはGrok (new-pane.js): an empty new pane's first grok.com page has loaded -> its sidebar opened once when the page shows it closed (the
+// page's own toggle, in NEWP.WORLD), then `sidebarOpen` (and the shadcn cookie) put back as found right before the click, before sbLock goes. Ends
+// without a click when the page goes elsewhere / the user types or clicks into the pane first / nothing is decided in time. p.sb: null after it
+// (never again for this pane); a new grok.com page before the click (redirect / reload) gets its own run, this one ends silently
+const sbJs = (wc, code) => Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(NEWP.WORLD, [{ code }])), sleep(3000).then(() => null)]).catch(() => null);
+async function sbOpen(p) {
+  const wc = p.view.webContents, tok = {}, t0 = Date.now();
+  p.sb = { ...p.sb, stage: 'run', tok };
+  const mine = () => !p.disposed && !wc.isDestroyed() && !!p.sb && p.sb.tok === tok;
+  let rs = NEWP.begin(t0), code = 'ERROR', keep = null, back = null;
+  try {
+    for (;;) {
+      await sleep(NEWP.POLL_MS);
+      if (!rs.clickAt && !mine()) { if (p.sb && !p.disposed) return; code = 'MOVED'; break; }   // a newer page's run / the pane gone
+      const o = await sbJs(wc, NEWP.STATE_JS);
+      if (!rs.clickAt && !mine()) { if (p.sb && !p.disposed) return; code = 'MOVED'; break; }
+      if (!rs.clickAt && !sbLock && !gbRun && o && typeof o === 'object' && o.keep) keep = o.keep;   // stored, nobody else's click pending (the click's own reading replaces it)
+      const d = NEWP.decide(rs, { ...(o && typeof o === 'object' ? o : { ready: false }), grok: !wc.isDestroyed() && NEWP.onGrok(wc.getURL()), user: NEWP.used(p.sb, p),
+        busy: gbRun || !!sbLock || quitting }, Date.now());
+      rs = d.rs;
+      if (d.act === 'click') {
+        sbLock = tok; p.sb = { ...p.sb, clicked: true };       // from here on: never again for this pane, the stored state put back below
+        const c = await sbJs(wc, NEWP.CLICK_JS);
+        if (c && c.clicked === false) { code = 'NOTOGGLE'; break; }   // the toggle went away: nothing clicked
+        if (c && c.keep) keep = c.keep;
+      } else if (d.act !== 'wait') { code = d.code; break; }
+    }
+  } catch { code = 'ERROR'; }
+  finally {
+    if (sbLock === tok) {
+      if (keep && !wc.isDestroyed() && NEWP.onGrok(wc.getURL())) back = await sbJs(wc, NEWP.RESTORE_JS(keep));
+      sbLock = null;
+    }
+    if (p.sb && p.sb.tok === tok) p.sb = null;
+  }
+  if (rs.clickAt && !(back && back.ok)) diag.rec('newpane', 'RESTORE_FAIL', { p: p.id });
+  diag.rec('newpane', code, { p: p.id, ms: Date.now() - t0 });
+  dlog(`pane${p.id}`, 'new pane sidebar', code, rs.clickAt ? (back && back.ok ? (back.fixed ? 'state put back' : 'state unchanged') : 'state not confirmed back') : '');
 }
 
 
@@ -1774,8 +1819,11 @@ function insertPane(p) {
   if (n === 0 || (sameArr(lens, defRows(n)) && DL.isFlat(getStacks()))) { panes.push(p); rowLens = null; stackLens = null; return; }
   if (!applyGrid(DL.add(paneGrid(), p.id, pr[0], pr[1]), [p])) { panes.push(p); rowLens = null; stackLens = null; }   // no room: the default grid
 }
-function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {}) {   // asleep: (#22) restorePlan() of a saved spec at startup
+// from: where an empty spec comes from (新規ペインはGrok, NEWP.FRESH: 'new' / 'fill' -> grok.com, its sidebar opened once); '' = restore / a copy (as before)
+function addPane(spec = {}, { focus = true, defer = false, asleep = null, from = '' } = {}) {   // asleep: (#22) restorePlan() of a saved spec at startup
   if (panes.length >= MAX) return null;
+  const st = NEWP.start(spec.url, from);
+  if (st.sidebar) spec = { ...spec, url: st.url };           // an empty new pane starts on grok.com
   const view = new WebContentsView({ webPreferences: {
     preload: process.env.MPB_NO_PRELOAD ? undefined : path.join(__dirname, 'pane-preload.js'),
     contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: true, spellcheck: false } });
@@ -1789,6 +1837,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
     inputRev: 0, ime: false, sel: false };                   // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page; a selection (copySel)
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   p.rcv = RP.createRec();                                    // (#32) its failures / planned reload (memory only)
+  p.sb = st.sidebar ? NEWP.arm(Date.now(), p.inputRev, p.lastInteract) : null;   // 新規ペインはGrok: its sidebar, once (memory only)
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
@@ -1826,10 +1875,12 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null } = {})
   wc.on('unresponsive', () => { diag.rec('pane.hang', 'HANG', { p: p.id }); dlog(`pane${p.id}`, 'unresponsive'); recoverHang(p, true); });
   wc.on('responsive', () => { diag.rec('pane.hang', 'RESPONSIVE', { p: p.id }); dlog(`pane${p.id}`, 'responsive'); recoverHang(p, false); });
   wc.on('did-navigate', () => recoverPage(p));
+  wc.on('did-navigate', (e, u) => { if (p.sb) p.sb = NEWP.nav(p.sb, u, Date.now()); });   // 新規ペインはGrok: its first page (grok.com, in time) or never
   wc.on('did-finish-load', () => {
     if (!p.sleeping) diag.rec('pane.load', 'OK', { p: p.id, ms: loadMs() });   // a sleeping pane loading about:blank is not a page load
     recoverLive(p);
     onGrokLoad(p);
+    if (NEWP.due(p.sb)) sbOpen(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
   wc.on('focus', () => { if (!p.sleeping) setFocused(panes.indexOf(p)); });   // a hidden sleeping view can fire a stray focus event right after it is hidden: that must not wake it
@@ -1895,7 +1946,7 @@ function closePane(id, keepEmpty) {
   disposePane(p, 'CLOSED');
   if (maximizedId === id) maximizedId = null;
   focused = Math.max(0, Math.min(focused, panes.length - 1));
-  if (!panes.length && !keepEmpty) addPane({ url: '' });
+  if (!panes.length && !keepEmpty) addPane({ url: '' }, { from: 'fill' });
   else { updateBadge(); relayout(true); save(); }
 }
 // (#32) the end of one pane view, once per view addPane made (closePane; every pane when its window is closed): nothing from its page counts, its
@@ -1916,7 +1967,7 @@ function disposePane(p, code) {
 function newPane(url = '') {
   if (panes.length >= MAX) { const p = panes[focused]; if (p) openIn(p, url); return; }
   maximizedId = null;
-  const p = addPane({ url });
+  const p = addPane({ url }, { from: 'new' });               // no URL (＋ / ⌘T / 新しい空のペイン): grok.com, its sidebar opened once (新規ペインはGrok)
   relayout(true);
   if (p) setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
   return p;
@@ -2162,7 +2213,7 @@ function loadWorkspace(name) {
       if (PRESETS[ws.layout]) layout = ws.layout;
       if (ws.splitsKey && ws.splits && typeof ws.splits === 'object') { settings.splits = settings.splits || {}; settings.splits[ws.splitsKey] = JSON.parse(JSON.stringify(ws.splits)); }
       (ws.panes || []).slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true }));
-      if (!panes.length) addPane({ url: '' });
+      if (!panes.length) addPane({ url: '' }, { from: 'fill' });
       rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
       stackLens = DL.read(ws.stacks);                                       // (dock) its stacked cells (none / unusable: one pane per cell)
       activeWs = name;
@@ -2226,7 +2277,7 @@ function runAction(a) {
     case 'fav-add-current': { closeOverlay(); const p = panes[focused]; if (p && paneUrl(p)) addFavorite(paneUrl(p), p.name || displayTitle(p)); break; }
     case 'fav-rename': { const f = favorites.find(x => x.id === a.id); if (f) { f.label = String(a.value || '').slice(0, 60); favChanged(); } closeOverlay(); break; }
     case 'gbot-rename': grok = GB.rename(grok, a.id, String(a.value || '')); gbChanged(); closeOverlay(); break;   // (Grok bar) '' = the page's own name
-    case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: [{ url: String(a.url || '') }] }); break;
+    case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: a.url ? [{ url: String(a.url) }] : [] }); break;   // no URL: the window's empty new pane
     case 'recovery-restore': closeOverlay(); recoveryRestore(win, String(a.id || '')); break;
     case 'recovery-fresh': closeOverlay(); recoveryFresh(win); break;
     case 'diag-open': openOverlay('diag', { diag: diagView() }); break;
@@ -2661,10 +2712,11 @@ win.contentView.addChildView(overlay);
 overlay.webContents.loadFile(path.join(__dirname, 'overlay.html'));
 overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
 
-const specs = Array.isArray(spec.panes) && spec.panes.length ? spec.panes : [{ url: '' }];
+const specs = Array.isArray(spec.panes) ? spec.panes : [];
 // (#31) every pane requested before any starts: the focused one first, then the rest LQ.LIMIT at a time (shown as waiting meanwhile)
 lq.batch(() => {
   specs.slice(0, MAX).forEach(s => addPane(s, { focus: false, defer: true, asleep: restore ? restorePlan(s) : null }));   // (#22) saved asleep: not loaded
+  if (!panes.length) addPane({ url: '' }, { focus: false, defer: true, from: 'fill' });   // no pane (⌘N / 新しいウィンドウ): one empty new pane (新規ペインはGrok)
   rowLens = Array.isArray(spec.rows) ? spec.rows.map(Number) : null;      // saved rows (validated; default grid when absent)
   stackLens = DL.read(spec.stacks);                                       // (dock) saved stacked cells (validated against those rows)
   setFocused(Math.min(spec.focused || 0, panes.length - 1));
@@ -2683,7 +2735,7 @@ function buildMenu() {
     { label: 'ファイル', submenu: [
       acc('CmdOrCtrl+T', () => cur()?.newPane(''), '新しいペイン'),
       acc('CmdOrCtrl+Shift+T', () => cur()?.reopenClosed(), '閉じたペインを開き直す'),
-      { label: '新しいウィンドウ', accelerator: 'CmdOrCtrl+N', click: () => makeWindow({ layout: '2x2', panes: [{ url: '' }] }) },
+      { label: '新しいウィンドウ', accelerator: 'CmdOrCtrl+N', click: () => makeWindow({ layout: '2x2', panes: [] }) },
       acc('CmdOrCtrl+W', () => { const k = cur(); k?.focusedPane && k.askClose(); }, 'ペインを閉じる'),
       acc('CmdOrCtrl+L', () => cur()?.focusUrlBar(), 'アドレスを編集'),
       acc('CmdOrCtrl+K', () => cur()?.openOverlay('palette'), 'コマンドパレット…'),

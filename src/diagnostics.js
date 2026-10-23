@@ -79,6 +79,10 @@ const PANE_NAV_CODES = ['MOVE', 'EDGE', 'QUEUE', 'NONE', 'WAIT', 'FOCUS', 'DROP'
 // found / the ボット section closed / left grok.com / error / cut short / a press while one runs; the old favorites moved to their backup once (n);
 // the sidebar state not confirmed back. Never a name / URL / icon
 const GBAR_CODES = ['OK', 'AUTH', 'TIMEOUT', 'EMPTY', 'COLLAPSED', 'OFFSITE', 'ERROR', 'ABORT', 'BUSY', 'MIGRATED', 'RESTORE_FAIL'];
+// (新規ペインはGrok, new-pane.js CODES; checked by test/new-pane.test.js) an empty new pane's sidebar on its first grok.com page (p, ms): opened /
+// found open / no toggle in time / clicked, open not seen / the page went elsewhere / the user used the pane first / the shared state busy / the
+// stored state not confirmed back / an error. Never a URL / name
+const NEWPANE_CODES = ['OPENED', 'ALREADY', 'NOTOGGLE', 'UNSURE', 'MOVED', 'USER', 'BUSY', 'RESTORE_FAIL', 'ERROR'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -125,6 +129,7 @@ const EVENTS = {
   queue: { ja: '対応キュー', r: QUEUE_CODES },
   nav: { ja: 'キーボードでのペイン移動', r: PANE_NAV_CODES },
   gbar: { ja: 'Bot一覧の読み込み（Grokボタン）', r: GBAR_CODES },
+  newpane: { ja: '新規ペインのサイドバー', r: NEWPANE_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -382,5 +387,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, GBAR_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, GBAR_CODES, NEWPANE_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };
