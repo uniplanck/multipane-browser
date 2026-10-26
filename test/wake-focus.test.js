@@ -32,11 +32,11 @@ const calls = [];
 const contents = name => ({
   isDestroyed: () => false, isFocused: () => actual === name, send() {}, sendInputEvent: ev => calls.push(`key:${name}:${ev.type}`),
   focus: () => { actual = name; calls.push(`focus:${name}`); },
-  blur: () => { if (actual === name) actual = null; calls.push(`blur:${name}`); }
+  blur: () => { throw new Error("WebContents has no blur()"); }
 });
 const panes = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, sleeping: true, view: { webContents: contents(`p${i + 1}`) } }));
 const chrome = contents('chrome'), overlay = contents('overlay');
-const ctx = vm.createContext({ mayKeepPaneFocus, panes, focused: 6, keyboardFocus: chrome, maximizedId: null,
+const ctx = vm.createContext({ mayKeepPaneFocus, panes, focused: 6, keyboardFocus: chrome, maximizedId: null, win: { isDestroyed: () => false, webContents: chrome },
   windowActive: () => active, clearUnread() {}, relayout() {},
   setFocused: i => { ctx.focused = i; } });
 vm.runInContext(`${source('paneGotFocus')}\n${source('focusPane')}`, ctx);
@@ -78,8 +78,8 @@ active = true;
 // Workspace replacement may destroy the former owner: neither an absent nor a destroyed owner authorizes a new selected view.
 for (const owner of [null, { isDestroyed: () => true }]) {
   ctx.keyboardFocus = owner; calls.length = 0; nativeFocus(panes[ctx.focused]);
-  assert.strictEqual(actual, null);
-  assert(!calls.some(c => c.startsWith('focus:')));
+  assert.strictEqual(actual, "chrome");   // no owner: the keyboard goes to the app UI, never stays in the woken pane
+  assert(!calls.some(c => c.startsWith('focus:p')));
 }
 ctx.keyboardFocus = overlay;
 panes[1].sleeping = true; actual = 'overlay'; nativeFocus(panes[1]);
@@ -88,7 +88,7 @@ assert.strictEqual(panes[1].sleeping, true);
 
 // A stale owner (the user changed the selection while a task waited) is never focused again.
 ctx.keyboardFocus = panes[0].view.webContents; calls.length = 0; nativeFocus(panes[2]);
-assert(!calls.some(c => c.startsWith('focus:')));
+assert(!calls.some(c => c.startsWith('focus:p')));   // the stale pane is not focused again (the app UI takes the keyboard)
 
 // Page navigation / viewer cleanup can undo their maximize without selecting or focusing their pane.
 panes[1].sleeping = false; ctx.keyboardFocus = panes[1].view.webContents; actual = 'p2';

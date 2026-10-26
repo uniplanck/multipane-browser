@@ -1002,10 +1002,12 @@ function focusPane(i, { clear = true } = {}) {
 function paneGotFocus(p) {
   const wc = p.view.webContents, owner = keyboardFocus && !keyboardFocus.isDestroyed() ? keyboardFocus : null;
   if (!mayKeepPaneFocus({ paneId: p.id, focusedId: panes[focused]?.id, sleeping: p.sleeping, ownsKeyboard: owner === wc })) {
-    wc.blur();                                               // wake / visibility / page autofocus must neither select this pane nor keep the keyboard
+    // wake / visibility / page autofocus must neither select this pane nor keep the keyboard (WebContents has no blur(): the keyboard is handed back)
     const ownerPane = panes.find(q => q.view.webContents === owner);
     const restore = !ownerPane || mayKeepPaneFocus({ paneId: ownerPane.id, focusedId: panes[focused]?.id, sleeping: ownerPane.sleeping, ownsKeyboard: true });
-    if (owner && owner !== wc && restore && windowActive()) owner.focus();   // restore only the accepted owner; never front a window
+    if (!windowActive()) return;                               // never front a window
+    if (owner && owner !== wc && restore) owner.focus();       // restore only the accepted owner
+    else if (win && !win.isDestroyed()) win.webContents.focus();   // no accepted owner: the app's own UI, not this pane
     return;
   }
   keyboardFocus = wc;
