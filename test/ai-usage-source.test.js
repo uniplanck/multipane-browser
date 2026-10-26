@@ -1,13 +1,16 @@
 // node test/ai-usage-source.test.js — 使用量表示: src/ai-usage.js reads the local sign-ins (Claude Code's Keychain item via /usr/bin/security,
 // Codex CLI's ~/.codex/auth.json) only when main says the source is 'local' (the explicit opt-in); 'off' / 'none' read nothing, 'web' goes to
 // main's reader only. A web page without numbers shows none (never the previous numbers); a lapsed web sign-in is not read again by itself.
-// Runs with child_process / fs / fetch / electron replaced: nothing real is read, run or sent (HOME is a temp dir; the auth file is refused).
+// Runs with child_process / fs / fetch / electron replaced: nothing real is read, run or sent (homedir is stubbed; the auth file is refused).
 const fs = require('fs'), os = require('os'), path = require('path'), cp = require('child_process'), Module = require('module');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mpb-aiusage-'));
-process.env.HOME = tmp;
+os.homedir = () => tmp;
 const calls = { exec: [], spawn: [], cred: [], fetch: [] };
-cp.execFile = (file, args, opts, cb) => { calls.exec.push(file); (typeof opts === 'function' ? opts : cb)(new Error('stub'), '', ''); };
+let credential = null;
+cp.execFile = (file, args, opts, cb) => { calls.exec.push(file); const done = typeof opts === 'function' ? opts : cb;
+  if (file === '/usr/bin/security' && credential) done(null, JSON.stringify({ claudeAiOauth: credential }), '');
+  else done(new Error('stub'), '', ''); };
 cp.spawn = (bin) => { calls.spawn.push(bin); throw new Error('stub'); };
 const realRead = fs.readFileSync, realAccess = fs.accessSync;
 fs.readFileSync = (f, ...a) => { if (/[\\/]\.(codex|claude)[\\/]/.test(String(f))) { calls.cred.push(String(f)); const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return realRead(f, ...a); };
@@ -72,6 +75,21 @@ const B = [{ id: 'week', label: '1週間', used: 34, resetAt: null, resetText: '
   const cl = await AIU.get('claude', true);
   t('claude local opt-in: the Keychain item is asked for (security), no reader', calls.exec.includes('/usr/bin/security') && !reads.length && cl.src === 'local');
   t('claude local: no CLI was started (none found here), no network without a token', !calls.spawn.length && !calls.fetch.length);
+  // The reported logout case: expiresAt=0 + past refresh expiry. Repeat polling must never even look for / start the CLI.
+  credential = { accessToken: 'fixture-access-secret', expiresAt: 0, refreshTokenExpiresAt: Date.now() - 1000, refreshToken: 'fixture-refresh-secret' };
+  age('claude', 70000); reset();
+  const loggedOut = await AIU.get('claude', true);
+  t('local logout: relogin reaches the view, no CLI lookup / spawn or HTTP request', loggedOut.relogin && loggedOut.needLogin && !loggedOut.ok
+    && calls.exec.join() === '/usr/bin/security' && !calls.spawn.length && !calls.fetch.length);
+  age('claude', 70000); reset(); await AIU.get('claude', false);
+  t('repeated local poll still skips the CLI', calls.exec.join() === '/usr/bin/security' && !calls.spawn.length && !calls.fetch.length && AIU.peek('claude').relogin);
+  const cached = realRead(path.join(tmp, 'ai-usage-cache.json'), 'utf8');
+  t('neither access nor refresh token is persisted', !cached.includes('fixture-access-secret') && !cached.includes('fixture-refresh-secret'));
+  credential = { ...credential, expiresAt: Date.now() + 3600000, refreshTokenExpiresAt: Date.now() + 86400000 };
+  global.fetch = async url => { calls.fetch.push(String(url)); return { ok: true, status: 200, json: async () => ({ five_hour: { utilization: 0.25 } }) }; };
+  age('claude', 70000); reset();
+  const signedIn = await AIU.get('claude', true);
+  t('after login: successful fetch clears relogin and needLogin', signedIn.ok && !signedIn.relogin && !signedIn.needLogin && calls.fetch.length === 1 && !calls.spawn.length);
   reset();
   settings = UC.set(UC.set(settings, 'claude', 'local', false), 'codex', 'local', false);
   settings = UC.set(settings, 'claude', 'web', false);

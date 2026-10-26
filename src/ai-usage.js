@@ -6,6 +6,7 @@
 //   'off' / 'none' = nothing is read (not shown / not connected yet)
 const fs = require('fs'), os = require('os'), path = require('path');
 const { execFile } = require('child_process');
+const CA = require('./claude-auth');
 
 const num = v => { const n = typeof v === 'string' ? Number(v) : v; return typeof n === 'number' && Number.isFinite(n) ? n : null; };
 const winLabel = s => !s ? '制限' : (s >= 17400 && s <= 18600) ? '5時間' : (s >= 6 * 86400 && s <= 8 * 86400) ? '1週間' : s % 86400 === 0 ? `${s / 86400}日` : s % 3600 === 0 ? `${s / 3600}時間` : '制限';
@@ -72,7 +73,7 @@ async function fetchCodex() {
 }
 
 function claudeToken() {
-  const fromJson = txt => { try { const o = JSON.parse(txt).claudeAiOauth; return o && o.accessToken ? { t: o.accessToken, exp: num(o.expiresAt) } : null; } catch { return null; } };
+  const fromJson = txt => { try { const o = JSON.parse(txt).claudeAiOauth; return o ? { t: o.accessToken, exp: num(o.expiresAt), refreshExp: num(o.refreshTokenExpiresAt) } : null; } catch { return null; } };
   return new Promise(res => {
     execFile('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { timeout: 20000 }, (err, so) => {
       const kc = !err && so ? fromJson(so.trim()) : null;
@@ -83,12 +84,14 @@ function claudeToken() {
   });
 }
 async function fetchClaude() {
-  const authErr = m => { const e = new Error(m); e.auth = true; return e; };
+  const authErr = (m, relogin = false) => { const e = new Error(m); e.auth = true; e.relogin = relogin; return e; };
   const c = await claudeToken();
-  if (!c) throw authErr('Claude Codeにログインしていません');
-  if (c.exp && c.exp < Date.now() - 60000) throw authErr('Claudeのログインが期限切れです');
+  const state = CA.state(c, Date.now());
+  if (state === 'relogin') throw authErr(CA.RELOGIN, true);
+  if (state === 'missing') throw authErr('Claude Codeにログインしていません');
+  if (state === 'expired') throw authErr('Claudeのログインが期限切れです');
   try { return claudeParse(await getJson('https://api.anthropic.com/api/oauth/usage', { Authorization: 'Bearer ' + c.t, 'anthropic-beta': 'oauth-2025-04-20' })); }
-  catch (e) { if (e.auth) throw authErr('Claudeのログインが期限切れです'); throw e; }
+  catch (e) { if (e.auth) { const relogin = CA.state({ ...c, exp: 0 }, Date.now()) === 'relogin'; throw authErr(relogin ? CA.RELOGIN : 'Claudeのログインが期限切れです', relogin); } throw e; }
 }
 
 // ---- silent re-auth through the Claude CLI (the same mechanism Claude Code itself uses to refresh its login) ----
@@ -143,7 +146,7 @@ const saveSt = (k, patch) => { const all = readAll(); all[k] = { ...(all[k] || {
 const clock = t => new Date(t).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit' });
 function view(k, src = k.endsWith(':web') ? 'web' : 'local') {
   const s = stOf(k), has = Array.isArray(s.buckets) && s.buckets.length;
-  const base = { at: s.okAt || 0, nextAt: s.nextAt || 0, src };
+  const base = { at: s.okAt || 0, nextAt: s.nextAt || 0, src, relogin: !!s.authErr && s.relogin === true };
   // the page was read but says no number we can take (usage-web.js parse() null): no number at all, never the previous one
   if (s.noNum && !s.err && !s.authErr) return { ok: false, noNum: true, err: '接続済み・数値を読めません', buckets: [], ...base };
   if (!has) return { ok: false, needLogin: !!s.authErr, err: s.err || 'まだ取得していません', buckets: [], ...base };
@@ -154,7 +157,6 @@ function view(k, src = k.endsWith(':web') ? 'web' : 'local') {
   else if (stale) err = '最終更新から時間が経っています';
   return { ok: !(s.authErr), needLogin: !!s.authErr, buckets: s.buckets, ...base, ...(stale ? { stale: true, err } : {}), ...(s.authErr ? { err: s.err } : {}) };
 }
-const REAUTH_GAP = 10 * 60000;
 async function doFetch(k) {
   const now = Date.now(), prev = stOf(k);
   saveSt(k, { lastTry: now, leader: { pid: process.pid, at: now } });
@@ -165,21 +167,20 @@ async function doFetch(k) {
     try { buckets = await run(); }
     catch (e) {
       // expired / invalid Claude login (local opt-in only): one silent refresh via the CLI, at most once per 10 min, never while rate-limited
-      const limited = prev.nextAt && Date.now() < prev.nextAt;
-      if (k === 'claude' && e && e.auth && !limited && Date.now() - (prev.refreshTry || 0) > REAUTH_GAP) {
+      if (CA.canRefresh(k, e, prev, Date.now())) {
         saveSt(k, { refreshTry: Date.now() });
         if (await claudeCliRefresh()) buckets = await run(); else throw e;
       } else throw e;
     }
-    saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false, noNum: false });
+    saveSt(k, { buckets, okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false, relogin: false, noNum: false });
   } catch (e) {
     const msg = String(e && e.message || e), fails = (prev.fails || 0) + 1;
     if (e && e.noNum) saveSt(k, { buckets: [], okAt: Date.now(), fails: 0, nextAt: 0, err: '', authErr: false, noNum: true });   // read, no number on the page
     else if (e && e.status === 429) {
       const wait = Math.max((e.retryAfter || 0) * 1000, BACKOFF[Math.min(fails - 1, BACKOFF.length - 1)] * 60000);
       saveSt(k, { fails, nextAt: Date.now() + wait, err: msg + (e.retryAfter ? ` Retry-After ${e.retryAfter}s` : ' (Retry-Afterなし)') });
-    } else if (e && e.auth) saveSt(k, { fails, err: msg, authErr: true });
-    else saveSt(k, { fails, err: msg, authErr: false });
+    } else if (e && e.auth) saveSt(k, { fails, err: msg, authErr: true, relogin: e.relogin === true });
+    else saveSt(k, { fails, err: msg, authErr: false, relogin: false });
   }
   try { onChange && onChange(k); } catch {}
 }

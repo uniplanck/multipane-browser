@@ -3063,6 +3063,7 @@ function usageDetail() {
   return d;
 }
 const AIU = require('./ai-usage');
+const CA = require('./claude-auth');
 const usageUpdated = () => ctxs.forEach(c => { try { c.win.webContents.send('usage-updated'); c.overlay?.webContents.send('usage-updated'); } catch {} });
 AIU.setOnChange(usageUpdated);
 AIU.setup({ source: k => UC.source(settings, k), web: k => usageWebRead(k) });
@@ -3228,13 +3229,14 @@ ipcOn('usage-open', (r, kind) => { const u = UW.link(kind); if (u) openExt(u, 'u
 ipcHandle('claude:auth-dialog', async r => {
   const w = r.ctx.win;
   const repoll = () => AIU.get('claude', true).catch(() => {});
-  const { response } = await dialog.showMessageBox(w, { type: 'warning', message: 'Claudeの認証が切れています', detail: 'Claudeの使用量を表示するには、Claude Codeの再ログインが必要です。', buttons: ['自動で再認証を試す', 'ターミナルでログイン', '閉じる'], defaultId: 0, cancelId: 2, noLink: true });
-  if (response === 0) {
+  const { actions, ...options } = CA.dialog(AIU.peek('claude').relogin);
+  const { response } = await dialog.showMessageBox(w, options);
+  if (actions[response] === 'auto' && !AIU.peek('claude').relogin) {
     const ok = await AIU.claudeReauth(); const r = await repoll();
     if (!r || r.needLogin || !r.ok) await dialog.showMessageBox(w, { type: 'info', message: ok ? '再認証は実行しましたが、まだ取得できません' : '自動での再認証に失敗しました', detail: '「ターミナルでログイン」から、Claude Codeにログインしてください。', buttons: ['閉じる'] });
-  } else if (response === 1) {
+  } else if (actions[response] === 'terminal') {
     AIU.openClaudeLoginInTerminal();
-    [30000, 90000, 180000].forEach(ms => setTimeout(repoll, ms));      // pick up the new login shortly after
+    CA.LOGIN_POLLS.forEach(ms => setTimeout(repoll, ms));      // allow time for the browser approval, up to 10 minutes
   }
   return response;
 });

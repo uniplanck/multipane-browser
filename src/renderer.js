@@ -523,7 +523,7 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
       const c=on()?calc():null, u=btn.querySelector('.uval');
       btn.hidden=src==='off';
       btn.className='pill usage mode-'+mode+(src==='info'?' info':c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'')+(on()&&login()?' needlogin':'');
-      if(!c){u.textContent='--';return;}
+      if(!c){u.textContent=kind==='claude'&&last&&last.relogin&&last.needLogin?'Terminalで /login が必要':'--';return;}
       u.textContent=fmt(c.v);
     };
     const load=async force=>{

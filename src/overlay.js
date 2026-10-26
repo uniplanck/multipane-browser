@@ -280,6 +280,7 @@ function aiRender(d) {
     : d.needConnect ? `<div style="color:#ff9f0a">未接続</div><div class="sm">このゲージをクリックすると ${esc(name)} のログイン用ウィンドウが開きます（通常のWebログイン。このアプリの使用量表示専用の保存領域に保存し、ペインのログインとは別）。ログインできたらそのウィンドウを閉じてください。</div>`
     : d.noNum ? `<div style="color:#ff9f0a">接続済み・数値を読めません</div><div class="sm">使用量ページの表示から %（使用 / 残り）を読み取れませんでした。推定した数値は出しません。</div>`
     : d.needLogin && d.src === 'web' ? `<div style="color:#ff9f0a">${esc(d.err || 'ログインが必要です')}</div><div class="sm">このゲージをクリックすると、ログイン用のウィンドウが開きます。</div>`
+    : d.relogin ? `<div style="color:#ff9f0a">Terminalで /login が必要</div><div class="sm">このピルをクリックして「ターミナルでログイン」を選び、ターミナルで /login を入力し、ブラウザで承認してください。</div>`
     : d.needLogin ? `<div style="color:#ff9f0a">Claudeの認証が切れています</div><div class="sm">このピルをクリックすると、再認証のダイアログが開きます。</div>`
     : `<div style="color:#ff9f0a">取得できません: ${esc(d.err || '')}</div>` + (rows ? `<div class="sm">（前回の値）</div>` + rows : '');
   up.innerHTML = `<h4>${esc(name)} 使用量</h4>` + (d.stale ? `<div class="sm" style="color:#ff9f0a">${esc(d.err || '')}（更新: ${esc(at)}）</div>` : '') + body +
