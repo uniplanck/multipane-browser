@@ -177,7 +177,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const modeCtx = vm.createContext({ GM, settings: {}, save() {}, gbPush() {} });
   vm.runInContext(main.match(/function gbModeNext\(\) \{[^\n]*?\}(?=\s)/)[0], modeCtx);
   const mpb = new Proxy({}, { get: (_, k) => (k === 'onGbar' ? cb => { box.gbar = cb; } : (...a) => { box.calls.push([k, ...a]); if (k === 'gbarMode') modeCtx.gbModeNext(); }) });
-  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarMode: GM, GbarPages: require('../src/gbar-pages'), URL, document: { createElement: tag => new El(tag) },
+  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), URL, document: { createElement: tag => new El(tag) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: has(e, 'gsep') ? '4px' : '0px', marginRight: has(e, 'gsep') ? '4px' : '0px' }),
     ResizeObserver: class { constructor(cb) { box.ro = cb; } observe() {} } });
   vm.runInContext(ren.slice(A0, A1) + ren.slice(B0, B1), ctx);
@@ -304,8 +304,9 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
       t('vm ' + m + ': secondary item clicks do not also navigate', box.calls.length === 0);
       box.calls.length = 0; items[0].onauxclick({ button: 1 });
       t('vm ' + m + ': middle-click keeps opening a new pane', J(box.calls) === J([['gbotOpen', 'p1', 'new']]));
-      box.calls.length = 0; let pd = false; items[0].oncontextmenu({ preventDefault: () => { pd = true; } });
-      t('vm ' + m + ': item contextmenu still opens the menu', pd && J(box.calls) === J([['gbotMenu', 'p1']]));
+      box.calls.length = 0; let pd = 0; items.forEach(e => e.oncontextmenu({ preventDefault: () => { pd++; } }));
+      const menuIds = [...PINS.map(b => b.id), ...allItems().filter(x => x.key[0] === 'b').map(x => x.key.slice(1))];
+      t('vm ' + m + ': every Bot / group / pin contextmenu opens its own menu', pd === items.length && J(box.calls) === J(menuIds.map(id => ['gbotMenu', id])));
       const f = allItems().find(x => x.key === 'f1').e; box.calls.length = 0; f.onclick({});
       t('vm ' + m + ': unrelated URL favorites keep their existing current-pane default', J(box.calls) === J([['favOpen', 1, 'here']]));
     }
@@ -315,6 +316,44 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   t(`vm コンパクト + a narrower window: pages again (${pageN()}), each fits, 次へ back`, pageN() >= 2 && kids().at(-1) === gNext && everyPage(fits).every(Boolean));
   { const img = GP().els[GP().keys.indexOf('bd1')].children[0]; img.on.error[0]();
     t('vm コンパクト: an icon that does not load becomes its first letter', (e => e.children.length === 1 && has(e.children[0], 'fic') && e.children[0].textContent === 'T')(GP().els[GP().keys.indexOf('bd1')])); }
+
+  // Presence updates existing elements, including pins duplicated in sections and pages currently detached.
+  for (const m of GM.MODES) {
+    ctx.S.panes = [{ id: 101, url: PINS[1].url + '/?chat=1' }, { id: 102, url: SECS[1].items[0].url + '#reply' }];
+    ctx.S.focusedId = 102;
+    send(m, { sections: [...SECS, { name: 'Pinned too', items: [PINS[1]] }] });
+    const listed = [...pinsShown().map((e, i) => ({ e, id: PINS[i].id })), ...allItems().filter(x => x.key[0] === 'b').map(x => ({ e: x.e, id: x.key.slice(1) }))];
+    const framed = (open, active) => listed.every(({ e, id }) => has(e, 'gopen') === open.includes(id) && has(e, 'gactive') === (id === active)
+      && e.attrs['aria-current'] === (id === active ? 'page' : 'false'));
+    t('vm ' + m + ': open and active frames (groups / pins / duplicate / detached page)',
+      framed(['p2', 'd0'], 'd0') && listed.filter(x => x.id === 'p2').length === 2 && listed.some(x => !x.e.parent));
+    t('vm ' + m + ': tooltip keeps name, group label and actions, and adds presence',
+      listed.filter(x => x.id === 'p2').every(x => /・グループ/.test(x.e.title) && /右クリック: メニュー/.test(x.e.title) && /\nペインで開いています$/.test(x.e.title))
+      && /\n今のペインで開いています$/.test(listed.find(x => x.id === 'd0').e.title));
+    const gp = GP(), page = gp.page, width = gp.pinW, nodes = gp.els.slice();
+    const update = () => run('renderFavs(S.favorites)');       // same path onState calls, with an unchanged list key
+    ctx.S.focusedId = 101; update();
+    t('vm ' + m + ': focus updates both copies without rebuilding, remeasuring or changing page',
+      framed(['p2', 'd0'], 'p2') && GP() === gp && GP().page === page && GP().pinW === width && nodes.every((e, i) => GP().els[i] === e));
+    ctx.S.panes.push({ id: 103, url: PINS[1].url }); ctx.S.panes[0].url = PINS[0].url + '/chat/new'; update();
+    t('vm ' + m + ': navigation emphasizes the Bot; group remains open in another pane', framed(['p1', 'p2', 'd0'], 'p1'));
+    ctx.S.panes.pop(); update();
+    t('vm ' + m + ': closing the final matching pane removes its frame and status tooltip',
+      framed(['p1', 'd0'], 'p1') && listed.filter(x => x.id === 'p2').every(x => !/ペインで開いています/.test(x.e.title)));
+    ctx.S.panes[0].url = 'https://example.com/'; update();
+    t('vm ' + m + ': unrelated focused URL clears emphasis; another open group stays framed', framed(['d0'], ''));
+    const pageAt = GP().page; gNext.onclick();
+    t('vm ' + m + ': page changes keep presence', framed(['d0'], '') && GP().page !== pageAt);
+    ctx.S.panes = []; update();
+    t('vm ' + m + ': no remaining panes clears all presence', framed([], ''));
+  }
+  // Legacy/unlisted Grok URL favorites also get presence; favorite actions stay as before.
+  ctx.S.favorites.push({ id: 3, label: 'Unlisted Bot', url: 'https://grok.com/bot/unlisted' });
+  ctx.S.panes = [{ id: 104, url: 'https://grok.com/bot/unlisted?chat=1' }]; ctx.S.focusedId = 104;
+  run('renderFavs(S.favorites)');
+  { const e = GP().els[GP().keys.indexOf('f3')];
+    t('vm: a Grok URL favorite is framed and emphasized by URL ID too', has(e, 'gopen') && has(e, 'gactive') && /今のペインで開いています$/.test(e.title)); }
+  ctx.S.favorites.pop(); ctx.S.panes = []; delete ctx.S.focusedId;
 
   // back to 通常, and an unknown value
   favs.w = 1200; send('normal');

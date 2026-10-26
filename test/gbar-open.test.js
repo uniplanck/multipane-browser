@@ -81,4 +81,10 @@ for (const pinned of [false, true]) {
   t('MAX menu: new-pane entry disabled, current-pane entry remains usable', box.template.find(x => x.label === '新しいペインで開く').enabled === false && box.template.find(x => x.label === '今のペインで開く').enabled !== false);
   ctx.isMac = false; menu(); t('non-Mac menu current-pane hint uses supported Alt-click', box.template.find(x => x.label === '今のペインで開く').accelerator === 'Alt+Click');
 }
+for (const isGroup of [false, true]) {
+  const { box, ctx, menu } = setup(3); ctx.grok.bots[0] = { ...b, isGroup }; ctx.focused = 2;
+  const target = ctx.panes[2]; menu(); box.template.find(x => x.label === '今のペインで開く').click();
+  t((isGroup ? 'group' : 'bot') + ' menu: current action navigates the focused pane (not the first), with the exact item URL',
+    box.navs.length === 1 && box.navs[0].p === target && box.navs[0].url === b.url && box.guards[0].targets[0] === target && !box.adds.length);
+}
 console.log(bad ? bad + ' failed' : 'all passed'); process.exit(bad ? 1 : 0);

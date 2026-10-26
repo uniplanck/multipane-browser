@@ -286,6 +286,17 @@ mpb.onState(onS);
 // 表示モード (gbar-mode.js; main keeps it): a right-click on the Grok button takes the next one, 通常 → セミコンパクト → コンパクト → 通常
 const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
 let G = null, gRev = 0, favKey = '', gMode = 'normal';
+let gItems = [];                                            // includes pins and detached pages; state changes never rebuild the bar
+function gTrack(el, item) { gItems.push({ el, id: GbarPresence.botId(item.url), title: el.title }); }
+function gPresence() {
+  const { openIds, focusedId } = GbarPresence.match(S ? S.panes || [] : [], S && S.focusedId);
+  gItems.forEach(({ el, id, title }) => {
+    const open = openIds.has(id), active = !!id && id === focusedId;
+    el.classList.toggle('gopen', open); el.classList.toggle('gactive', active);
+    el.title = title + (active ? '\n今のペインで開いています' : open ? '\nペインで開いています' : '');
+    el.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+}
 const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.altKey) ? 'here' : 'new';
 // a name as the mode shows it: 通常 = as before (up to max columns), セミコンパクト = 4 units (コンパクト: no name, see gbotBtn / renderFavs)
 const gLabel = (s, max) => (gMode === 'semi' ? GbarMode.truncate(s) : shortLabel(s, max));
@@ -323,6 +334,7 @@ function gbotBtn(b, pin) {
   el.appendChild(gIcon(b));
   if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>`);   // コンパクト: the icon only
   el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 新しいペインで開く（上限時は今のペイン）\n${MOD}・Optionクリック: 今のペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（今のペイン・名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
+  gTrack(el, b);
   el.onclick = e => { if (e.button === 2 || e.ctrlKey) return; mpb.gbotOpen(b.id, openWhere(e)); };
   el.onauxclick = e => { if (e.button === 1) mpb.gbotOpen(b.id, 'new'); };
   el.oncontextmenu = e => { e.preventDefault(); mpb.gbotMenu(b.id); };
@@ -383,12 +395,13 @@ function gShow() {                                           // the page after t
 new ResizeObserver(() => gLayout()).observe(favs);
 function renderFavs(list) {
   const key = JSON.stringify(list) + '|' + gRev;
-  if (key === favKey) return;
+  if (key === favKey) { gPresence(); return; }                // onState: navigation / open / close / focus, without remeasuring or changing page
   favKey = key;
   const pins = G ? G.pins : [], secs = G ? G.sections : [];
   $('#fav-hint').style.display = list.length || pins.length || secs.length ? 'none' : '';
   favs.classList.toggle('gm-semi', gMode === 'semi'); favs.classList.toggle('gm-compact', gMode === 'compact');   // (表示モード) before anything is measured
   favs.innerHTML = '';
+  gItems = [];
   pins.forEach(b => favs.appendChild(gbotBtn(b, true)));
   const els = [], keys = [], sec = [];                       // the paged items: favorites (no section), then each section's Bots
   list.forEach(f => {
@@ -398,6 +411,7 @@ function renderFavs(list) {
     const isBot = /grok\.com$/.test(host) && /\/bot\//.test(f.url), name = f.label || host;
     b.innerHTML = gMode === 'compact' ? `<span class="fic">${esc(GbarMode.initial(name))}</span>` : `<span class="flabel">${esc(gLabel(name))}</span>`;   // no icon of its own: コンパクト shows its first letter
     b.title = `${f.label}\n${f.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・削除）／ ドラッグで並べ替え`;
+    gTrack(b, f);
     b.onclick = e => mpb.favOpen(f.id, e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here');
     b.onauxclick = e => { if (e.button === 1) mpb.favOpen(f.id, 'new'); };
     b.oncontextmenu = e => { e.preventDefault(); mpb.favMenu(f.id); };
@@ -415,6 +429,7 @@ function renderFavs(list) {
   });
   GP = { pinN: pins.length, els, keys, sec, heads, sep: mkEl('gsep'), w: -1, ok: false, pages: [], page: 0 };
   gLayout();
+  gPresence();
 }
 // drop a link / URL text onto the favorites bar to add it
 const fb = $('#favbar');

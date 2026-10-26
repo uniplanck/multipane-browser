@@ -125,6 +125,11 @@ body.docking .pane .dockshot[src]{display:block}
 .gbot .fic{width:16px;height:16px;border-radius:50%}
 /* Group frame stays inside the rounded button in every mode; no extra width for paging. Bots keep the same invisible border geometry. */
 .fav-btn.gbot.grp{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dim) 75%,transparent)}
+/* Open/active frames use the existing border space in every mode, so pages never shift.
+   Active: the border + a second inner pixel and a small glow. Groups keep a separate inset frame. */
+#favs .fav-btn.gopen{border-color:var(--accent)}
+#favs .fav-btn.gactive{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent),0 0 4px color-mix(in srgb,var(--accent) 65%,transparent)}
+#favs .fav-btn.gactive.grp{box-shadow:inset 0 0 0 1px var(--accent),inset 0 0 0 2px color-mix(in srgb,var(--dim) 75%,transparent),0 0 4px color-mix(in srgb,var(--accent) 65%,transparent)}
 .gsec{flex:none;padding:0 2px 0 6px;color:var(--dim);font-size:10px;font-weight:600;white-space:nowrap}
 .gsep{flex:none;width:1px;height:16px;margin:0 4px;background:var(--line2)}
 /* 表示モード (right-click on the Grok button; gbar-mode.js): セミコンパクト = icon + a name of 4 units, smaller headings; コンパクト = the icon only
