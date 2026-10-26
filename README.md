@@ -4,7 +4,58 @@
 
 > 非公式ツールです。xAI / X Corp. とは一切関係ありません。
 
-## 主な機能
+## クイックスタート（導入から普段使いまで）
+
+### A. 導入
+1. **用意するもの**: Apple Silicon の macOS、Git、Node.js（20 以上推奨）と npm、grok.com にログインできる X / xAI アカウント。
+2. **取得**: `git clone https://github.com/uniplanck/multipane-browser.git && cd multipane-browser`
+3. **依存を入れる**: `npm ci`（`package-lock.json` どおりに入る）
+4. **試しに起動**: `npm start`（`src/pane-preload.js` が古いと止まる → `npm run build:preload` してからもう一度）
+5. **アプリとしてインストール**: `npm run install:mac` → `/Applications/MultiPane Browser.app`（arm64・ad-hoc署名）。
+   - 手元に `local/install-bots.sh`（ローカル専用。リポジトリには含まれない）がある環境では `./local/install-bots.sh` で `/Applications/Bots.app` として入る（データ＝userData は同じ）。
+   - 更新するときは `git pull && npm ci` の後に同じコマンドを実行し、アプリを再起動する。
+6. **初回起動**: Finder で開く（署名なしの警告が出たら右クリック →「開く」）。最初のペインで grok.com にログインする。ログインは全ペイン共通。
+
+### B. 今の使い方に合わせる設定
+1. **Botをペインに並べる**: 左上の **Grok ボタン**を押すと、grok.com のサイドバーにある全Bot・グループを読み込んでバーに並べる（自動では読まない。Botを増やしたり名前を変えたら押し直す）。
+   - バーのBotをクリック（または中クリック）すると新しいペインで開く。⌘クリック／Optionクリックは今のペイン、⇧クリックは別ウィンドウ。
+   - 右クリックで名前変更（このバーだけ）・お気に入り・URLコピーができる。
+2. **バーを整える**:
+   - よく使うBotは右クリック →「お気に入り」で、Grok ボタンの右に固定する（ドラッグで並べ替え）。
+   - Grok ボタンを右クリックすると表示モードが 通常 → セミコンパクト → コンパクト の順に切り替わる。
+   - グループは grok.com のセクション単位で表示し、バーに入りきらない分は「次へ ›」でページを送る。
+3. **新しいペイン**: ＋ / ⌘T で開くと grok.com を開き、最初の1回だけサイドバーを開く。10枚が上限。
+4. **レイアウト**: 上部でレイアウト（2x1〜5x2）を選ぶ。ペインのヘッダーをドラッグして並べ替え、境界をドラッグしてサイズを調整する。今の構成は「保存レイアウト（ワークスペース）」に名前を付けて保存しておく。
+5. **Bot側の終了マーカー**: 通知・自動スリープは、最新のBotメッセージの末尾にあるマーカーで判断する。Botの指示に次のどれかを出力するよう書いておく。
+   - `🟢 ━━ 《 待機中 》 ━━ 🟢`: 返信待ち。通知とDockバッジが出て、30分後にスリープする。
+   - `🟣 ━━ ［ 終　了 ］ ━━ 🟣`: 完了。通知は出さず、1分後にスリープする。
+   - `🔴 ━━ 【 作業中 】 ━━ 🔴`: 作業中。スリープしない。
+   - 入力中・フォーカス中・最大化中のペインは眠らない。必要なら設定 >「静音時間」を設定する。
+6. **使用量ゲージ（任意・新規インストールでは既定OFF）**: 設定 >「使用量表示」>「使用量表示を表示」をONにする。
+   - Claude / ChatGPT（Codex）/ Kimi: ゲージをクリックし、アプリ内の専用ウィンドウでログインする（ペインのログインとは別）。
+   - Claude Code / Codex CLI のローカルの認証情報を使う場合は、設定で読み取りをONにする。ゲージに「Terminalで /login が必要」と出たら、ターミナルで `claude` を起動して `/login` を実行し、ブラウザで承認してからゲージをクリックする。
+   - Grok は grok.com のペインのログインから読み取る。
+7. **下書きの自動保存（既定ON）**: 送信前の入力内容は約0.75秒後に保存され、クラッシュや再起動の後、入力欄が空のときだけ戻る。復元で送信されることはない。送信するか入力欄を空にすると消え、7日で期限切れになる。**このMacに平文で保存される**ので、不要なら設定でOFFにする。
+8. **外部リンク**: grok.com 以外へのリンクは、ペインの中ではなく既定のブラウザで開く。
+9. **よく使うキー**:
+
+   | キー | 動作 |
+   |---|---|
+   | ⌘T / ⌘W / ⌘⇧T | 新しいペイン / ペインを閉じる（入力があれば確認）/ 閉じたペインを開き直す |
+   | ⌘K | コマンドパレット |
+   | ⌘\（JIS は ⌘¥） | ペインの最大化 / 元に戻す |
+   | ⌘R / ⌘⇧R | 再読み込み / 全ペインを一括更新 |
+   | ⌘J / ⌘⇧J | 次の未読 / 対応キューの次の項目 |
+   | ⌘⌥←→↑↓ | ペイン間の移動 |
+   | ⌘⇧B | 一斉送信（プレビューで確認してから送る） |
+   | ⌘⇧C | コンパクトモード |
+   | ⌘N / ⌘⇧W | 新しいウィンドウ / ウィンドウを閉じる |
+   | ⌘+ / ⌘- / ⌘0 | ズーム |
+
+以下は機能の詳しい仕様（リファレンス）。
+
+
+## 機能の詳細（リファレンス）
 - **レイアウト**: 2x1 / 3x1 / 4x1 / 2x2 / 3x2 / 4x2 / 3x3 / 5x2。ペインを閉じると残りを自動で均等配置（auto-fit）
 - **スプリッター**: ペイン間をドラッグで幅・高さ調整（レイアウトごとに保存、ダブルクリックで均等に戻す）
 - **ドッキング型の並べ替え**: ペインのヘッダーをつかんで別のペインの上へ運ぶと、上/下/左/右のどこに入るかを薄い赤のプレビュー（カーソルの下のペインの上/下/左/右半分。段の上端・下端の帯では段の横幅いっぱいの帯＝段の高さの1/4、60〜200px）で表示し、離すとそこへ移動。上/下はそのペインだけを縦に分けて重ねる（同じ段の他のペインの高さは変わらない。1セル最大3枚、段が1〜2のときだけ、各段で最も多く重ねたセルの枚数の合計が3以下に収まるときだけ）、左/右は隣との間に新しい列として入る（重ねたセルならその左/右）。段の上端・下端の帯へ運ぶと横幅いっぱいの新しい段になる（段が3つのときは無反応）。段が3つになる（または縦の合計が3を超える）と重ねは自動で解除し、下側のペインを決まった規則でペインの少ない段へ移す。抜けた跡は閉じたときと同じ規則で詰める。自分自身の上・配置が変わらない位置・上限を超える位置ではプレビューを出さず何もしない。Esc・他のアプリへの切替で取消。ドラッグ中はペインの表示を静止画に置き換える（ページそのものは止めない）。上部のタブのドラッグは従来どおり入れ替え。重ねた配置は `panes.json` の `stacks`（任意項目。`rows` は重ねた分も数えるので古いバージョンは横並びで読む）とワークスペースに保存
@@ -54,9 +105,9 @@
   - OFFのときは記録を書かず（次の保存で残っていた記録も消える）、記録があっても使わずに全ペインを従来どおり読み込む。`panes.json` の形式（schema 1）は変わらず、古いバージョンは追加項目を無視する。壊れた・新しい版の記録は無視してそのペインを通常どおり読み込む。読めない/新しいバージョンの `panes.json`（復旧画面）では何も復元しない
   - 開発時は `MPB_USER_DATA=/tmp/任意のフォルダ npm start` で、本番とは別のプロファイル（userData・sessionData）で起動できる
 
-## 使い方
+## 開発者向け
 ```sh
-npm install
+npm ci
 npm start                # 開発起動
 npm run dist:mac         # .dmg / .zip をビルド
 npm run install:mac      # arm64 の .app をビルドして /Applications にインストール（ad-hoc署名）
@@ -87,7 +138,7 @@ npm run check:preload    # 生成物が最新か確認（変更しない。古�
   - 普段はメモリに最新1000件だけ（終了で消える）。設定 >「診断ログをファイルにも保存」か `MPB_DEBUG` のときだけ `userData/diagnostics/diag-0〜2.jsonl`（フォルダ0700・ファイル0600、1ファイル2MiB・3世代・7日）に非同期でまとめて書く。書けない（満杯・権限）ときも記録とアプリは止まらず、失敗は1回だけ記録して間隔をあけて再試行。オフにしてもファイルは消さず、整理するのはこのフォルダの `diag-N.jsonl` だけ（`pane-debug.log` は別物で、URLなどを含むことがある）
 
 ## English
-MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, an opt-in subscription usage readout (Claude / ChatGPT Codex / Kimi through an in-app sign-in kept in its own partition, Grok through its panes; off by default on a new install), and a workaround for grok.com bot deep links. Run with `npm install && npm start`. Not affiliated with xAI or X Corp.
+MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, an opt-in subscription usage readout (Claude / ChatGPT Codex / Kimi through an in-app sign-in kept in its own partition, Grok through its panes; off by default on a new install), and a workaround for grok.com bot deep links. Quickstart: 1) macOS (Apple Silicon), Git, Node.js 20+; 2) `git clone https://github.com/uniplanck/multipane-browser.git && cd multipane-browser`; 3) `npm ci`; 4) `npm start` to try it, `npm run install:mac` to install `/Applications/MultiPane Browser.app`; 5) sign in to grok.com in a pane, press the Grok button to load your bots into the bar, click a bot to open it in a new pane; 6) have your bots end messages with the 🟢 待機中 / 🟣 終了 / 🔴 作業中 markers (see above) for notifications and auto-sleep; 7) optionally enable the usage gauges (Settings > 使用量表示). Unsent drafts are auto-saved in plaintext on this Mac (7 days, can be turned off). Not affiliated with xAI or X Corp.
 
 ## License
 MIT
