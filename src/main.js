@@ -646,6 +646,8 @@ let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane no
 let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null;
+let keyboardFocus = null;                                  // last accepted keyboard owner in this window (including chrome / overlay)
+const rememberKeyboard = wc => wc.on('focus', () => { keyboardFocus = wc; });
 let lastBounds = spec.window?.bounds || null;
 // ---- layout ----
 function grid(n) {
@@ -836,12 +838,12 @@ function applyPreset(key) {
     relayout(true); save();
   });
 }
-function toggleMaximize(id) {
+function toggleMaximize(id, takeFocus = true) {
   const p = byId(id ?? panes[focused]?.id); if (!p) return;
   maximizedId = maximizedId === p.id ? null : p.id;
-  setFocused(panes.indexOf(p));
+  if (takeFocus) setFocused(panes.indexOf(p));
   relayout(true);
-  p.view.webContents.focus();
+  if (takeFocus) { keyboardFocus = p.view.webContents; if (!p.view.webContents.isFocused()) p.view.webContents.focus(); }
 }
 // "クラウドPCを最大化": the bot's computer view is a modal that scales with the pane's viewport (and caps at 1080 px).
 // Maximise the pane to the window and have the page's own "コンピュータを表示" dialog fill it (see pane-preload).
@@ -850,7 +852,7 @@ function setPcMax(p, on) {
   if (!p || p.view.webContents.isDestroyed() || on === !!p.pcMax) return;
   p.pcMax = on;
   if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.pcMaxedPane = true; } else p.pcMaxedPane = false; }
-  else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id) toggleMaximize(p.id); }
+  else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id) toggleMaximize(p.id, false); }   // page cleanup, never a focus request
   p.view.webContents.send('mpb:pc', on);
 }
 // 画像クリックで最大化 (pane-preload img-opened / img-closed): maximized like the cloud PC (no size-cap CSS); p.imgMaxedPane = this maximized it (a pane
@@ -860,7 +862,7 @@ function setImgMax(p, on, back = true) {
   dlog(`pane${p.id}`, 'imgmax', on, back);
   p.imgMax = on;
   if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.imgMaxedPane = true; } else p.imgMaxedPane = false; }
-  else { const mine = p.imgMaxedPane; p.imgMaxedPane = false; if (back && mine && maximizedId === p.id) toggleMaximize(p.id); }
+  else { const mine = p.imgMaxedPane; p.imgMaxedPane = false; if (back && mine && maximizedId === p.id) toggleMaximize(p.id, false); }
 }
 function togglePc(id) { const p = byId(id ?? panes[focused]?.id); if (p && isBotUrl(p.view.webContents.getURL())) setPcMax(p, !p.pcMax); }
 const pcItem = p => ({ label: p.pcMax ? 'クラウドPCを元のサイズに戻す' : 'クラウドPCを最大化', accelerator: 'CmdOrCtrl+Shift+P', enabled: isBotUrl(p.view.webContents.getURL()), click: () => setPcMax(p, !p.pcMax) });
@@ -991,10 +993,22 @@ function setFocused(i) {
 }
 function focusPane(i, { clear = true } = {}) {
   const p = panes[i]; if (!p) return;
+  keyboardFocus = p.view.webContents;                       // explicit selection, before a synchronous wake can show the view
   if (maximizedId != null && maximizedId !== p.id) { maximizedId = p.id; relayout(true); }
   setFocused(i);
   if (clear) clearUnread(p);
   if (!p.view.webContents.isFocused()) p.view.webContents.focus();   // it has the keyboard already (clicked into): not focused again (a focus can drop its selection)
+}
+function paneGotFocus(p) {
+  const wc = p.view.webContents, owner = keyboardFocus && !keyboardFocus.isDestroyed() ? keyboardFocus : null;
+  if (!mayKeepPaneFocus({ paneId: p.id, focusedId: panes[focused]?.id, sleeping: p.sleeping, ownsKeyboard: owner === wc })) {
+    wc.blur();                                               // wake / visibility / page autofocus must neither select this pane nor keep the keyboard
+    const ownerPane = panes.find(q => q.view.webContents === owner);
+    const restore = !ownerPane || mayKeepPaneFocus({ paneId: ownerPane.id, focusedId: panes[focused]?.id, sleeping: ownerPane.sleeping, ownsKeyboard: true });
+    if (owner && owner !== wc && restore && windowActive()) owner.focus();   // restore only the accepted owner; never front a window
+    return;
+  }
+  keyboardFocus = wc;
 }
 // p.glow – orange highlight; cleared by real interaction with the pane.
 // p.unread – badge. Generic sites: content changes since cleared. grok.com chats (p.msgMode): bot messages since user's last send.
@@ -1152,7 +1166,7 @@ function navSettle() {
   if (p && !navShown(p) && now <= w.until) return;           // not yet
   const ok = !!p && PN.mayFocus(w, { focusedId: panes[focused]?.id, overlay: overlayOpen, active: windowActive(), fw: wcId(require('electron').webContents.getFocusedWebContents()), t: now });
   navEnd(ok ? 'FOCUS' : 'DROP');
-  if (ok) p.view.webContents.focus();
+  if (ok) { keyboardFocus = p.view.webContents; p.view.webContents.focus(); }
 }
 // a key reaching pane p: held back while a move waits and p kept the keyboard (the header already shows the other pane)
 function navHolds(p, input) {
@@ -1391,7 +1405,7 @@ async function reloadPane(p, cls = 'USER', task = null) {
 // ---- sleep for 🟢 waiting / 🟣 done panes (frees the page's memory; header / tab / green status / counts stay) ----
 // A pane sleeps when its last marker is 🟣 終了 (after SLEEP_DONE_MS = 1 min) or 🟢 待機中 (after SLEEP_WAIT_MS = 30 min) and nobody touched it. It never sleeps while 🔴 working, unmarked, focused,
 // maximized, in the cloud-PC view, being edited or loading. Waking (click / focus / reload) goes through reloadPane with the stored bot URL.
-const { sleepDelayFor, sleepIdentity } = require('./sleep-rules');
+const { sleepDelayFor, sleepIdentity, mayKeepPaneFocus } = require('./sleep-rules');
 const { placeReopened } = require('./reopen-rules');
 const sleepDelay = p => Number(process.env.MPB_SLEEP_SEC) > 0 ? ((p.waiting || p.done) && !p.working ? Number(process.env.MPB_SLEEP_SEC) * 1000 : null)   // dev override: same delay for both
   : sleepDelayFor(p, settings.sleepMinutes > 0 ? settings.sleepMinutes * 60000 : undefined);
@@ -1570,7 +1584,11 @@ function guardRun(op, targets, run, opt = {}) {
 }
 async function guardOnce(op, targets, run, { skip = false } = {}) {
   const ts = targets(), fw = require('electron').webContents.getFocusedWebContents();
-  const back = () => { try { if (fw && !fw.isDestroyed()) fw.focus(); } catch {} };
+  const back = () => { try {
+    const p = panes.find(q => q.view.webContents === fw);
+    if (fw && fw === keyboardFocus && !fw.isDestroyed() && windowActive()
+      && (!p || mayKeepPaneFocus({ paneId: p.id, focusedId: panes[focused]?.id, sleeping: p.sleeping, ownsKeyboard: true }))) fw.focus();
+  } catch {} };                                              // a bulk load's delayed guard must not restore focus after the user moved elsewhere
   const readAll = async list => (await Promise.all(list.map(p => liveInput(p)))).map((r, i) => ({ id: list[i].id, r }));
   ts.forEach(p => { p.guardHold = true; });                  // no automatic operation on them meanwhile
   try {
@@ -1896,7 +1914,8 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
     if (NEWP.due(p.sb)) sbOpen(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
-  wc.on('focus', () => { if (!p.sleeping) setFocused(panes.indexOf(p)); });   // a hidden sleeping view can fire a stray focus event right after it is hidden: that must not wake it
+  wc.on('focus', () => paneGotFocus(p));
+  wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown' && !p.sleeping) focusPane(panes.indexOf(p)); });   // native input, never a fix's synthetic click
   wc.on('before-input-event', (e, input) => {
     if (navHolds(p, input)) { if (!handleKey(input, p)) diag.rec('nav', 'HELD', { p: p.id }, 60000); e.preventDefault(); return; }   // (#51) meant for the pane being woken: not typed here
     if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault();   // a key typed: the input revision moves (#11)
@@ -1946,7 +1965,7 @@ function reopenClosed() {
     diag.rec('reopen', 'OK', { p: p.id, n: closedStack.length });
     const at = { ...focusNow(), id: p.id };                     // the keyboard may still be where ⌘⇧T / ↩ / the palette left it: that pane, the bar, the new one
     at.fws = [at.fw, wcId(prev && prev.view.webContents), wcId(p.view.webContents)];
-    setTimeout(() => { if (panes.includes(p) && !p.view.webContents.isDestroyed() && CP.mayFocus(at, focusNow())) p.view.webContents.focus(); }, 50);
+    setTimeout(() => { if (panes.includes(p) && !p.view.webContents.isDestroyed() && CP.mayFocus(at, focusNow())) { keyboardFocus = p.view.webContents; p.view.webContents.focus(); } }, 50);
   } finally { reopening = false; }
 }
 function closePane(id, keepEmpty) {
@@ -1971,6 +1990,7 @@ function disposePane(p, code) {
   p.disposed = true; p.grokToken = null; p.grokPending = null;
   recoverCancel(p, true);
   const wc = p.view.webContents;
+  if (keyboardFocus === wc) keyboardFocus = null;            // workspace replacement / close: a new view never inherits its keyboard permission
   unregWc(r => r.wc === wc);                                 // nothing from this page counts any more
   obsDo(p, { type: 'close' }); abortProbe(p);                // ...nor from its background check (#02)
   lqDrop(p, code);                                           // its waiting / running load (#31): a running one gives its slot back once the view is gone
@@ -1983,7 +2003,7 @@ function newPane(url = '') {
   maximizedId = null;
   const p = addPane({ url }, { from: 'new' });               // no URL (＋ / ⌘T / 新しい空のペイン): grok.com, its sidebar opened once (新規ペインはGrok)
   relayout(true);
-  if (p) setTimeout(() => !p.view.webContents.isDestroyed() && p.view.webContents.focus(), 50);
+  if (p) setTimeout(() => { if (!p.view.webContents.isDestroyed() && panes[focused] === p) { keyboardFocus = p.view.webContents; p.view.webContents.focus(); } }, 50);
   return p;
 }
 const byId = id => panes.find(p => p.id === id);
@@ -2104,6 +2124,7 @@ function ensureApprove() {
   approve.setBorderRadius?.(14);
   approve.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
   const wc = approve.webContents;
+  rememberKeyboard(wc);
   regWc(wc, 'approve', { ctx });                             // no preload: registered so that nothing from it is ever accepted
   approvePane = { id: 'approve', view: approve, url: APPROVE_URL, botTarget: APPROVE_URL, loadedAt: Date.now(), lastReload: Date.now() };   // a pane-like record so the bot-page fixes (router hop, retries) work here too
   wc.setWindowOpenHandler(d => linkOpen(wc, d));
@@ -2169,6 +2190,7 @@ function closeOverlay() {
   bcPv = null; bcPvNo = 0;                                  // (#12) a preview holds only while it is on screen (a batch goes on)
   if (approveOpen) hideApprove();
   overlay.setVisible(false);
+  keyboardFocus = panes[focused]?.view.webContents;
   panes[focused]?.view.webContents.focus();
 }
 function paneMenu(id) {
@@ -2221,6 +2243,7 @@ function loadWorkspace(name) {
   if (!workspaces[name]) return;
   guardRun('WORKSPACE', () => panes.slice(), () => {           // every pane is replaced: asked first when one holds input (#11)
     const ws = workspaces[name]; if (!ws) return;
+    const wasFocused = focused;                              // replaced panes have new ids: keep the selected position, bounded by the new count
     maximizedId = null;
     lq.batch(() => {                                         // (#31) every new pane requested before any starts: the focused one first
       [...panes].forEach(p => closePane(p.id, true));
@@ -2231,7 +2254,7 @@ function loadWorkspace(name) {
       rowLens = Array.isArray(ws.rows) ? ws.rows.map(Number) : null;       // the saved row structure (validated on first use)
       stackLens = DL.read(ws.stacks);                                       // (dock) its stacked cells (none / unusable: one pane per cell)
       activeWs = name;
-      setFocused(0);
+      setFocused(Math.min(wasFocused, panes.length - 1));
     });
     relayout(); save();
   });
@@ -2334,9 +2357,9 @@ const bcPage = {
     if (BC_DRY) return 'dry';
     const x = await bcJs(p, BC_SEND_JS(h)), r = x && typeof x === 'object' && typeof x.r === 'string' ? x.r : 'error';
     if (r !== 'enter') return r;
-    const wc = p.view.webContents; wc.focus();                // no send button: Enter into the composer (it has the page's focus), as before
+    const wc = p.view.webContents;
+    if (panes[focused] !== p || !wc.isFocused() || !windowActive() || overlayOpen) return 'nobutton';   // a bulk send / wake must not take the keyboard for Enter
     for (const ev of [{ type: 'keyDown', keyCode: 'Enter' }, { type: 'char', keyCode: '\r' }, { type: 'keyUp', keyCode: 'Enter' }]) wc.sendInputEvent(ev);
-    if (overlayOpen) overlay.webContents.focus();
     return r;
   } };
 async function bcPreview(body, ids) {
@@ -2561,7 +2584,7 @@ on('dock-drop', (x, y) => dockDrop(x, y));
 on('dock-end', () => dockEnd('END'));
 on('maximize', id => toggleMaximize(id));
 on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
-on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) { reloadPane(p); setFocused(panes.indexOf(p)); } });   // asleep, or its wait was cancelled (取消): load it now
+on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) reloadPane(p); });   // wake only; a placeholder click selects explicitly in renderer.js
 on('load-cancel', id => { const p = byId(id); if (p) lq.cancel(t => t.win === ctx && t.ent === p.obs.ent && !t.probe && t.state === 'wait', 'USER'); });
 on('sleep-now', id => { const p = byId(id); if (p) sleepNowAsk(p); });
 on('probe-resume', () => probeResume());                     // (#33) 確認を再開 in a sleeping pane's placeholder (after a sign-in page)
@@ -2600,17 +2623,19 @@ on('rename-pane', id => { const p = byId(id); if (p) openOverlay('rename', { id,
 paneOn('pane:msgcount', (p, c) => onMsgCount(p, IPC.msgCount(c)));
 paneOn('pane:pc-opened', p => {                              // the page's computer view appeared (user clicked 'コンピュータを表示')
   if (p.pcMax || p.sleeping || !isBotUrl(p.view.webContents.getURL())) return;
+  if (!inView(p) || !p.view.webContents.isFocused()) return;   // a modal restored by a wake / router fix is not a click into this pane
   if (maximizedId === p.id || settings.autoPc !== false) setPcMax(p, true);   // already maximised: just relax the size caps (no maximize / restore dance)
 });
 paneOn('pane:pc-closed', p => { if (p.pcMax) setPcMax(p, false); });
 paneOn('pane:img-opened', p => {                             // the user clicked an image of a grok.com page (settings.autoImg)
   if (p.imgMax || p.pcMax || p.sleeping || settings.autoImg === false || !/^https:\/\/grok\.com\//.test(p.view.webContents.getURL())) return;
+  if (!inView(p) || !p.view.webContents.isFocused()) return;
   setImgMax(p, true);
 });
 paneOn('pane:img-closed', (p, viewer) => { if (p.imgMax) setImgMax(p, false, viewer === true); });
 paneOn('pane:msgmode-off', p => resetCounts(p));
 paneOn('pane:mutation', p => markActivity(p, 'dom'));
-paneOn('pane:interact', p => { p.lastInteract = Date.now(); clearUnread(p); const i = panes.indexOf(p); if (i !== focused) setFocused(i); });
+paneOn('pane:interact', p => { p.lastInteract = Date.now(); clearUnread(p); });   // selection comes only from native mouseDown / explicit chrome actions
 paneOn('pane:mouseup', () => splitEnd());
 paneOn('pane:typing', p => { p.lastTyping = Date.now(); p.lastInteract = Date.now(); });
 paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
@@ -2702,6 +2727,7 @@ win = new BrowserWindow({ ...bounds, minWidth: 600, minHeight: 400, title: 'Mult
   ...(isMac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, vibrancy: 'under-window', visualEffectState: 'followWindow' } : {}),
   webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
 regWc(win.webContents, 'chrome', { ctx });
+rememberKeyboard(win.webContents);
 guardUi(win.webContents);                                    // (#72) never moves / opens windows
 ctxs.push(ctx);
 if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximize();
@@ -2731,6 +2757,7 @@ win.on('closed', () => {
 
 overlay = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
 regWc(overlay.webContents, 'overlay', { ctx });
+rememberKeyboard(overlay.webContents);
 guardUi(overlay.webContents);
 overlay.setBackgroundColor('#00000000');
 overlay.setVisible(false);

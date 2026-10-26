@@ -14,9 +14,11 @@
 // the real stop. A cancel never frees a running task's slot by itself; a start that throws frees it at once (nothing began), a stop that throws
 // keeps it (main's own check ends it). A late finish of a task that already ended or was replaced changes nothing.
 const CLASSES = ['USER', 'BULK', 'BG'];
-const LIMIT = 2, PROBE_LIMIT = 1;
+// Four visible USER / BULK loads share this cap across all windows; background checks still get only one.
+// Not unlimited: each Grok reload can use hundreds of MB plus a CPU / network burst; parallel reloads thrash a loaded Mac.
+const LIMIT = 4, PROBE_LIMIT = 1;
 const SETTLE_MS = 1500;          // a load counts as settled after this long with nothing loading and no bot-page fix running
-const CAP_MS = 25000;            // ...or after this long when only a bot-page fix is still polling (the fix goes on, the slot goes back)
+const CAP_MS = 6000;             // after this long, release once the page is quiet even if a fix still polls; fixLoad queues later hard loads
 const HARD_MS = 60000;           // still loading after this long: main stops the load (the slot goes back once it has stopped)
 // fixed codes (diagnostics load.queue): queued without a free slot / merged into an existing task / replaced by a newer one / a background check
 // stopped for the user's load; how a task ended: settled / released at the cap / stopped after a cancel / view gone / the input check refused it /
@@ -33,8 +35,9 @@ function settle({ now, t0, quiet = 0, loading = false, fixing = false } = {}) {
   if (![now, t0].every(Number.isFinite)) return '';
   const ms = now - t0;
   if (loading) return ms >= HARD_MS ? 'STOP' : '';
-  if (fixing) return ms >= CAP_MS ? 'CAP' : '';
-  return now - Math.max(t0, Number.isFinite(quiet) ? quiet : 0) >= SETTLE_MS ? 'DONE' : '';
+  const settled = now - Math.max(t0, Number.isFinite(quiet) ? quiet : 0) >= SETTLE_MS;
+  if (fixing) return ms >= CAP_MS && settled ? 'CAP' : '';
+  return settled ? 'DONE' : '';
 }
 
 // onChange({ type: 'wait' | 'merge' | 'start' | 'stop' | 'end', t, code }) after every change (never throws into the queue)

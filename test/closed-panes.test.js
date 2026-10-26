@@ -113,7 +113,7 @@ function model(rows) {
   t('main: reopenClosed plans first, makes the pane through addPane (new id / generation, its load through the queue), takes the entry after',
     /CP\.plan\(closedStack, panes\.length, MAX, reopening\)/.test(reopen) && reopen.indexOf('addPane(') < reopen.indexOf('CP.take(closedStack, e)') && reopen.indexOf('if (!p)') < reopen.indexOf('CP.take(') && !/closedStack\.(pop|shift|splice)/.test(main));
   t('main: placed by dock-layout reopen (placeReopened on the cells, its stacked cell when it still fits), the keyboard follows only via CP.mayFocus', /DL\.reopen\(before, p\.id, e\)/.test(reopen) && /before = paneGrid\(\)/.test(reopen)
-    && /CP\.mayFocus\(at, focusNow\(\)\)\) p\.view\.webContents\.focus\(\)/.test(reopen) && !/setTimeout\(\(\) => !p\.view/.test(reopen));
+    && /CP\.mayFocus\(at, focusNow\(\)\)\) \{ keyboardFocus = p\.view\.webContents; p\.view\.webContents\.focus\(\)/.test(reopen) && !/setTimeout\(\(\) => !p\.view/.test(reopen));
   t('main: closePane records where the pane sat in the cells (dock-layout where) and closes its cell / row (without)', /w = DL\.where\(g, id\)/.test(close) && /DL\.fromGrid\(DL\.without\(g, id\)\)/.test(close));
   const elsewhere = main.replace(close, '').replace(reopen, '').split('\n').filter(l => l.includes('closedStack'));
   t('main: the history is never saved (not in snapshot / panes.json) and the UI is told canReopen', snap.length > 100 && !/closedStack/.test(snap) && /canReopen: CP\.canReopen\(closedStack, panes\.length, MAX\)/.test(main)

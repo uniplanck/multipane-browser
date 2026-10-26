@@ -108,8 +108,9 @@ t('constants: own world (not 1001-1004), waits bounded, the read is fixed code',
   t('copySel: a newer copy drops an older one; never focuses the pane; the text is never logged', (cs.match(/seq !== copySeq/g) || []).length === 2 && !/\.focus\(/.test(cs)
     && !/dlog\([^\n]*\b(sel|clip|text|before)\b(?!')/.test(cs.replace(/'[^']*'/g, "''")));
   t('focusPane: a pane that has the keyboard already is not focused again', /if \(!p\.view\.webContents\.isFocused\(\)\) p\.view\.webContents\.focus\(\);/.test(fp) && !/^\s*p\.view\.webContents\.focus\(\);/m.test(fp));
-  t('a click into a page switches through its focus / mousedown report only (no focus call)', /wc\.on\('focus', \(\) => \{ if \(!p\.sleeping\) setFocused\(panes\.indexOf\(p\)\); \}\);/.test(main)
-    && /^paneOn\('pane:interact', p => \{ p\.lastInteract = Date\.now\(\); clearUnread\(p\); const i = panes\.indexOf\(p\); if \(i !== focused\) setFocused\(i\); \}\);/m.test(main) && !/focus\(\)/.test(fn('setFocused'))); }
+  t('a native click selects explicitly through focusPane (no repeat focus); a focus event / renderer report cannot select', /wc\.on\('focus', \(\) => paneGotFocus\(p\)\);/.test(main)
+    && /wc\.on\('before-mouse-event', \(e, m\) => \{ if \(m\.type === 'mouseDown' && !p\.sleeping\) focusPane\(panes\.indexOf\(p\)\); \}\);/.test(main)
+    && /^paneOn\('pane:interact', p => \{ p\.lastInteract = Date\.now\(\); clearUnread\(p\); \}\);/m.test(main) && !/focus\(\)/.test(fn('setFocused'))); }
 
 console.log(bad ? `\n${bad} failed` : '\nall passed');
 process.exit(bad ? 1 : 0);

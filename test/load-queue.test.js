@@ -1,5 +1,5 @@
 // node test/load-queue.test.js — #31 shared load queue. The pure queue (src/load-queue.js) with deferred promises and a fake clock: the limits
-// (2 running, 1 background check) with 10+ requests, order (user > startup / reload-all > background, focused first, then request order),
+// (default 4 running, configured 2 for contention tests; 1 background check) with 10+ requests, order (user > startup / reload-all > background, focused first, then request order),
 // merged / replaced / taken-over requests, a cancelled task keeping its slot until the real stop is confirmed, exceptions, late results, a user's
 // load stopping a background check, a burst after resume, and the settle rule. Then main's wiring (contract with src/main.js, the IPC policy and the
 // diagnostics codes). Not covered here: real page loads / real stop timing / the placeholder on screen - that needs the manual check.
@@ -15,7 +15,7 @@ const deferred = () => { let resolve, reject; const p = new Promise((a, b) => { 
 function rig(opt = {}) {
   let clock = 1000, maxRun = 0, maxProbe = 0;
   const log = [], ends = new Map(), defs = new Map(), stops = [];
-  const q = LQ.createLoadQueue({ now: () => clock, ...opt, onChange: e => { log.push(`${e.type}:${e.t.data?.n}${e.code ? ':' + e.code : ''}`); const s = q.stats(); maxRun = Math.max(maxRun, s.used); maxProbe = Math.max(maxProbe, s.probe); } });
+  const q = LQ.createLoadQueue({ limit: 2, now: () => clock, ...opt, onChange: e => { log.push(`${e.type}:${e.t.data?.n}${e.code ? ':' + e.code : ''}`); const s = q.stats(); maxRun = Math.max(maxRun, s.used); maxProbe = Math.max(maxProbe, s.probe); } });
   const req = (n, x = {}) => q.request({ ent: x.ent ?? n, gen: x.gen ?? 1, purpose: x.purpose || 'START', cls: x.cls || 'BULK', probe: !!x.probe, win: x.win ?? 'w1', url: x.url || `u${n}`,
     data: { n, rank: x.rank ?? 1 }, onStart: x.onStart || (tk => { const d = deferred(); defs.set(tk.id, d); return d.p; }),
     onStop: x.onStop || ((tk, code) => stops.push([tk.data.n, code])), onEnd: (tk, code) => ends.set(tk.id, code) });
@@ -26,6 +26,20 @@ function rig(opt = {}) {
 const rankOf = tk => tk.data.rank;
 
 (async () => {
+// ---- shipping defaults: four shared slots, still one probe; focused wake first ----
+{ const q = LQ.createLoadQueue({ rank: tk => tk.ent === 10 ? 0 : 1 }), starts = [];
+  t('defaults: 4 total, 1 probe, 1500 ms quiet, 6000 ms polling cap, 60000 ms hard stop', q.limit === 4 && q.probeLimit === 1
+    && LQ.SETTLE_MS === 1500 && LQ.CAP_MS === 6000 && LQ.HARD_MS === 60000);
+  q.batch(() => { for (let i = 1; i <= 10; i++) q.request({ ent: i, purpose: 'WAKE', cls: i % 2 ? 'USER' : 'BULK', onStart: tk => { starts.push(tk.ent); } }); });
+  t('default burst: four slots, USER before BULK', q.stats().used === 4 && q.stats().wait === 6 && J(starts) === '[1,3,5,7]');
+  const user = q.find(tk => tk.ent === 9); q.finish(q.find(tk => tk.state === 'run').id);
+  t('default burst: last USER wake starts next', user.state === 'run' && q.stats().used === 4);
+  q.finish(q.find(tk => tk.state === 'run').id);
+  t('default burst: focused BULK wake precedes other BULK wakes', starts[5] === 10 && q.stats().used === 4);
+  const probes = LQ.createLoadQueue();
+  probes.request({ ent: 1, probe: true, cls: 'BG', onStart() {} }); probes.request({ ent: 2, probe: true, cls: 'BG', onStart() {} });
+  for (let i = 3; i <= 6; i++) probes.request({ ent: i, cls: 'BULK', onStart() {} });
+  t('default burst with checks: at most one probe among four total', probes.stats().used === 4 && probes.stats().probe === 1 && probes.stats().wait === 2); }
 // ---- limits: 10 requests, never more than 2 running; one finishes -> the next starts ----
 { const r = rig({ rank: rankOf }); const ids = [];
   for (let i = 1; i <= 10; i++) ids.push(r.req(i).task.id);
@@ -146,8 +160,10 @@ const rankOf = tk => tk.data.rank;
 { const s = (ms, x = {}) => LQ.settle({ now: 100000 + ms, t0: 100000, ...x });
   t('settle: not before SETTLE_MS of quiet', s(LQ.SETTLE_MS - 1) === '' && s(LQ.SETTLE_MS) === 'DONE');
   t('settle: quiet counts from the last load activity', s(5000, { quiet: 100000 + 4000 }) === '' && s(5600, { quiet: 100000 + 4000 }) === 'DONE');
-  t('settle: never while loading or a fix runs (before the caps)', s(20000, { loading: true }) === '' && s(20000, { fixing: true }) === '');
+  t('settle: never while loading or a fix runs (before the caps)', s(20000, { loading: true }) === '' && s(LQ.CAP_MS - 1, { fixing: true }) === '');
   t('settle: a fix still polling after CAP_MS gives the slot back (CAP); a load still loading does not', s(LQ.CAP_MS, { fixing: true }) === 'CAP' && s(LQ.CAP_MS, { loading: true, fixing: true }) === '');
+  t('settle: cap never releases a page that only just stopped loading', s(10000, { quiet: 100000 + 10000, fixing: true }) === ''
+    && s(11499, { quiet: 100000 + 10000, fixing: true }) === '' && s(11500, { quiet: 100000 + 10000, fixing: true }) === 'CAP');
   t('settle: still loading after HARD_MS -> STOP (main stops it, then it settles)', s(LQ.HARD_MS, { loading: true }) === 'STOP' && s(LQ.HARD_MS + 300, { fixing: true }) === 'CAP');
   t('settle: bad times -> busy', LQ.settle({ now: NaN, t0: 1 }) === '' && LQ.settle() === ''); }
 

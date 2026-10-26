@@ -195,7 +195,8 @@ t('diagnostics: a BACKOFF entry keeps the pane number and the failures in a row 
 // ---- the UI: placeholder line + two buttons; IPC / preload ----
 { const r = read('renderer.js'), css = read('style.css'), pre = read('preload.js');
   t('renderer: the placeholder has the line and ログインを確認 / 確認を再開', /<div class="chk"><span class="chkt"><\/span><button class="pbx pbl"[^>]*>ログインを確認<\/button><button class="pbx pbr"[^>]*>確認を再開<\/button><\/div>/.test(r));
-  t('renderer: ログインを確認 opens this pane, 確認を再開 only resumes (neither wakes through the placeholder click)', /d\.querySelector\('\.pbl'\)\.onclick = e => \{ e\.stopPropagation\(\); mpb\.wakePane\(id\); \};/.test(r)
+  t('renderer: ログインを確認 explicitly selects / opens this pane, 確認を再開 only resumes (neither bubbles)', /const openSleeping = \(\) => \{ mpb\.focusPane\(id\); mpb\.wakePane\(id\); \};/.test(r)
+    && /d\.querySelector\('\.pbl'\)\.onclick = e => \{ e\.stopPropagation\(\); openSleeping\(\); \};/.test(r)
     && /d\.querySelector\('\.pbr'\)\.onclick = e => \{ e\.stopPropagation\(\); mpb\.probeResume\(\); \};/.test(r));
   t('renderer: shows main\'s text as text (no HTML), buttons only while stopped', /c\.querySelector\('\.chkt'\)\.textContent = p\.chk \|\| '';/.test(r) && /c\.classList\.toggle\('hold', !!\(p\.chk && s\.chkHold\)\);/.test(r));
   t('style: the line is shown only when there is one; buttons only while stopped; the buttons are not 取消 (.lqx)', /\.pane \.sleepph \.chk\{display:none;/.test(css) && /\.pane \.sleepph \.chk\.on\{display:flex\}/.test(css)
