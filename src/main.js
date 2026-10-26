@@ -72,6 +72,13 @@ const { emptyDoc } = require('./state-schema');
 const stateFile = () => path.join(app.getPath('userData'), 'panes.json');
 const QUIT_FLUSH_MS = 3000;                                // a normal quit waits at most this long for the last save
 let store = null;                                          // created in startup()
+const { createDraftStore } = require('./draft-store');
+const { DRAFT, composerFill } = require('./pane-rules');
+const { randomUUID } = require('crypto');
+let draftStore = null;
+const draftIds = new Set();
+function draftId(value) { const id = DRAFT.id(value) && !draftIds.has(value) ? value : randomUUID(); draftIds.add(id); return id; }
+const draftsEnabled = () => settings.saveDrafts !== false && !!store?.writable();
 let saveFails = 0;                                         // failed save attempts in a row (diagnostics)
 const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: p.name || '', color: p.color || 'none', muted: !!p.muted, zoom: p.zoom || 1, zoomIndiv: !!p.zoomIndiv, sleep: p.sleepOn !== false });
 // ---- 前回のスリープ状態を復元 (#22, session-snapshot.js; settings.restoreSleep, default off): a window's own save adds the snap of a sleeping pane
@@ -79,7 +86,7 @@ const paneSpec = p => ({ url: paneUrl(p), reloadMinutes: p.reloadMinutes, name: 
 // p.restored: what it was restored with, until it wakes / a background check finds something new (memory only). Off: no snap written or read
 const SS = require('./session-snapshot');
 function paneSave(p, now = Date.now()) {
-  const s = paneSpec(p);
+  const s = { ...paneSpec(p), draftId: p.draftId };          // stable identity only in this window's save, never in a copy / workspace / reopen
   if (settings.restoreSleep !== true || !p.sleeping) return s;
   const r = p.restored, id = p.sleepSnap || {};
   const snap = SS.make({ sleeping: true, mk: r ? r.mk : SS.markOf(p), ob: r ? r.ob : p.markAt || p.sleepAt, nm: id.name, gp: id.group, q: r ? r.q : p.reqQuote },
@@ -564,9 +571,7 @@ const BC_PICK = `const vis=e=>e.offsetParent!==null&&!e.closest('[aria-hidden="t
 const BC_INPUT_JS = body => `(()=>{/*mpb:bc-input*/${BC_PICK}
   if(!el)return{r:'nocomposer'};const box=el.closest('form')||(el.parentElement&&el.parentElement.parentElement);
   if(val(el).trim()||(box&&box.querySelector('img[src^="blob:"], [data-testid*="attachment-preview" i], [data-testid*="file-preview" i]')))return{r:'notempty'};
-  const T=${JSON.stringify(String(body))};el.focus();
-  if(el.tagName==='TEXTAREA'){Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,T);el.dispatchEvent(new Event('input',{bubbles:true}));}
-  else{getSelection().selectAllChildren(el);document.execCommand('insertText',false,T);}
+  const T=${JSON.stringify(String(body))};(${composerFill})(el,T);
   const now=val(el);return now.trim()?{r:'typed',h:hash(now)}:{r:'failed'};})()`;
 const BC_SEND_JS = h => `(()=>{/*mpb:bc-send*/${BC_PICK}
   if(!el)return{r:'nocomposer'};if(hash(val(el))!==${JSON.stringify(String(h))})return{r:'mismatch'};
@@ -1029,7 +1034,7 @@ const sameTarget = (a, b) => { const x = botIdOf(a), y = botIdOf(b); return x ||
 // A load / reload / URL change / SPA move / sleep / wake / renderer gone starts a new generation and the page gets its number (mpb:gen, again on
 // dom-ready); a report counts only within the generation it was stamped with. p.obs is never saved.
 function obsDo(p, a) { const r = PS.reduce(p.obs, a); p.obs = r.o; return r; }
-function sendGen(p) { const wc = p.view.webContents; try { if (p.obs && !wc.isDestroyed()) wc.send('mpb:gen', p.obs.gen); } catch {} }   // no page right now (renderer gone): dom-ready sends it again
+function sendGen(p) { const wc = p.view.webContents; try { if (p.obs && !wc.isDestroyed()) { wc.send('mpb:gen', p.obs.gen); wc.send('mpb:draft-config', draftsEnabled()); } } catch {} }   // no page right now (renderer gone): dom-ready sends it again
 function newGen(p, why) { if (!p.obs) return; obsDo(p, { type: 'bump', gen: nextNo(), why }); sendGen(p); }
 function onMsgCount(p, c) {
   if (p.sleeping) { diag.rec('count.drop', 'SLEEPING', { p: p.id }, 600000); return; }   // a sleeping pane keeps its remembered state
@@ -1058,6 +1063,7 @@ function onMsgCount(p, c) {
   p.lastMsg = c;
   if (!same) dlog(`pane${p.id}`, `msgcount user=${c.user} bot=${c.bot} bot_since=${c.botSince} method=${c.method}`);
   const userSent = p.lastUserCount != null && c.user > p.lastUserCount;
+  if (userSent) { draftStore?.remove(p.draftId, wc.getURL()); wc.send('mpb:draft-sent', { gen: p.obs.gen, url: wc.getURL() }); }
   p.lastUserCount = c.user;
   p.unread = c.botSince;
   const wasW = p.waiting; p.waiting = !!c.waiting;
@@ -1829,7 +1835,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
     contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: true, spellcheck: false } });
   view.setBorderRadius?.(RADIUS);
   view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
-  const p = { id: nextPaneId++, view, url: paneStart(normalize(spec.url)), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
+  const p = { id: nextPaneId++, draftId: draftId(spec.draftId), view, url: paneStart(normalize(spec.url)), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
     name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
     muted: !!spec.muted, ...ZP.restore(spec, gZoom()),      // zoom / zoomIndiv (older saves had per-pane zoom only: those panes stay individual)
@@ -1943,6 +1949,7 @@ function closePane(id, keepEmpty) {
     if (!keepEmpty) CP.push(closedStack, CP.entry(paneSpec(panes[i]), w, NEWTAB));   // for ⌘⇧T (a blank / new-tab pane: nothing to reopen; closing many at once: not kept)
     const r = DL.fromGrid(DL.without(g, id)); rowLens = r.rows; stackLens = r.stacks; }   // only this pane's cell / row shrinks; an empty row disappears
   const [p] = panes.splice(i, 1);
+  draftStore?.remove(p.draftId);                             // closing forgets every URL of this pane; ⌘⇧T has a new identity
   disposePane(p, 'CLOSED');
   if (maximizedId === id) maximizedId = null;
   focused = Math.max(0, Math.min(focused, panes.length - 1));
@@ -2600,6 +2607,17 @@ paneOn('pane:interact', p => { p.lastInteract = Date.now(); clearUnread(p); cons
 paneOn('pane:mouseup', () => splitEnd());
 paneOn('pane:typing', p => { p.lastTyping = Date.now(); p.lastInteract = Date.now(); });
 paneOn('pane:draft', (p, v) => { p.hasDraft = v === true; });
+paneOn('pane:draft-save', (p, d) => {
+  if (!hasPage(p)) return;
+  const action = DRAFT.action({ ...d, enabled: draftsEnabled(), currentGen: p.obs.gen, currentUrl: p.view.webContents.getURL() });
+  if (action === 'save') draftStore?.put(p.draftId, d.url, d.text);
+  else if (action === 'delete') draftStore?.remove(p.draftId, d.url);
+});
+paneOn('pane:draft-load', (p, d) => {
+  if (!hasPage(p) || DRAFT.action({ ...d, enabled: draftsEnabled(), text: '', currentGen: p.obs.gen, currentUrl: p.view.webContents.getURL() }) === 'ignore') return;
+  const entry = draftStore?.get(p.draftId, d.url);
+  if (entry) p.view.webContents.send('mpb:draft-restore', { gen: d.gen, url: d.url, rev: d.rev, text: entry.text, at: entry.at });
+});
 paneOn('pane:editing', (p, v) => { p.editing = !!v; });
 paneOn('pane:ime', (p, v) => { p.ime = v === true; });       // #11: no page is thrown away during an IME composition
 paneOn('pane:sel', (p, v) => { p.sel = v === true; });       // 選択部分だけコピー: ⌘C goes to copySel while true
@@ -2658,6 +2676,7 @@ function snapshot() {
 
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
+  draftConfig() { panes.forEach(p => { if (!p.view.webContents.isDestroyed()) p.view.webContents.send('mpb:draft-config', draftsEnabled()); }); },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
@@ -2793,6 +2812,8 @@ function buildMenu() {
       // (#22) both off by default. Off: no snap / quote written (the next save removes them), every pane loads at startup as before
       { label: '前回のスリープ状態を復元（再起動後。スリープ中だったペインは読み込まずにスリープのまま開く）', type: 'checkbox', checked: settings.restoreSleep === true, click: m => { settings.restoreSleep = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中の引用も保存（最大300文字）', type: 'checkbox', enabled: settings.restoreSleep === true, checked: settings.saveQuote === true, click: m => { settings.saveQuote = m.checked; save(); } },
+      { label: '入力中の下書きを保存・復元（7日間・このMacに平文で保存）', type: 'checkbox', checked: settings.saveDrafts !== false, click: m => {
+        settings.saveDrafts = m.checked; draftStore?.setEnabled(m.checked); ctxs.forEach(c => c.draftConfig()); save(); } },
       { label: 'デバッグログ（userData/pane-debug.log）', type: 'checkbox', checked: settings.debugLog, click: m => { settings.debugLog = m.checked; save(); } },
       { label: '診断（バージョン・設定・件数・保存状態）…', click: () => cur()?.openOverlay('diag', { diag: diagView() }) },
       { label: '診断ログをファイルにも保存（userData/diagnostics・2MiB×3・7日。会話・名前・URLは記録しない）', type: 'checkbox', checked: settings.diagPersist === true, click: m => { settings.diagPersist = m.checked; diagSync(); save(); } },
@@ -2872,6 +2893,9 @@ function startup() {
   if (ld.status === 'ready' && ld.exists) { try { rotateBackup(stateFile()); } catch (e) { console.error('backup failed', e.code || ''); } }
   const st = ld.status === 'ready' ? ld.doc : emptyDoc();   // recoveryRequired / unsupportedVersion: nothing is taken from the file
   settings = { ...settings, ...st.settings };
+  draftStore = createDraftStore({ file: path.join(app.getPath('userData'), 'drafts.json'), onError: code => dlog('drafts', code) });
+  draftStore.load(); draftStore.setEnabled(settings.saveDrafts !== false);
+  setInterval(() => draftStore.prune(), 3600000).unref();     // expiry on load and hourly, including panes that remain asleep
   if (!settings.notifV2) { settings.notifications = true; settings.notifV2 = true; }
   // 使用量表示 (once, usageV2): a new install starts with no gauge and reads nothing; an install used before (panes.json existed, also an
   // unreadable one, or the old gauges' settings) keeps its gauges, with the local sign-ins they used as checked opt-ins
@@ -2974,7 +2998,8 @@ app.on('before-quit', e => {
   e.preventDefault();
   if (quitFlush === 1) return;
   quitFlush = 1; const doc = stateDoc(); quitting = true;
-  store.flush(doc, QUIT_FLUSH_MS).then(ok => { if (!ok) console.error('state: last save not confirmed before quit'); })
+  Promise.all([store.flush(doc, QUIT_FLUSH_MS), Promise.race([draftStore?.flush(), new Promise(resolve => setTimeout(() => resolve(false), QUIT_FLUSH_MS))])])
+    .then(([ok]) => { if (!ok) console.error('state: last save not confirmed before quit'); })
     .finally(() => { quitFlush = 2; app.quit(); });
 });
 app.on('window-all-closed', () => { clearTimeout(saveTimer); quitting = true; app.quit(); });

@@ -83,6 +83,53 @@ function composerState() {
 }
 // Composer holds typed text / a pending attachment? (blocks auto-sleep)
 function composerDraft() { return composerState().d === 'present'; }
+// The broadcast and draft restore use the same React-compatible input method. This function only types; it never submits.
+function composerFill(el, text) {
+  el.focus();
+  if (el.tagName === 'TEXTAREA') {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  } else { document.getSelection().selectAllChildren(el); document.execCommand('insertText', false, text); }
+}
+function draftComposer() {
+  return [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')]
+    .filter(e => e.offsetParent !== null && !e.closest('[aria-hidden="true"]') && !(e.tagName === 'TEXTAREA' && e.tabIndex < 0)).pop() || null;
+}
+const draftText = el => el ? String((el.tagName === 'TEXTAREA' ? el.value : el.innerText || el.textContent) || '') : '';
+// Pure disk-draft rules. Only main performs file IO. URL queries are preserved (they may identify a conversation), sorted; fragments ignored.
+const DRAFT = {
+  MAX: 20000, AGE: 7 * 86400000, LIMIT: 100,
+  id: v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(v),
+  url(value) {
+    try {
+      const u = new URL(value);
+      if (u.origin !== 'https://grok.com' || u.username || u.password || !/^\/(?:$|(?:bot|c|chat)\/[A-Za-z0-9_-]+\/?$)/.test(u.pathname)) return '';
+      u.hash = ''; u.pathname = u.pathname.replace(/\/$/, '') || '/'; u.searchParams.sort();
+      return u.href;
+    } catch { return ''; }
+  },
+  key(pane, url) { const u = DRAFT.url(url); return DRAFT.id(pane) && u ? JSON.stringify([pane, u]) : ''; },
+  expired(at, now) { return !Number.isFinite(at) || at <= 0 || !Number.isFinite(now) || at > now || now - at > DRAFT.AGE; },
+  clean(items, now) {
+    const out = new Map();
+    for (const d of Array.isArray(items) ? items : []) {
+      if (!d || !DRAFT.key(d.pane, d.url) || typeof d.text !== 'string' || !d.text.trim() || DRAFT.expired(d.at, now)) continue;
+      const e = { pane: d.pane, url: DRAFT.url(d.url), text: d.text.slice(0, DRAFT.MAX), at: d.at };
+      const key = DRAFT.key(e.pane, e.url), prev = out.get(key);
+      if (!prev || prev.at <= e.at) out.set(key, e);
+    }
+    return [...out.values()].sort((a, b) => b.at - a.at).slice(0, DRAFT.LIMIT);
+  },
+  action({ enabled, gen, currentGen, url, currentUrl, text, known = true, sent = false }) {
+    if (!enabled || !known || !Number.isSafeInteger(gen) || gen <= 0 || gen !== currentGen || !DRAFT.url(url) || DRAFT.url(url) !== DRAFT.url(currentUrl) || typeof text !== 'string') return 'ignore';
+    return sent || !text.trim() ? 'delete' : 'save';
+  },
+  restore({ enabled, entry, now, gen, currentGen, url, currentUrl, rev, currentRev, touched, empty, ime }) {
+    return !!(enabled && entry && typeof entry.text === 'string' && entry.text.trim() && !DRAFT.expired(entry.at, now)
+      && DRAFT.action({ enabled, gen, currentGen, url, currentUrl, text: entry.text }) === 'save'
+      && rev === currentRev && !touched && empty && !ime);
+  },
+};
 // ---- conversation snapshot (#03): what one scan of the page is sure about, item by item ----
 // Each item is one fixed code; SNAP says whether that code is a valid reading (true) or unknown (false), and the code is the reason.
 // No scores: a reading comes from a confirmed structure of the page, or it is unknown.
@@ -157,4 +204,4 @@ const msgKey = c => [c.user, c.bot, c.botSince, c.waiting, c.working, c.done, c.
   c.snap ? Object.keys(SNAP).filter(k => k !== 'stable').map(k => c.snap[k]).join(',') + ',' + c.snap.cid : ''].join('/');
 // SHARED-END
 const COMPOSER_JS = `(${composerState})()`;
-module.exports = { QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerState, composerDraft, COMPOSER_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };
+module.exports = { QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerState, composerDraft, composerFill, DRAFT, COMPOSER_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };

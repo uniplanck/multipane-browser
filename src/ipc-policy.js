@@ -8,7 +8,7 @@
 //        approve = the 承認Bot popup (no preload: may not send anything)
 const path = require('path');
 const { fileURLToPath } = require('url');
-const { SNAP } = require('./pane-rules');
+const { SNAP, DRAFT } = require('./pane-rules');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -173,6 +173,8 @@ const CHANNELS = {
   'pane:img-closed': { roles: PANE, shape: a => bool(a[0]) },
   'pane:interact': { roles: PANE }, 'pane:mouseup': { roles: PANE }, 'pane:typing': { roles: PANE },
   'pane:draft': { roles: PANE, shape: a => bool(a[0]) },
+  'pane:draft-load': { roles: PANE, origin: GROK, shape: ([d]) => obj(d) && id(d.gen) && int(d.rev, 0, Number.MAX_SAFE_INTEGER) && str(d.url, URL_MAX) && !!DRAFT.url(d.url) },
+  'pane:draft-save': { roles: PANE, origin: GROK, shape: ([d]) => obj(d) && id(d.gen) && int(d.rev, 0, Number.MAX_SAFE_INTEGER) && str(d.url, URL_MAX) && !!DRAFT.url(d.url) && str(d.text, DRAFT.MAX) },
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
   'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
   'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)

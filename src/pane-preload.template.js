@@ -1,5 +1,5 @@
 // Preload for web content panes. Exposes NOTHING to the page (no contextBridge);
-// it only observes the DOM from the isolated world and reports coarse signals to the main process.
+// it observes the DOM from the isolated world; draft text goes only to main's private draft store. Restore only types, never sends.
 const { ipcRenderer, webFrame } = require('electron');
 
 let lastLen = -1, timer = null;
@@ -138,6 +138,7 @@ function setGen(g) {
   if (!Number.isSafeInteger(g) || g <= 0 || g === gen) return;
   gen = g; lastSent = null; pendingKey = null; moving = true;   // scans of the old generation never confirm a report of the new one
   if (grokChat() && !timer) timer = setTimeout(check, 300);
+  scheduleDraftText();
 }
 ipcRenderer.on('mpb:gen', (_e, g) => setGen(g));
 function sendCount(c) {
@@ -169,7 +170,7 @@ function check() {
   lastLen = len;
 }
 // Debounced: text length is compared at most every 1.5 s, so animations/attribute changes don't count.
-const obs = new MutationObserver(() => { if (!timer) timer = setTimeout(check, 1500); scheduleDraft(); });
+const obs = new MutationObserver(() => { if (!timer) timer = setTimeout(check, 1500); scheduleDraft(); scheduleDraftText(); });
 window.addEventListener('DOMContentLoaded', () => {
   obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setTimeout(check, 3000);
@@ -195,6 +196,83 @@ window.addEventListener('focusout', scheduleDraft, true);
 window.addEventListener('keyup', scheduleDraft, true);
 window.addEventListener('paste', scheduleDraft, true);
 window.addEventListener('drop', scheduleDraft, true);
+// Disk drafts: main supplies the generation / opt-in and validates every report. An initial empty field is never a deletion.
+// Restore waits for a complete page and a visible composer, then checks again on receipt; any real editing cancels it, even type-then-clear.
+let draftEnabled = false, draftTextTimer = null, draftUrlNow = '', draftGen = 0, draftRev = 0, draftTouched = false;
+let draftRequested = false, draftLastText = '', draftLastSent = null, draftBlocked = null, draftSubmitting = null;
+function syncDraftPage() {
+  const u = DRAFT.url(location.href);
+  const moved = u !== draftUrlNow;
+  if (moved) { draftUrlNow = u; draftRev = 0; draftTouched = false; draftLastText = ''; draftBlocked = null; draftSubmitting = null; }
+  if (moved || gen !== draftGen) { draftGen = gen; draftRequested = false; draftLastSent = null; }
+  return u;
+}
+function scheduleDraftText(reset = false) {
+  if (!draftEnabled) return;
+  if (reset) { clearTimeout(draftTextTimer); draftTextTimer = null; }
+  if (!draftTextTimer) draftTextTimer = setTimeout(persistDraftText, 750);
+}
+function persistDraftText() {
+  clearTimeout(draftTextTimer); draftTextTimer = null;
+  if (!draftEnabled || !gen || !syncDraftPage() || imeOn) return;
+  const el = draftComposer(); if (!el) return;
+  const text = draftText(el).slice(0, DRAFT.MAX);
+  if (!text.trim() && !draftTouched && !draftLastText && !draftRequested && document.readyState === 'complete' && composerState().d === 'empty') {
+    draftRequested = true;
+    ipcRenderer.send('pane:draft-load', { gen, url: draftUrlNow, rev: draftRev });
+  }
+  if (draftBlocked !== null && text === draftBlocked) return;
+  if (text !== draftLastSent && (text.trim() || draftTouched || draftLastText)) {
+    draftLastSent = text;
+    ipcRenderer.send('pane:draft-save', { gen, url: draftUrlNow, rev: draftRev, text });
+  }
+  draftLastText = text;
+}
+function draftEdited(e) {
+  if (!draftEnabled) return;
+  const el = draftComposer();
+  if (!el || !(e.target === el || el.contains(e.target))) return;
+  syncDraftPage();
+  if (e.isTrusted) { draftRev++; draftTouched = true; draftBlocked = null; }
+  scheduleDraftText(true);
+}
+['beforeinput', 'input', 'compositionstart', 'compositionend'].forEach(type => window.addEventListener(type, draftEdited, true));
+function noteDraftSend() { draftSubmitting = { text: draftText(draftComposer()).slice(0, DRAFT.MAX), rev: draftRev }; }
+window.addEventListener('keydown', e => { if (draftEnabled && e.isTrusted && e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target === draftComposer()) noteDraftSend(); }, true);
+window.addEventListener('submit', () => { if (draftEnabled) noteDraftSend(); }, true);
+function draftClicked(e) {
+  if (!draftEnabled || !e.isTrusted) return;
+  const el = draftComposer(), b = e.target?.closest?.('button');
+  const box = el && (el.closest('form') || el.parentElement?.parentElement);
+  if (b && box?.contains(b) && (b.type === 'submit' || /送信|submit|send/i.test(b.getAttribute('aria-label') || ''))) noteDraftSend();
+}
+ipcRenderer.on('mpb:draft-config', (_e, on) => {
+  if (draftEnabled === (on === true)) return;
+  draftEnabled = on === true; draftRequested = false; draftLastSent = null;
+  clearTimeout(draftTextTimer); draftTextTimer = null;
+  scheduleDraftText();
+});
+ipcRenderer.on('mpb:draft-restore', (_e, d) => {
+  syncDraftPage();
+  const el = draftComposer();
+  if (!el || !d || !DRAFT.restore({ enabled: draftEnabled, entry: d, now: Date.now(), gen: d.gen, currentGen: gen,
+    url: d.url, currentUrl: location.href, rev: d.rev, currentRev: draftRev, touched: draftTouched,
+    empty: composerState().d === 'empty', ime: imeOn })) return;
+  const active = document.activeElement;
+  try { composerFill(el, d.text.slice(0, DRAFT.MAX)); draftLastText = draftText(el).slice(0, DRAFT.MAX); draftLastSent = draftLastText; }
+  catch {} finally { if (active && active !== el && active.isConnected) active.focus(); }
+  scheduleDraft();
+});
+ipcRenderer.on('mpb:draft-sent', (_e, d) => {
+  if (!d || d.gen !== gen || DRAFT.url(d.url) !== DRAFT.url(location.href)) return;
+  const text = draftText(draftComposer()).slice(0, DRAFT.MAX);
+  // A new draft typed since the actual send gesture is kept; an uncleared submitted value cannot be saved again by DOM polling.
+  draftBlocked = draftSubmitting === null || (text === draftSubmitting.text && draftRev === draftSubmitting.rev) ? text : null;
+  draftSubmitting = null; draftRequested = true; draftLastSent = null; draftLastText = '';
+  if (draftBlocked !== null) ipcRenderer.send('pane:draft-save', { gen, url: DRAFT.url(location.href), rev: draftRev, text: '' }); // also supersedes any save already in flight
+  scheduleDraftText(true);
+});
+setInterval(() => scheduleDraftText(), 1000);              // React may clear a textarea without a DOM mutation or input event
 window.addEventListener('input', reportEditing, true);
 window.addEventListener('focusin', reportEditing, true);
 window.addEventListener('focusout', () => setTimeout(reportEditing, 0), true);
@@ -291,6 +369,7 @@ function imgClicked(e) {
   }, 300);
 }
 window.addEventListener('click', e => { try { imgClicked(e); } catch {} }, true);
+window.addEventListener('click', draftClicked, true);
 
 // ---- 画像ビューアの拡大: in grok.com's image viewer (the dialog an image click opens: caption, the picture, ‹ ›, thumbnails, close) the picture
 // fills the area the viewer leaves it (the flex-1 box between caption and thumbnails) with object-fit: contain - aspect kept, larger than its own

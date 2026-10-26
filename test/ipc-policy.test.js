@@ -32,6 +32,8 @@ const CH = Object.keys(P.CHANNELS);
 const SNAPV = { cid: 'abc', conv: 'OK', roles: 'TESTID', latest: 'BOT', marker: 'WAIT', stable: 'QUIET', draft: 'EMPTY', name: 'H1', quote: 'BLOCK' };
 const COUNT = { user: 3, bot: 5, botSince: 2, waiting: true, working: false, done: false, q: '依頼の引用', hn: 'Bot', hh: 'Bot', asks: true, method: 'bot-entry', fp: '1x2y3z.120', snap: SNAPV };
 const SAMPLE = {
+  'pane:draft-load': ['pane', [{ gen: 1, url: 'https://grok.com/bot/abc', rev: 0 }]],
+  'pane:draft-save': ['pane', [{ gen: 1, url: 'https://grok.com/bot/abc', rev: 1, text: '下書き' }]],
   navigate: ['chrome', [1, 'https://grok.com/bot/abc']], 'set-reload': ['chrome', [1, 5]], swap: ['chrome', [1, 3]],
   'dock-begin': ['chrome', [2]], 'dock-ready': ['chrome', [4]], 'dock-hover': ['chrome', [640, 300]], 'dock-drop': ['chrome', [12, 70]], 'dock-end': ['chrome', []],
   layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
