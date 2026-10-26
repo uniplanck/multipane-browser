@@ -52,12 +52,12 @@ const CpuMeter = (() => {
     return Math.max(0, Math.min(100, Math.round((busy * 100) / total)));
   }
 
-  const formatValue = value => finite(value) && value >= 0 ? `${Math.round(value)}%` : '--';
+  const formatValue = value => finite(value) && value >= 0 ? `${Math.round(value)}` : '--';
 
   // The first system sample has no meaningful Mac delta; keep the app side
   // visible while representing only the unavailable side with a placeholder.
   function formatCpu(appCpu, macCpu) {
-    return `CPU ${formatValue(appCpu)} / PC ${formatValue(macCpu)}`;
+    return `${formatValue(appCpu)} / ${formatValue(macCpu)}%`;
   }
 
   return { appCpuPercent, macCpuPercent, formatCpu };

@@ -68,19 +68,24 @@ assert.strictEqual(Cpu.macCpuPercent(cpus(times(0, 0, 0, 0, 0)), cpus(times(1, 0
   assert.deepStrictEqual(current, after);
 }
 
-assert.strictEqual(Cpu.formatCpu(12, 34), 'CPU 12% / PC 34%');
-assert.strictEqual(Cpu.formatCpu(0, 0), 'CPU 0% / PC 0%');
-assert.strictEqual(Cpu.formatCpu(123.4, 56.6), 'CPU 123% / PC 57%');
-assert.strictEqual(Cpu.formatCpu(null, 34), 'CPU -- / PC 34%');
-assert.strictEqual(Cpu.formatCpu(12, null), 'CPU 12% / PC --');
-assert.strictEqual(Cpu.formatCpu(null, null), 'CPU -- / PC --');
+assert.strictEqual(Cpu.formatCpu(55, 99), '55 / 99%');
+assert.strictEqual(Cpu.formatCpu(0, 0), '0 / 0%');
+assert.strictEqual(Cpu.formatCpu(123.4, 56.6), '123 / 57%');
+assert.strictEqual(Cpu.formatCpu(999, 100), '999 / 100%');
+assert.strictEqual(Cpu.formatCpu(null, 34), '-- / 34%');
+assert.strictEqual(Cpu.formatCpu(55, null), '55 / --%');
+assert.strictEqual(Cpu.formatCpu(null, null), '-- / --%');
+for (const unavailable of [undefined, NaN, Infinity, -1, '55']) {
+  assert.strictEqual(Cpu.formatCpu(unavailable, 34), '-- / 34%');
+  assert.strictEqual(Cpu.formatCpu(55, unavailable), '55 / --%');
+}
 
 // The browser gets the same API from the plain script, without CommonJS.
 {
   const browser = {};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'cpu-meter.js'), 'utf8'), browser);
   assert.ok(browser.CpuMeter);
-  assert.strictEqual(browser.CpuMeter.formatCpu(12, null), 'CPU 12% / PC --');
+  assert.strictEqual(browser.CpuMeter.formatCpu(12, null), '12 / --%');
   assert.strictEqual(browser.CpuMeter.macCpuPercent(
     cpus(times(0, 0, 0, 0, 0)), cpus(times(1, 0, 0, 1, 0)),
   ), 50);
