@@ -137,7 +137,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   class El {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parent = null; this.className = ''; this.id = ''; this.title = ''; this.style = {}; this.attrs = {}; this.on = {}; this._t = ''; }
     get classList() { const el = this, set = () => new Set(el.className.split(/\s+/).filter(Boolean));
-      return { contains: c => set().has(c), toggle(c, v) { const s = set(), on = v === undefined ? !s.has(c) : !!v; if (on) s.add(c); else s.delete(c); el.className = [...s].join(' '); return on; } }; }
+      return { contains: c => set().has(c), add(c) { this.toggle(c, true); }, remove(c) { this.toggle(c, false); }, toggle(c, v) { const s = set(), on = v === undefined ? !s.has(c) : !!v; if (on) s.add(c); else s.delete(c); el.className = [...s].join(' '); return on; } }; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
     appendChild(c) { c.remove(); c.parent = this; this.children.push(c); return c; }
     append(...cs) { cs.forEach(c => this.appendChild(c)); }
@@ -154,6 +154,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
       }
     }
     addEventListener(k, f) { (this.on[k] = this.on[k] || []).push(f); }
+    animate(frames, options) { const a = { frames, options, cancelled: false, cancel() { this.cancelled = true; } }; (this.animations ||= []).push(a); return a; }
     getBoundingClientRect() { let x = this; while (x && x !== favs) x = x.parent; return { width: x && favs.shown ? (this === favs ? favs.w : wOf(this)) : 0 }; }
   }
   const has = (e, c) => e.className.split(/\s+/).includes(c);
@@ -177,7 +178,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const modeCtx = vm.createContext({ GM, settings: {}, save() {}, gbPush() {} });
   vm.runInContext(main.match(/function gbModeNext\(\) \{[^\n]*?\}(?=\s)/)[0], modeCtx);
   const mpb = new Proxy({}, { get: (_, k) => (k === 'onGbar' ? cb => { box.gbar = cb; } : (...a) => { box.calls.push([k, ...a]); if (k === 'gbarMode') modeCtx.gbModeNext(); }) });
-  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), URL, document: { createElement: tag => new El(tag) },
+  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: has(e, 'gsep') ? '4px' : '0px', marginRight: has(e, 'gsep') ? '4px' : '0px' }),
     ResizeObserver: class { constructor(cb) { box.ro = cb; } observe() {} } });
   vm.runInContext(ren.slice(A0, A1) + ren.slice(B0, B1), ctx);
@@ -307,6 +308,45 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
       box.calls.length = 0; let pd = 0; items.forEach(e => e.oncontextmenu({ preventDefault: () => { pd++; } }));
       const menuIds = [...PINS.map(b => b.id), ...allItems().filter(x => x.key[0] === 'b').map(x => x.key.slice(1))];
       t('vm ' + m + ': every Bot / group / pin contextmenu opens its own menu', pd === items.length && J(box.calls) === J(menuIds.map(id => ['gbotMenu', id])));
+      const pointer = (timeStamp, extra = {}) => ({ button: 0, pointerId: 1, clientX: 20, clientY: 30, timeStamp, ...extra });
+      const click = (e, detail = 1) => { const c = { button: 0, detail, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } }; e.onclick(c); return c; };
+      box.calls.length = 0;
+      items.forEach(e => e.onpointerdown(pointer(0)));
+      t('vm ' + m + ': holding never opens early; each item animates colour to the threshold', !box.calls.length && items.every(e => {
+        const a = e.animations.at(-1); return a.options.duration === 500 && a.options.fill === 'forwards' && a.frames.at(-1).backgroundColor === 'var(--accent)';
+      }));
+      items.forEach(e => e.onpointerup(pointer(500)));
+      t('vm ' + m + ': releasing every Bot / group / pin at 500ms opens here once', J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'here'])));
+      const opened = box.calls.length;
+      const clicks = items.map(e => click(e));
+      items.forEach(e => e.onpointerup(pointer(1000)));
+      t('vm ' + m + ': following clicks are prevented, duplicate releases do nothing, feedback clears',
+        box.calls.length === opened && clicks.every(c => c.prevented && c.stopped) && items.every(e => e.animations.at(-1).cancelled));
+      box.calls.length = 0;
+      items.forEach(e => { e.onpointerdown(pointer(1000)); e.onpointerup(pointer(1499)); click(e); });
+      t('vm ' + m + ': a fresh short click still opens new', J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'new'])));
+      for (const cancel of ['onpointerleave', 'onpointercancel', 'onpointermove']) {
+        box.calls.length = 0;
+        items.forEach(e => { e.onpointerdown(pointer(0)); e[cancel](pointer(600, { clientX: 27 })); e.onpointerup(pointer(700)); click(e); });
+        t('vm ' + m + ': ' + cancel + ' cancels even after 500ms, including the following click', !box.calls.length && items.every(e => e.animations.at(-1).cancelled));
+      }
+      for (const mods of [{ metaKey: true }, { altKey: true }, { shiftKey: true }, { ctrlKey: true }, { button: 2 }]) {
+        box.calls.length = 0;
+        items.forEach(e => { const n = e.animations.length; e.onpointerdown(pointer(0, mods)); e.onpointerup(pointer(700, mods));
+          if (e.animations.length !== n) throw Error('modified press must not animate'); e.onclick({ button: 0, ...mods }); });
+        const expected = mods.ctrlKey || mods.button === 2 ? [] : menuIds.map(id => ['gbotOpen', id, mods.shiftKey ? 'window' : 'here']);
+        t('vm ' + m + ': holding with ' + J(mods) + ' preserves its click action', J(box.calls) === J(expected));
+      }
+      { const pin = items[0], target = items[1], data = {}, transfer = { types: ['text/x-mpb-gpin'], setData(k, v) { data[k] = v; }, getData(k) { return data[k]; } };
+        box.calls.length = 0; pin.onpointerdown(pointer(0));
+        pin.on.dragstart.forEach(fn => fn({ dataTransfer: transfer })); pin.ondragstart({ dataTransfer: transfer });
+        pin.onpointerup(pointer(700)); click(pin);
+        t('vm ' + m + ': dragging cancels hold and keeps native pin payload / source styling',
+          !box.calls.length && pin.draggable && data['text/x-mpb-gpin'] === 'p1' && has(pin, 'drag-src') && pin.animations.at(-1).cancelled);
+        const drop = { dataTransfer: transfer, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+        target.ondragover(drop); target.ondrop(drop); pin.ondragend();
+        t('vm ' + m + ': pin drag reorder still reaches gbotMove', J(box.calls) === J([['gbotMove', 'p1', 'p2']]) && drop.prevented && drop.stopped && !has(pin, 'drag-src') && !has(target, 'drop-over'));
+      }
       const f = allItems().find(x => x.key === 'f1').e; box.calls.length = 0; f.onclick({});
       t('vm ' + m + ': unrelated URL favorites keep their existing current-pane default', J(box.calls) === J([['favOpen', 1, 'here']]));
     }

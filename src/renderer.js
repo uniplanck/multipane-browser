@@ -333,9 +333,32 @@ function gbotBtn(b, pin) {
   el.className = 'fav-btn gbot' + (pin ? ' gpin' : '') + (b.group ? ' grp' : '');
   el.appendChild(gIcon(b));
   if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>`);   // コンパクト: the icon only
-  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 新しいペインで開く（上限時は今のペイン）\n${MOD}・Optionクリック: 今のペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（今のペイン・名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
+  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 新しいペインで開く（上限時は今のペイン）\n長押しで今のペインで開く（約0.5秒押して離す）\n${MOD}・Optionクリック: 今のペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（今のペイン・名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
   gTrack(el, b);
-  el.onclick = e => { if (e.button === 2 || e.ctrlKey) return; mpb.gbotOpen(b.id, openWhere(e)); };
+  let hold = GbarLongPress.idle(), feedback = null;
+  const clearFeedback = () => { if (feedback) feedback.cancel(); feedback = null; };
+  const cancelHold = e => { hold = GbarLongPress.cancel(hold, e); if (!hold.press) clearFeedback(); };
+  el.onpointerdown = e => {
+    clearFeedback(); hold = GbarLongPress.begin(e);
+    if (hold.press) feedback = el.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
+  };
+  el.onpointermove = e => { hold = GbarLongPress.move(hold, e); if (!hold.press) clearFeedback(); };
+  el.onpointerleave = el.onpointercancel = cancelHold;
+  // Do not capture the pointer or prevent pointerdown/dragstart: pinned items
+  // retain Chromium's native drag-and-drop reorder gesture.
+  el.addEventListener('dragstart', () => cancelHold());
+  el.onpointerup = e => {
+    const result = GbarLongPress.release(hold, e); hold = result.state;
+    if (!hold.press) clearFeedback();
+    if (result.openHere) mpb.gbotOpen(b.id, 'here');
+  };
+  el.onclick = e => {
+    const result = GbarLongPress.click(hold, e); hold = result.state;
+    clearFeedback();
+    if (result.suppress) { e.preventDefault(); e.stopPropagation(); return; }
+    if (e.button === 2 || e.ctrlKey) return;
+    mpb.gbotOpen(b.id, openWhere(e));
+  };
   el.onauxclick = e => { if (e.button === 1) mpb.gbotOpen(b.id, 'new'); };
   el.oncontextmenu = e => { e.preventDefault(); mpb.gbotMenu(b.id); };
   if (pin) {                                                 // pins: drag one onto another to reorder (as the favorites)
