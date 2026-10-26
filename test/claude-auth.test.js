@@ -23,3 +23,8 @@ assert(d.detail.includes('ターミナルで /login を入力し、ブラウザ�
 assert(A.dialog(false).actions[0] === 'auto');
 assert.deepEqual(A.LOGIN_POLLS, [30000, 90000, 180000, 300000, 600000]);
 console.log('all passed: Claude expiry, auto refresh gate, login dialog and poll times');
+
+// keychain with expiresAt 0 + expired refresh, older file without refreshTokenExpiresAt: re-login
+{ const kc = { t: 'k', exp: 0, refreshExp: now - 1 }, file = { t: 'f', exp: now - 5 };
+  const c = A.pick([kc, file]); assert.equal(c.t, 'f'); assert.equal(A.state(c, now), 'relogin');
+  assert.equal(A.pick([null, null]), null); assert.equal(A.pick([{ t: 'a', exp: now + 9 }]).refreshExp, undefined); }

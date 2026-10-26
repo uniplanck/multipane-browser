@@ -78,7 +78,7 @@ function claudeToken() {
     execFile('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { timeout: 20000 }, (err, so) => {
       const kc = !err && so ? fromJson(so.trim()) : null;
       let file = null; try { file = fromJson(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8')); } catch {}
-      const c = [kc, file].filter(Boolean).sort((a, b) => (b.exp || 0) - (a.exp || 0))[0];   // the freshest sign-in
+      const c = CA.pick([kc, file]);   // the freshest sign-in (refresh expiry known from any source)
       res(c || null);
     });
   });

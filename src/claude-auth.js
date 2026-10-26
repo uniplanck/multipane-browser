@@ -8,6 +8,15 @@ function state(c, now) {
   if (expired && time(c.refreshExp) && c.refreshExp <= now) return 'relogin';
   return expired ? 'expired' : 'ok';
 }
+// The freshest sign-in; an older source without a refresh expiry (old ~/.claude/.credentials.json) takes the known expiry of the others.
+function pick(sources) {
+  const list = (sources || []).filter(Boolean);
+  const c = list.slice().sort((a, b) => (b.exp || 0) - (a.exp || 0))[0];
+  if (!c) return null;
+  if (time(c.refreshExp)) return c;
+  const r = list.map(x => x.refreshExp).filter(time);
+  return r.length ? { ...c, refreshExp: Math.max(...r) } : c;
+}
 function canRefresh(kind, error, prev, now) {
   return kind === 'claude' && !!error?.auth && !error.relogin && !(prev.nextAt && now < prev.nextAt)
     && now - (prev.refreshTry || 0) > 10 * 60000;
@@ -19,4 +28,4 @@ function dialog(relogin) {
     buttons: actions.map(a => a === 'auto' ? '自動で再認証を試す' : a === 'terminal' ? 'ターミナルでログイン' : '閉じる'),
     defaultId: 0, cancelId: actions.length - 1, noLink: true, actions };
 }
-module.exports = { RELOGIN, LOGIN_POLLS, state, canRefresh, dialog };
+module.exports = { RELOGIN, LOGIN_POLLS, state, pick, canRefresh, dialog };
