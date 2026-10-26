@@ -438,7 +438,7 @@ ipcOn('focus-other', (r, wid, pid) => {
   if (c.win.isMinimized()) c.win.restore();
   c.win.show(); c.win.focus(); c.focusPaneById(Number(pid));
 });
-const APPROVE_URL = 'https://grok.com/bot/5674ea26-494f-49a0-acc1-f55ce2dd9c94';   // 承認Bot popup
+const APPROVE_URL = 'https://grok.com/bot/c3d3eb49-6bb6-4fed-b4ee-995046412ea9';   // 承認Bot popup (now opens the Tibo bot)
 const APPROVE_KEEP_MS = 5 * 60000;                                                   // keep the hidden popup page this long for a fast reopen, then free its memory
 
 // ---- links opened from page content (bot output, citations, attachments, popups) ----

@@ -71,7 +71,7 @@ function build() {
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
     ...(S?.activeWs ? [[`ワークスペース「${S.activeWs}」を上書き保存`, '⧉', { type: 'ws-overwrite', name: S.activeWs }]] : []),
     ['ワークスペースとして新規保存…', '⧉', { type: 'ws-save-prompt' }],
-    ['承認Botを開く', '✓', { type: 'approve-open' }],
+    ['Tiboを開く', '✓', { type: 'approve-open' }],
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
     ['フォーカス中のペインをお気に入りに追加', '★', { type: 'fav-add-current' }],
     ['新しいウィンドウ', '⧉', { type: 'new-window', url: '' }, `${MOD}N`],
