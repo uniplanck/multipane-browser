@@ -28,10 +28,14 @@ $('#queue-sum').onclick = () => mpb.run({ type: 'queue-open' });   // (#01) å¯¾å
 $('#approve-btn').onclick = () => mpb.approveOpen();
 // panes.json warning (state-store.js): unreadable at start -> recovery list; a save failed -> retry. The panes stay as they are.
 $('#save-warn').onclick = () => { const st = (S && S.store) || {}; if (st.status && st.status !== 'ready') mpb.recoveryOpen(); else mpb.saveRetry(); };
-// memory meter: fixed-width, tabular digits; <1GB -> "333MB", else "1.2GB"
-const memEl = $('#mem');
+// Memory / CPU meters: tabular digits; <1GB -> "333MB", else "1.2GB". IPC carries numbers only.
+const memEl = $('#mem'), cpuEl = $('#cpu');
 const fmtMem = b => { const mb = b / 1048576; return Math.round(mb) < 1024 ? `${Math.round(mb)}MB` : `${(mb / 1024).toFixed(1)}GB`; };
-mpb.onMem(b => { const t = fmtMem(b); if (memEl.textContent !== t) memEl.textContent = t; });
+mpb.onMem(data => {
+  const mem = fmtMem(data.bytes), cpu = CpuMeter.formatCpu(data.appCpu, data.macCpu);
+  if (memEl.textContent !== mem) memEl.textContent = mem;
+  if (cpuEl.textContent !== cpu) cpuEl.textContent = cpu;
+});
 // notification chips for panes in other windows (hidden when there is only one window)
 const othersEl = $('#others'), othersSep = $('#others-sep');
 mpb.onOthers(list => {

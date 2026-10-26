@@ -224,8 +224,10 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 
 .meta .zind{color:#ffb800;font-weight:600}
 
-/* memory meter (top-left, fixed width so it never shifts with the digits) */
-#mem{flex:none;width:50px;text-align:right;font:11px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;color:var(--dim);letter-spacing:0;white-space:nowrap;overflow:hidden;cursor:default}
+/* memory / CPU meters (top-left, room for tabular digits without shifting the bar) */
+#mem,#cpu{flex:none;text-align:right;font:11px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;color:var(--dim);letter-spacing:0;white-space:nowrap;cursor:default}
+#mem{width:50px;overflow:hidden}
+#cpu{min-width:19ch}
 /* notification chips of other windows */
 #others-sep,#others{display:none;flex:none}
 #others-sep.show{display:block;width:1px;height:20px;background:var(--line2);margin:0 4px 0 6px}

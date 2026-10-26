@@ -1,6 +1,8 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, nativeTheme, screen, clipboard, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const CPU = require('./cpu-meter');
 
 // dev/test hook: MPB_SWITCHES="name=value;name2" appends Chromium switches before the app is ready
 for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
@@ -394,19 +396,24 @@ function probeResume() {
   diag.rec('probe', 'RESUME'); dlog('probe: checks resumed');
   buildMenu(); broadcast();
 }
-// ---- app memory meter (top-left) ----
+// ---- app memory / CPU meters (top-left) ----
 // Sum of every Electron process. On macOS privateBytes ~ the process "footprint", which is what Activity Monitor's Memory column shows.
 // Sent every 2.5 s to visible windows, and only while the app is focused (zero work in the background).
-function appMemBytes() {
+function appMemBytes(metrics = app.getAppMetrics()) {
   let b = 0;
-  for (const m of app.getAppMetrics()) b += (m.memory.privateBytes || m.memory.workingSetSize || 0) * 1024;
+  for (const m of metrics) b += (m.memory.privateBytes || m.memory.workingSetSize || 0) * 1024;
   return b;
 }
+let previousCpus = null;
 function sendMem() {
-  if (!BrowserWindow.getFocusedWindow()) return;
-  const b = appMemBytes();
-  if (debugOn()) { const t0 = process.hrtime.bigint(); let ws = 0, pb = 0; for (const m of app.getAppMetrics()) { ws += m.memory.workingSetSize * 1024; pb += (m.memory.privateBytes || 0) * 1024; } dlog('mem', 'private', Math.round(pb / 1048576), 'workingSet', Math.round(ws / 1048576), 'MB; metrics call us', Number((process.hrtime.bigint() - t0) / 1000n)); }
-  ctxs.forEach(c => { try { if (c.win.isVisible() && !c.win.isMinimized()) c.win.webContents.send('mem', b); } catch {} });
+  if (!BrowserWindow.getFocusedWindow()) { previousCpus = null; return; }
+  const t0 = debugOn() ? process.hrtime.bigint() : 0n, metrics = app.getAppMetrics();
+  const metricsUs = t0 ? Number((process.hrtime.bigint() - t0) / 1000n) : 0;
+  const b = appMemBytes(metrics), cpus = os.cpus();
+  const data = { bytes: b, appCpu: CPU.appCpuPercent(metrics), macCpu: CPU.macCpuPercent(previousCpus, cpus) };
+  previousCpus = cpus;
+  if (debugOn()) { let ws = 0, pb = 0; for (const m of metrics) { ws += m.memory.workingSetSize * 1024; pb += (m.memory.privateBytes || 0) * 1024; } dlog('mem', 'private', Math.round(pb / 1048576), 'workingSet', Math.round(ws / 1048576), 'MB; metrics call us', metricsUs); }
+  ctxs.forEach(c => { try { if (c.win.isVisible() && !c.win.isMinimized()) c.win.webContents.send('mem', data); } catch {} });
 }
 setInterval(sendMem, 2500);
 app.on('browser-window-focus', () => setTimeout(sendMem, 50));
