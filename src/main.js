@@ -1190,10 +1190,13 @@ function navHolds(p, input) {
 // click the sidebar link for the same bot (in an isolated JS world), and if none exists,
 // load grok.com/ and click it from there. Bounded retries, one cycle per user-initiated load.
 const GROK_BOT_RE = /^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/;
+// Grok's aria-hidden autosize textarea can have a real rect even when the chat UI is blank.
+const GROK_COMPOSER_JS = `[...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(el => {
+  const r = el.getBoundingClientRect(); return !el.closest('[aria-hidden="true"]') && r.width > 0 && r.height > 0;
+})`;
 const probeCode = id => `(() => {
   const id = ${JSON.stringify(id)};
-  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-  const box = [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis);
+  const box = ${GROK_COMPOSER_JS};
   if (box && location.pathname.includes(id)) return 'rendered';
   const txt = (document.body && document.body.innerText) || '';
   if (/Page not found/i.test(txt)) return 'notfound';
@@ -1275,8 +1278,8 @@ async function grokFix(p, target, id, viaHome) {
 // Watchdog: a bot pane that is on screen, finished its fix routine, and still shows no chat box (blank / landing page) is reloaded
 // through the fast path. Bounded (3 tries per pane, spaced out) so it can never loop.
 // (#32) A pane whose renderer is gone or whose load failed is the recovery policy's (recover*): left alone here. Its reloads count there too.
-const GROK_RENDERED = id => `(() => { const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-  return location.pathname.includes(${JSON.stringify(id)}) && [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(vis) || /Page not found/i.test((document.body && document.body.innerText) || ''); })()`;
+const GROK_RENDERED = id => `(() => {
+  return location.pathname.includes(${JSON.stringify(id)}) && ${GROK_COMPOSER_JS} || /Page not found/i.test((document.body && document.body.innerText) || ''); })()`;
 setInterval(async () => {
   if (process.env.MPB_NO_WATCHDOG) return;
   for (const c of ctxs) for (const p of c.panes) {
