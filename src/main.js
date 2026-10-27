@@ -479,7 +479,7 @@ function linkOpen(wc, d) {
   const r = NAV.windowOpen(d.url, { popup: NAV.popupFeatures(d.features) });
   const childWin = () => {
     const owner = ctxs.find(c => c.panes.some(p => p.view.webContents === wc))?.win || BrowserWindow.getFocusedWindow() || undefined;
-    return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: owner, autoHideMenuBar: true, title: 'MultiPane Browser',
+    return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 760, parent: owner, autoHideMenuBar: true, title: app.getName(),
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } } };
   };
   if (r.action === 'child') { dlog('link', 'popup / auth window'); return childWin(); }
@@ -2727,7 +2727,8 @@ const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { 
 
 const bounds = process.env.MPB_SCREENSHOT ? { x: 0, y: 0, width: 1600, height: 1000 }
   : restore ? restoreBounds(spec.window) : { width: 1400, height: 900 };
-win = new BrowserWindow({ ...bounds, minWidth: 600, minHeight: 400, title: 'MultiPane Browser', show: false,
+// the window title is what the Dock menu / Mission Control / Window menu show: the app's own name (productName), not a fixed string
+win = new BrowserWindow({ ...bounds, minWidth: 600, minHeight: 400, title: app.getName(), show: false,
   backgroundColor: isMac ? '#00000000' : (nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ececec'),
   ...(isMac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, vibrancy: 'under-window', visualEffectState: 'followWindow' } : {}),
   webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
