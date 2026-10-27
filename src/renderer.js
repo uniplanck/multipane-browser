@@ -63,6 +63,7 @@ function shortLabel(s, max = 6) {
   return out;
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function badgeTitle(b) { b.title = b.matches(':hover, :focus') ? `閉じる (${MOD}W)` : (b.dataset.countTitle || ''); }
 
 function mk(id) {
   const d = document.createElement('div'); d.className = 'pane entering';
@@ -71,7 +72,6 @@ function mk(id) {
     <span class="fav"></span>
     <div class="titlebox"><span class="title"></span><input class="url" spellcheck="false" autocomplete="off"></div>
     <span class="meta"></span>
-    <span class="badge"></span>
     <div class="tools">
       <button data-a="back" title="戻る (${MOD}[)">‹</button>
       <button data-a="forward" title="進む (${MOD}])">›</button>
@@ -79,8 +79,8 @@ function mk(id) {
       <button data-a="maximize" title="最大化 / 元に戻す (${MOD}\\・ダブルクリック)">⤢</button>
       <button data-a="paneMenu" title="名前・色・ミュート・自動リロード・ズームなど">⋯</button>
       <button data-a="sleepToggle" class="slp" title="待機中・終了にスリープ: ON">💤</button>
-      <button data-a="close" class="x" title="閉じる (${MOD}W)">✕</button>
     </div>
+    <button type="button" class="badge" draggable="false" aria-label="閉じる"></button>
   </div>
   <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><div class="sleepr"></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" title="このペインを開いてログイン状態を確認します">ログインを確認</button><button class="pbx pbr" title="スリープ中の新着確認を再開します（1枚ずつ順番に確認）">確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
   <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは通常4枚まで。順番が来ると自動で読み込みます</small></div>
@@ -97,8 +97,15 @@ function mk(id) {
   d.querySelector('.pbl').onclick = e => { e.stopPropagation(); openSleeping(); };
   d.querySelector('.pbr').onclick = e => { e.stopPropagation(); mpb.probeResume(); };
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
-  const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title');
-  head.onmousedown = e => { if (!e.target.closest('button,input')) mpb.focusPane(id); };
+  const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title'), badge = d.querySelector('.badge');
+  // A non-draggable child can still start a drag on its draggable parent; exclude that press from docking too.
+  let badgePressed = false;
+  badge.onclick = e => { e.stopPropagation(); mpb.close(id); };
+  badge.onmousedown = e => { badgePressed = true; e.preventDefault(); e.stopPropagation(); };
+  badge.ondblclick = e => e.stopPropagation();
+  badge.ondragstart = e => { e.preventDefault(); e.stopPropagation(); };
+  badge.onmouseenter = badge.onmouseleave = badge.onfocus = badge.onblur = () => badgeTitle(badge);
+  head.onmousedown = e => { badgePressed = false; if (!e.target.closest('button,input')) mpb.focusPane(id); };
   head.ondblclick = e => { if (!e.target.closest('button,input')) mpb.maximize(id); };
   title.onclick = () => startEdit(d);
   inp.onkeydown = e => {
@@ -108,7 +115,7 @@ function mk(id) {
   inp.onfocus = () => { d.classList.add('editing'); inp.select(); mpb.focusPane(id); };
   inp.onblur = () => d.classList.remove('editing');
   // drag a pane by its header: docking (dockStart below; main decides the zone and the drop). A tab of the strip dropped on a header still swaps
-  head.ondragstart = e => { e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); dockStart(id); };
+  head.ondragstart = e => { if (badgePressed || e.target.closest('.badge')) { e.preventDefault(); return; } e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); dockStart(id); };
   head.ondragend = () => { document.body.classList.remove('dragging'); d.classList.remove('drag-src'); document.querySelectorAll('.drop-over').forEach(x => x.classList.remove('drop-over')); dockStop(); };
   const accept = e => !drag && e.dataTransfer.types.includes('text/x-mpb-pane');
   d.ondragover = e => { if (accept(e)) { e.preventDefault(); d.classList.add('drop-over'); } };
@@ -273,7 +280,8 @@ const onS = s => {
     d.querySelector('.meta').innerHTML = meta.join('');
     const b = d.querySelector('.badge');
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
-    b.title = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
+    b.dataset.countTitle = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
+    badgeTitle(b);
     b.classList.toggle('quiet', !p.glow);
     b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working); b.classList.toggle('done', !!p.done); b.classList.toggle('unop', !!p.unopened);
     d.querySelector('[data-a=back]').disabled = !p.canBack;

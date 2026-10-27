@@ -74,7 +74,7 @@ body.mac #tl-space{width:68px}
 .pane.colored .head::before{content:"";position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:0 3px 3px 0;background:var(--pc)}
 .pane.colored .head{background:linear-gradient(90deg,color-mix(in srgb,var(--pc) 16%,var(--head)),var(--head) 60%)}
 .pane.unread .head{background:linear-gradient(90deg,color-mix(in srgb,var(--glow) 22%,var(--head)),var(--head) 70%)}
-.titlebox{flex:1;min-width:0;position:relative;height:22px;display:flex;align-items:center}
+.titlebox{flex:1;min-width:0;position:relative;height:22px;display:flex;align-items:center;overflow:hidden}
 .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text;padding:2px 4px;border-radius:5px}
 .title:hover{background:var(--ctl)}
 .title b{font-weight:600;margin-right:6px}
@@ -82,14 +82,16 @@ body.mac #tl-space{width:68px}
 .url{position:absolute;inset:0;width:100%;opacity:0;pointer-events:none;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:6px;padding:0 7px;font:12px var(--font);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent);transition:opacity .12s}
 .pane.editing .url{opacity:1;pointer-events:auto}
 .pane.editing .title{visibility:hidden}
-.meta{display:flex;gap:5px;color:var(--dim);font-size:10.5px;flex:none}
-.badge:empty{display:none}
+.meta{display:flex;gap:5px;color:var(--dim);font-size:10.5px;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
+.head .badge{position:relative;width:30px;min-width:30px;height:22px;padding:0;border:0;line-height:1;cursor:pointer}
+.head .badge:empty{background:transparent;color:var(--dim)}
+.head:hover .badge:empty::after,.head .badge:hover::after,.head .badge:focus-visible::after{content:"✕";position:absolute;inset:0;display:grid;place-items:center;font-size:14px}
+.head .badge:hover,.head .badge:focus-visible{background:#ff453a;color:#fff;font-size:0}
 .badge.quiet{background:var(--ctl-hi);color:var(--text)}
-.tools{display:flex;gap:1px;flex:none;opacity:.0;transition:opacity .15s}
+.tools{display:flex;gap:1px;flex:0 1 auto;min-width:0;overflow:hidden;opacity:.0;transition:opacity .15s}
 .pane:hover .tools,.pane.focused .tools,.pane.editing .tools{opacity:1}
-.tools button{width:22px;height:22px;border:0;border-radius:5px;background:transparent;color:var(--dim);font-size:14px;line-height:1;display:grid;place-items:center;transition:background .12s,color .12s}
+.tools button{width:22px;height:22px;flex:none;border:0;border-radius:5px;background:transparent;color:var(--dim);font-size:14px;line-height:1;display:grid;place-items:center;transition:background .12s,color .12s}
 .tools button:hover{background:var(--ctl-hi);color:var(--text)}
-.tools button.x:hover{background:#ff453a;color:#fff}
 .tools button:disabled{opacity:.3;pointer-events:none}
 .pane.loading .head::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);background-size:40% 100%;background-repeat:no-repeat;animation:load 1s linear infinite}
 @keyframes load{from{background-position:-40% 0}to{background-position:140% 0}}
@@ -320,6 +322,7 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 
 /* stale = the green / red / purple shown is the last confirmed value, not yet confirmed for the page as it is now (reload / move / reply being written) */
 .chip.stale .wdot,.pane.stale .badge{opacity:.45}
+.pane.stale .head:hover .badge:empty,.pane.stale .badge:hover,.pane.stale .badge:focus-visible{opacity:1}
 .meta .lastok{font-weight:600}
 
 /* panes.json could not be read (recovery) or saved: stays until resolved; click = recovery list / retry */
