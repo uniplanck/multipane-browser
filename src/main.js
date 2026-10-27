@@ -8,6 +8,9 @@ const CPU = require('./cpu-meter');
 for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
 // dev/test hook: MPB_USER_DATA=/absolute/dir runs on its own profile (userData + sessionData: panes.json, cookies, storage), never the real one
 if (process.env.MPB_USER_DATA && path.isAbsolute(process.env.MPB_USER_DATA)) { app.setPath('userData', process.env.MPB_USER_DATA); app.setPath('sessionData', process.env.MPB_USER_DATA); }
+// The app is shown as "xG-Bots" (productName), but its data stays where it always was: userData + sessionData = <appData>/MultiPane Browser
+// (panes.json, drafts.json, settings, cookies / logins), so an install made under the old name keeps everything after the rename.
+else { const DATA_DIR = path.join(app.getPath('appData'), 'MultiPane Browser'); app.setPath('userData', DATA_DIR); app.setPath('sessionData', DATA_DIR); }
 // Memory saver (measured, 8 grok.com panes): std = small V8 young generation + optimize-for-size  (-~730MB / -20%, no behaviour change)
 // max = std + process-per-site (all same-site panes share one renderer: -~1.7GB, but panes then share one JS thread and one crash) .
 // Must be decided before app ready, so settings.memSaver is read synchronously from panes.json here. Values: 'off' | 'std' (default) | 'max'.
@@ -2989,6 +2992,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 app.userAgentFallback = chromeUA();
 app.whenReady().then(() => {
   const { session, powerMonitor } = require('electron');
+  // npm start (unpackaged): the Dock would show Electron's icon; the installed app already has build/icon.icns in its bundle
+  if (isMac && !app.isPackaged) { try { const img = require('electron').nativeImage.createFromPath(path.join(__dirname, '../build/icon.png')); if (!img.isEmpty()) app.dock?.setIcon(img); } catch {} }
   powerMonitor.on('suspend', () => { sysBlocked = true; }); powerMonitor.on('lock-screen', () => { sysBlocked = true; });
   powerMonitor.on('resume', () => { sysBlocked = false; resumeAt = Date.now(); }); powerMonitor.on('unlock-screen', () => { sysBlocked = false; resumeAt = Date.now(); });
   session.defaultSession.setUserAgent(chromeUA());

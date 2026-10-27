@@ -1,6 +1,6 @@
 {
   "name": "multipane-browser",
-  "productName": "MultiPane Browser",
+  "productName": "xG-Bots",
   "version": "1.0.0",
   "description": "1ウィンドウに最大10ペインを並べられるChromiumベースのブラウザ",
   "main": "src/main.js",
@@ -11,11 +11,11 @@
     "start": "electron .",
     "dist:mac": "electron-builder --mac --universal",
     "dist:mac-split": "electron-builder --mac --arm64 --x64",
-    "install:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.identity=null && codesign --force --deep -s - 'dist/mac-arm64/MultiPane Browser.app' && rm -rf '/Applications/MultiPane Browser.app' && ditto 'dist/mac-arm64/MultiPane Browser.app' '/Applications/MultiPane Browser.app'"
+    "install:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.identity=null && codesign --force --deep -s - 'dist/mac-arm64/xG-Bots.app' && rm -rf '/Applications/xG-Bots.app' && ditto 'dist/mac-arm64/xG-Bots.app' '/Applications/xG-Bots.app'"
   },
   "build": {
     "appId": "com.multipanebrowser.app",
-    "productName": "MultiPane Browser",
+    "productName": "xG-Bots",
     "beforePack": "./scripts/build-pane-preload.js",
     "files": [
       "src/**/*",
@@ -26,7 +26,8 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "build/icon.icns"
     }
   },
   "devDependencies": {

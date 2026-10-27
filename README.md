@@ -1,4 +1,4 @@
-# MultiPane Browser
+# xG-Bots (MultiPane Browser)
 
 1つのウィンドウに最大10ペインを並べられる、Chromium（Electron）ベースのmacOS向けブラウザです。複数の Grok Bot チャット（grok.com/bot/…）を横並びで監視する用途向けに作っています。
 
@@ -11,8 +11,9 @@
 2. **取得**: `git clone https://github.com/uniplanck/multipane-browser.git && cd multipane-browser`
 3. **依存を入れる**: `npm ci`（`package-lock.json` どおりに入る）
 4. **試しに起動**: `npm start`（`src/pane-preload.js` が古いと止まる → `npm run build:preload` してからもう一度）
-5. **アプリとしてインストール**: `npm run install:mac` → `/Applications/MultiPane Browser.app`（arm64・ad-hoc署名）。
-   - 手元に `local/install-bots.sh`（ローカル専用。リポジトリには含まれない）がある環境では `./local/install-bots.sh` で `/Applications/Bots.app` として入る（データ＝userData は同じ）。
+5. **アプリとしてインストール**: `npm run install:mac` → `/Applications/xG-Bots.app`（arm64・ad-hoc署名、アイコンは `build/icon.icns`）。データ（userData＝`~/Library/Application Support/MultiPane Browser`：ペイン・下書き・設定・ログイン）は旧名のときと同じ場所をそのまま使う。
+   - 旧名で入れていた `/Applications/MultiPane Browser.app` は、xG-Bots が動くのを確かめたら削除してよい（Dock に固定していた場合は xG-Bots を固定し直す）。
+   - 手元に `local/install-bots.sh`（ローカル専用。リポジトリには含まれない）がある環境では `./local/install-bots.sh` で `/Applications/xG-Bots.app` として入る（データ＝userData は同じ）。
    - 更新するときは `git pull && npm ci` の後に同じコマンドを実行し、アプリを再起動する。
 6. **初回起動**: Finder で開く（署名なしの警告が出たら右クリック →「開く」）。最初のペインで grok.com にログインする。ログインは全ペイン共通。
 
@@ -138,7 +139,7 @@ npm run check:preload    # 生成物が最新か確認（変更しない。古�
   - 普段はメモリに最新1000件だけ（終了で消える）。設定 >「診断ログをファイルにも保存」か `MPB_DEBUG` のときだけ `userData/diagnostics/diag-0〜2.jsonl`（フォルダ0700・ファイル0600、1ファイル2MiB・3世代・7日）に非同期でまとめて書く。書けない（満杯・権限）ときも記録とアプリは止まらず、失敗は1回だけ記録して間隔をあけて再試行。オフにしてもファイルは消さず、整理するのはこのフォルダの `diag-N.jsonl` だけ（`pane-debug.log` は別物で、URLなどを含むことがある）
 
 ## English
-MultiPane Browser is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, an opt-in subscription usage readout (Claude / ChatGPT Codex / Kimi through an in-app sign-in kept in its own partition, Grok through its panes; off by default on a new install), and a workaround for grok.com bot deep links. Quickstart: 1) macOS (Apple Silicon), Git, Node.js 20+; 2) `git clone https://github.com/uniplanck/multipane-browser.git && cd multipane-browser`; 3) `npm ci`; 4) `npm start` to try it, `npm run install:mac` to install `/Applications/MultiPane Browser.app`; 5) sign in to grok.com in a pane, press the Grok button to load your bots into the bar, click a bot to open it in a new pane; 6) have your bots end messages with the 🟢 待機中 / 🟣 終了 / 🔴 作業中 markers (see above) for notifications and auto-sleep; 7) optionally enable the usage gauges (Settings > 使用量表示). Unsent drafts are auto-saved in plaintext on this Mac (7 days, can be turned off). Not affiliated with xAI or X Corp.
+xG-Bots (formerly MultiPane Browser) is an unofficial Electron-based macOS browser that tiles up to 10 web panes in one window, built for monitoring multiple Grok Bot chats side by side. Features: layout presets with auto-fit, draggable splitters, per-pane unread counts and glow, "waiting for input" highlight, native notifications and dock badge, favorites bar, tabs with context menu, compact mode, saved layouts, broadcast send, an opt-in subscription usage readout (Claude / ChatGPT Codex / Kimi through an in-app sign-in kept in its own partition, Grok through its panes; off by default on a new install), and a workaround for grok.com bot deep links. Quickstart: 1) macOS (Apple Silicon), Git, Node.js 20+; 2) `git clone https://github.com/uniplanck/multipane-browser.git && cd multipane-browser`; 3) `npm ci`; 4) `npm start` to try it, `npm run install:mac` to install `/Applications/xG-Bots.app` (data stays in ~/Library/Application Support/MultiPane Browser); 5) sign in to grok.com in a pane, press the Grok button to load your bots into the bar, click a bot to open it in a new pane; 6) have your bots end messages with the 🟢 待機中 / 🟣 終了 / 🔴 作業中 markers (see above) for notifications and auto-sleep; 7) optionally enable the usage gauges (Settings > 使用量表示). Unsent drafts are auto-saved in plaintext on this Mac (7 days, can be turned off). Not affiliated with xAI or X Corp.
 
 ## License
 MIT
