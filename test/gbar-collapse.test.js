@@ -67,12 +67,37 @@ t('a collapsed heading is a measured section item, present on exactly one page a
   });
 });
 
-const main = read('main.js'), ren = read('renderer.js');
+const main = read('main.js'), ren = read('renderer.js'), css = read('style.css');
 t('source: renderer only creates expanded chips, calls toggle and updates heading indicators', () =>
   /if \(!s\.name \|\| !s\.collapsed\) s\.items\.forEach/.test(ren) && /mpb\.gbarSecToggle\(s\.name\)/.test(ren)
   && /gSections\.forEach/.test(ren) && /classList\.toggle\('gopen', open\)/.test(ren)
   && /classList\.toggle\('gactive', active\)/.test(ren) && /classList\.toggle\('gunread', unread\)/.test(ren)
   && /on\('gbar-sec-toggle', name => gbSecToggle\(name\)\)/.test(main));
+
+const cssRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .flatMap(([, selectors, body]) => selectors.split(',').map(selector => ({ selector: selector.trim(), body })));
+const cssRule = selector => cssRules.filter(r => r.selector === selector).map(r => r.body).join(';');
+const hasDecl = (body, property, value) => body.split(';').some(decl => {
+  const colon = decl.indexOf(':'); return colon >= 0 && decl.slice(0, colon).trim() === property && decl.slice(colon + 1).trim() === value;
+});
+t('source: all section headings use symmetric padding without collapsed reservations', () => {
+  const normal = cssRule('.gsec'), semi = cssRule('#favs.gm-semi .gsec'), compact = cssRule('#favs.gm-compact .gsec');
+  return hasDecl(normal, 'padding', '0 4px') && hasDecl(semi, 'padding', '0 3px') && hasDecl(compact, 'padding', '0 3px')
+    && !/padding-right\s*:\s*19px\b/.test(css) && !/(?:^|;)\s*min-width\s*:/.test(normal)
+    && !cssRules.some(r => r.selector.includes('.gsec.gcollapsed') && /(?:^|;)\s*(?:padding(?:-left|-right)?|min-width)\s*:/.test(r.body));
+});
+t('source: collapsed status dots only occupy space when their state is present', () => {
+  const before = cssRule('.gsec.gcollapsed::before'), after = cssRule('.gsec.gcollapsed::after');
+  const shown = ['.gsec.gcollapsed.gopen::before', '.gsec.gcollapsed.gunread::after'];
+  const dots = cssRules.filter(r => /\.gsec(?:[.#:\s]|$).*::(?:before|after)\b/.test(r.selector));
+  return [before, after].every(body => ['display:none', 'order:1', 'width:5px', 'height:5px', 'border-radius:50%']
+    .every(decl => { const [property, value] = decl.split(':'); return hasDecl(body, property, value); }))
+    && hasDecl(before, 'background', 'var(--accent)') && hasDecl(after, 'background', 'var(--badge)')
+    && shown.every(selector => hasDecl(cssRule(selector), 'display', 'inline-block'))
+    && dots.every(({ selector, body }) => !/(?:^|;)\s*position\s*:\s*absolute\b/.test(body)
+      && body.split(';').filter(decl => /^\s*display\s*:/.test(decl)).every(decl =>
+        hasDecl(decl, 'display', 'none') || (shown.includes(selector) && hasDecl(decl, 'display', 'inline-block'))));
+});
 
 // Exercise the actual main functions and renderer with a small in-memory DOM. The button's native keyboard click is represented by detail: 0.
 {
@@ -101,7 +126,11 @@ t('source: renderer only creates expanded chips, calls toggle and updates headin
       if (!p) return { width: 0 };
       if (this.id === 'gbar-next') return { width: 35 };
       if (this.classList.contains('gsep')) return { width: 1 };
-      if (this.classList.contains('gsec')) return { width: this.textContent.length * 6 + (this.classList.contains('gcollapsed') ? 26 : 8) };
+      if (this.classList.contains('gsec')) {
+        const pad = favs.classList.contains('gm-semi') || favs.classList.contains('gm-compact') ? 6 : 8;
+        const dots = this.classList.contains('gcollapsed') ? 8 * (Number(this.classList.contains('gopen')) + Number(this.classList.contains('gunread'))) : 0;
+        return { width: this.textContent.length * 6 + pad + dots };
+      }
       return { width: 48 };
     }
   }
