@@ -202,10 +202,10 @@ function planRotation({ files, now, incoming = 0, fileMax = FILE_MAX, gens = GEN
 
 // ---- what the summary / screen may show about the app (everything else in `x` is ignored) ----
 const VER_RE = /^[0-9][0-9A-Za-z.+-]{0,31}$/;
-const SETTINGS = { notifications: 'bool', quietHours: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', restoreSleep: 'bool', saveQuote: 'bool', grokFix: 'bool', autoPc: 'bool', autoImg: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool',
-  theme: ['system', 'dark', 'light'], memSaver: ['off', 'std', 'max'], globalZoom: [0.3, 3], sleepMinutes: [0, 1440], usageMargin: [0, 50] };
+const SETTINGS = { notifications: 'bool', quietHours: 'bool', sleepWaiting: 'bool', sleepCheck: 'bool', restoreSleep: 'bool', saveQuote: 'bool', grokFix: 'bool', autoPc: 'bool', autoImg: 'bool', syncCols: 'bool', debugLog: 'bool', diagPersist: 'bool', autoUpdate: 'bool', updateChoiceDone: 'bool',
+  theme: ['system', 'dark', 'light'], memSaver: ['off', 'std', 'max'], globalZoom: [0.3, 3], sleepMinutes: [0, 1440], usageMargin: [0, 50], updateLastCheck: [0, 8640000000000000] };
 const SET_JA = { notifications: '通知', quietHours: '静音時間', sleepWaiting: '自動スリープ', sleepCheck: 'スリープ中の新着確認', restoreSleep: 'スリープ状態の復元', saveQuote: '引用の保存', grokFix: 'Bot表示の補正', autoPc: 'クラウドPC自動最大化', autoImg: '画像クリックで最大化',
-  syncCols: '列幅の同期', debugLog: 'デバッグログ', diagPersist: '診断ログのファイル保存', theme: 'テーマ', memSaver: 'メモリ節約', globalZoom: '全体ズーム', sleepMinutes: 'スリープまでの分', usageMargin: '使用量の余裕%' };
+  syncCols: '列幅の同期', debugLog: 'デバッグログ', diagPersist: '診断ログのファイル保存', autoUpdate: '自動アップデート', updateChoiceDone: 'アップデート初回設定', updateLastCheck: 'アップデート最終確認（ミリ秒）', theme: 'テーマ', memSaver: 'メモリ節約', globalZoom: '全体ズーム', sleepMinutes: 'スリープまでの分', usageMargin: '使用量の余裕%' };
 const STORE_STATUS = ['ready', 'recoveryRequired', 'unsupportedVersion'];
 function safeEnv(x) {
   const out = { versions: {}, settings: {}, counts: {}, store: null };

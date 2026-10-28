@@ -2177,6 +2177,7 @@ function hideApprove() {
 }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
+  if (overlayOpen && overlayMode === 'update-first' && mode !== 'update-first') updateChoice(true);
   dockEnd('OVERLAY');                                          // (dock) a header drag ends (the views come back) before anything is shown over them
   popOpen = false; clearTimeout(popTimer);
   overlayOpen = true; overlayMode = mode;
@@ -2184,8 +2185,10 @@ function openOverlay(mode, extra = {}) {
   overlay.setBounds({ x: 0, y: 0, width: w, height: h });
   bringOverlayToFront();
   overlay.setVisible(true);
-  sendState();
+  const updateMode = mode === 'update' || mode === 'update-first';
+  if (!updateMode) sendState();
   overlay.webContents.focus();
+  if (updateMode) { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
   Promise.resolve().then(() => clipboard.readText()).catch(() => '').then(t => {   // sync or async depending on Electron version
     const clip = String(t || '').trim();
     overlay.webContents.send('overlay-open', { mode, ...extra,
@@ -2194,10 +2197,13 @@ function openOverlay(mode, extra = {}) {
 }
 function closeOverlay() {
   if (!overlayOpen) return;
+  if (overlayMode === 'update-first' && settings.updateChoiceDone !== true) updateChoice(true);
+  const wasUpdate = overlayMode === 'update' || overlayMode === 'update-first';
   overlayOpen = false; overlayMode = '';
   bcPv = null; bcPvNo = 0;                                  // (#12) a preview holds only while it is on screen (a batch goes on)
   if (approveOpen) hideApprove();
   overlay.setVisible(false);
+  if (wasUpdate) { keyboardFocus = win.webContents; win.webContents.focus(); return; }
   keyboardFocus = panes[focused]?.view.webContents;
   panes[focused]?.view.webContents.focus();
 }
@@ -2325,6 +2331,12 @@ function runAction(a) {
     case 'new-window': closeOverlay(); makeWindow({ layout: '2x2', panes: a.url ? [{ url: String(a.url) }] : [] }); break;   // no URL: the window's empty new pane
     case 'recovery-restore': closeOverlay(); recoveryRestore(win, String(a.id || '')); break;
     case 'recovery-fresh': closeOverlay(); recoveryFresh(win); break;
+    case 'update-choice': if (overlayMode === 'update-first') { updateChoice(a.on); closeOverlay(); } break;
+    case 'update-toggle': if (overlayMode === 'update') updateToggle(a.on); break;
+    case 'update-check': if (overlayMode === 'update') updateCheck(false); break;
+    case 'update-start': if (overlayMode === 'update') updateStart(false); break;
+    case 'update-restart': if (overlayMode === 'update') updateRestart(); break;
+    case 'update-later': if (overlayMode === 'update') closeOverlay(); break;
     case 'diag-open': openOverlay('diag', { diag: diagView() }); break;
     case 'diag-copy': closeOverlay(); diagCopy(win).catch(() => {}); break;
     case 'diag-persist': settings.diagPersist = a.on === true; diagSync(); save(); buildMenu(); openOverlay('diag', { diag: diagView() }); break;
@@ -2715,7 +2727,7 @@ function snapshot() {
 }
 
 
-const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get panes() { return panes; },
+const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get overlayOpen() { return overlayOpen; }, get overlayMode() { return overlayMode; }, get panes() { return panes; },
   draftConfig() { panes.forEach(p => { if (!p.view.webContents.isDestroyed()) p.view.webContents.send('mpb:draft-config', draftsEnabled()); }); },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
@@ -2741,7 +2753,7 @@ guardUi(win.webContents);                                    // (#72) never move
 ctxs.push(ctx);
 if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximize();
 win.loadFile(path.join(__dirname, 'index.html'));
-win.once('ready-to-show', () => win.show());
+win.once('ready-to-show', () => { win.show(); updateFirstWhenReady(ctx); });
 win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
 win.on('resize', () => relayout());
 win.on('moved', save); win.on('resized', save);
@@ -2788,6 +2800,117 @@ broadcast();
 return ctx;
 }
 
+
+// ---- GitHub updates: inspect and build asynchronously; only the helper started in will-quit changes the installed bundle ----
+const UPDATE = require('./update-core');
+let updateInfo = null, updateRepoOk = null, updateBusy = false, updateResult = null, pendingApply = null, updateAbort = null;
+let updateMessage = 'まだ確認していません。', updateProgress = '', updateAutoEpoch = 0, updateStartedAt = 0;
+try { if (app.isPackaged) updateInfo = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')); } catch {}
+// The packaged entry point also identifies a local build if an external config did not inherit beforePack.
+try { if (app.isPackaged && updateInfo && JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).main === 'src/local-entry.js') updateInfo.config = 'local'; } catch {}
+if (!app.isPackaged) updateInfo = { repoDir: app.getAppPath(), commit: '', remote: '', nodeBin: '', config: 'default' };
+if (updateInfo?.remote) updateInfo.remote = UPDATE.stripCredentials(updateInfo.remote);
+const updateUnavailable = 'この版はGitHubのクローンから入れていないため、アプリ内アップデートは使えません';
+const updateDate = value => { const t = new Date(value); return Number.isFinite(t.getTime()) ? t.toLocaleString('ja-JP', { hour12: false }) : '不明'; };
+function updateStatus() {
+  if (!updateInfo?.repoDir || !fs.existsSync(updateInfo.repoDir) || updateRepoOk === false) return updateUnavailable;
+  return `現在: ${updateInfo.commit ? updateInfo.commit.slice(0, 8) : app.isPackaged ? '不明' : '開発版'} (${updateInfo.builtAt ? updateDate(updateInfo.builtAt) : '日時不明'}) · ${UPDATE.remoteLabel(updateInfo.remote) || 'リポジトリ不明'}`;
+}
+function updateView() {
+  return { status: updateStatus(), auto: settings.autoUpdate !== false, last: settings.updateLastCheck ? updateDate(settings.updateLastCheck) : 'まだ確認していません',
+    message: updateMessage, progress: updateProgress, busy: updateBusy, available: updateResult?.state === 'available' && !pendingApply,
+    pending: !!pendingApply, unavailable: updateStatus() === updateUnavailable };
+}
+function updatePush() {
+  const view = updateView();
+  for (const c of ctxs) if (c.overlayOpen && c.overlayMode === 'update' && !c.overlay.webContents.isDestroyed()) {
+    c.overlay.webContents.send('overlay-open', { mode: 'update', update: view, dark: nativeTheme.shouldUseDarkColors, refresh: true });
+  }
+}
+function updateOpen() { cur()?.openOverlay('update', { update: updateView() }); }
+function updateChoice(on) {
+  settings.autoUpdate = on === true; settings.updateChoiceDone = true; save(); buildMenu();
+  if (settings.autoUpdate && Date.now() - updateStartedAt >= 60000) updateCheck(true);
+}
+function updateToggle(on) {
+  settings.autoUpdate = on === true; updateAutoEpoch++;
+  if (!on && pendingApply?.automatic) { pendingApply = null; updateMessage = '自動アップデートをオフにしました。'; }
+  save(); buildMenu(); updatePush();
+}
+function updateFirstWhenReady(c) {
+  if (settings.updateChoiceDone === true || !c || c !== ctxs[0] || c.win.isDestroyed()) return;
+  if (!c.win.isVisible() || !store?.writable() || c.overlayOpen || c.overlay.webContents.isLoading()) {
+    setTimeout(() => updateFirstWhenReady(c), 1000).unref(); return;
+  }
+  c.openOverlay('update-first', { update: updateView(), repo: UPDATE.remoteLabel(updateInfo?.remote) || 'このリポジトリ' });
+}
+function updateSchedule() {
+  updateStartedAt = Date.now();
+  if (!app.isPackaged && updateInfo?.repoDir) {
+    const o = { cwd: updateInfo.repoDir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 5000 };
+    UPDATE.exec('git', ['rev-parse', '--is-inside-work-tree'], o).then(r => {
+      updateRepoOk = r.stdout.trim() === 'true';
+      if (updateRepoOk) return UPDATE.exec('git', ['remote', 'get-url', 'origin'], o).then(x => { updateInfo.remote = UPDATE.stripCredentials(x.stdout); });
+    }).catch(() => { updateRepoOk = false; }).finally(() => { buildMenu(); updatePush(); });
+  }
+  setTimeout(() => updateCheck(true), 60000).unref();
+  setInterval(() => updateCheck(true), 6 * 60 * 60 * 1000).unref();
+}
+async function updateCheck(automatic) {
+  if (updateBusy || pendingApply || (automatic && (settings.autoUpdate === false || settings.updateChoiceDone !== true || !app.isPackaged || !isMac))) return;
+  const epoch = updateAutoEpoch; updateAbort = new AbortController(); updateBusy = true; updateProgress = ''; updateMessage = '更新を確認しています…'; updatePush();
+  try {
+    settings.updateLastCheck = Date.now(); save();
+    updateResult = await UPDATE.inspect(updateInfo, undefined, { signal: updateAbort.signal });
+    if (automatic && (epoch !== updateAutoEpoch || settings.autoUpdate === false)) { updateMessage = settings.autoUpdate === false ? '自動アップデートはオフです。' : '自動アップデートの設定が変わったため確認を中止しました。'; return; }
+    if (updateResult.remote && updateInfo) updateInfo.remote = updateResult.remote;
+    if (updateResult.state === 'blocked') { updateMessage = updateResult.message; dlog('update', 'blocked', updateResult.reason); }
+    else if (updateResult.state === 'up-to-date') updateMessage = `最新です（${updateResult.head.slice(0, 8)}）`;
+    else {
+      updateMessage = updateResult.behind ? `新しい版があります（${updateResult.behind}件のコミット）` : '取得済みの新しい版があります（アプリの再ビルドが必要です）';
+      updatePush();
+      if (automatic) await updatePrepare(true, epoch);
+    }
+  } catch { updateMessage = '更新の確認に失敗しました。時間をおいて再度お試しください。'; dlog('update', 'inspect failed'); }
+  finally { updateAbort = null; updateBusy = false; buildMenu(); updatePush(); }
+}
+async function updateStart(automatic) {
+  if (updateBusy || pendingApply || updateResult?.state !== 'available') return;
+  updateAbort = new AbortController(); updateBusy = true; updatePush();
+  try { await updatePrepare(automatic, updateAutoEpoch); }
+  catch { updateMessage = '更新の準備に失敗しました。'; dlog('update', 'prepare failed'); }
+  finally { updateAbort = null; updateBusy = false; updatePush(); }
+}
+async function updatePrepare(automatic, epoch) {
+  const bundle = isMac && app.isPackaged ? process.execPath.match(/^(.+?\.app)(?:\/|$)/)?.[1] : null;
+  if (!bundle) { updateMessage = '開発起動中は適用できません。クローンで npm ci と npm run install:mac を実行してください。'; return; }
+  updateMessage = '更新を準備しています…'; updatePush();
+  let lastPush = 0;
+  const r = await UPDATE.prepare(updateInfo, undefined, { inspection: updateResult, signal: updateAbort?.signal, onProgress: line => {
+    updateProgress = line; if (Date.now() - lastPush > 300) { lastPush = Date.now(); updatePush(); }
+  } });
+  if (!r.ok) { updateMessage = '更新の準備に失敗しました。インストール済みのアプリは変更していません。'; dlog('update', 'prepare failed'); return; }
+  if (automatic && (epoch !== updateAutoEpoch || settings.autoUpdate === false)) { updateMessage = settings.autoUpdate === false ? '自動アップデートはオフです。' : '自動アップデートの設定が変わったため確認を中止しました。'; return; }
+  const scriptArgs = { pid: process.pid, bundlePath: bundle, appPath: r.appPath, logPath: path.join(app.getPath('userData'), 'update.log') };
+  const dir = path.dirname(r.appPath), quitScript = path.join(dir, 'apply-on-quit.sh'), restartScript = path.join(dir, 'apply-restart.sh');
+  await Promise.all([fs.promises.writeFile(quitScript, UPDATE.applyScript(scriptArgs), { mode: 0o700 }),
+    fs.promises.writeFile(restartScript, UPDATE.applyScript({ ...scriptArgs, relaunch: true }), { mode: 0o700 })]);
+  if (automatic && (epoch !== updateAutoEpoch || settings.autoUpdate === false)) { updateMessage = '自動アップデートの設定が変わったため適用しません。'; return; }
+  pendingApply = { quitScript, restartScript, relaunch: false, automatic, commit: r.newCommit };
+  updateMessage = 'アップデートの準備ができました。次回の終了時に適用されます（今すぐ再起動も可）。'; updateProgress = ''; updatePush();
+  if (automatic) {
+    if (Notification.isSupported()) { const n = new Notification({ title: 'アップデートの準備ができました', body: '次回の終了時に適用されます。クリックすると今すぐ再起動できます。' });
+      n.on('click', () => { const c = cur(); if (c) { c.win.show(); c.win.focus(); updateOpen(); } }); n.show(); }
+  } else await updateRestart();
+}
+async function updateRestart() {
+  if (!pendingApply) return;
+  const prepared = pendingApply;
+  const { response } = await dialog.showMessageBox({ type: 'question', message: '更新して再起動しますか？',
+    detail: '通常の終了処理でペインの構成と下書きを保存してから更新します。', buttons: ['再起動', 'あとで'], defaultId: 0, cancelId: 1, noLink: true });
+  if (response === 0 && pendingApply === prepared) { pendingApply.relaunch = true; app.quit(); }
+}
+function normalRelaunch() { if (pendingApply) pendingApply.relaunch = true; else app.relaunch(); app.quit(); }
 
 function buildMenu() {
   const acc = (a, click, label, extra = {}) => ({ label, accelerator: a, registerAccelerator: false, click, ...extra });
@@ -2836,6 +2959,11 @@ function buildMenu() {
     { label: 'レイアウト', submenu: PRESET_KEYS.map((k, i) => acc(`CmdOrCtrl+${i + 1}`, () => cur()?.applyPreset(k),
       `${k}（横${PRESETS[k][0]}×縦${PRESETS[k][1]}）`, { type: 'radio', checked: c?.layout === k })) },
     { label: '設定', submenu: [
+      { label: 'アップデート', submenu: [
+        { label: updateStatus(), enabled: false },
+        { label: '今すぐ確認・更新…', click: () => { updateOpen(); updateCheck(false); } },
+        { label: '自動アップデート（起動時と6時間ごとに確認し、見つかれば裏で準備→次回の終了時に適用）', type: 'checkbox', checked: settings.autoUpdate !== false, click: m => updateToggle(m.checked) },
+        { label: 'アップデート画面を開く…', click: () => updateOpen() } ] },
       { label: 'テーマ', submenu: [['system', 'システムに合わせる'], ['dark', 'ダーク'], ['light', 'ライト']].map(([v, l]) => ({ label: l, type: 'radio', checked: settings.theme === v,
         click: () => { settings.theme = v; nativeTheme.themeSource = v; save(); } })) },
       { type: 'separator' },
@@ -2847,7 +2975,7 @@ function buildMenu() {
           settings.memSaver = v; save();
           if (v === MEM_MODE) return;
           dialog.showMessageBox({ type: 'question', buttons: ['今すぐ再起動', 'あとで'], defaultId: 0, message: 'メモリ節約モードを変更しました', detail: '再起動すると反映されます。ペインの構成と状態は保存されています。' })
-            .then(r => { if (r.response === 0) { saveNow(); app.relaunch(); app.quit(); } });
+            .then(r => { if (r.response === 0) { saveNow(); normalRelaunch(); } });
         } })) },
       { label: '終了（🟣）は1分後・待機中（🟢）は30分後に自動スリープ（入力欄に下書きがあれば眠らない）', type: 'checkbox', checked: settings.sleepWaiting !== false, click: m => { settings.sleepWaiting = m.checked; save(); buildMenu(); } },
       { label: 'スリープ中も新着を確認（5分ごとに裏で確認し、あれば水色で表示。失敗が続くと最長60分ごと）', type: 'checkbox', checked: settings.sleepCheck !== false, click: m => { settings.sleepCheck = m.checked; save(); broadcast(); } },
@@ -2892,7 +3020,7 @@ async function recoveryRestore(win, id) {
   if (response !== 0) return;
   const r = store.restore(id);
   if (!r.ok) { dialog.showMessageBox(win, { type: 'warning', message: '復元できませんでした', detail: `panes.json は変更していません（${r.error}）。`, buttons: ['閉じる'] }); return; }
-  app.relaunch(); app.quit();                              // the store stays frozen: nothing is saved over the restored file before the restart
+  normalRelaunch();                                        // the store stays frozen: nothing is saved over the restored file before the restart
 }
 async function recoveryFresh(win) {
   const { response } = await dialog.showMessageBox(win, { type: 'question', message: '新しい構成で始めますか？',
@@ -2973,6 +3101,7 @@ function startup() {
     if (old) diag.rec('restore', 'OLD', { n: old });
     if (saved > rs.length) diag.rec('restore', 'IGNORED', { n: saved - rs.length }); }
   buildMenu();
+  updateSchedule();
   if (!store.writable()) { const c = ctxs[0]; c.overlay.webContents.once('did-finish-load', () => c.openOverlay('recovery', { recovery: recoveryInfo() })); }
 
   if (process.env.MPB_AUTO_PC) setTimeout(() => { const c = ctxs[0], p = c.panes[Number(process.env.MPB_AUTO_PC)]; dlog('auto-pc', p ? p.id : 'none', p ? p.view.webContents.getURL() : ''); if (p) c.togglePc(p.id); }, Number(process.env.MPB_AUTO_PC_DELAY || 40000));   // dev only: exercise the cloud-PC maximise
@@ -3048,6 +3177,15 @@ app.on('before-quit', e => {
     .finally(() => { quitFlush = 2; app.quit(); });
 });
 app.on('window-all-closed', () => { clearTimeout(saveTimer); quitting = true; app.quit(); });
+// Only after all normal quit handlers have allowed the exit may the detached helper replace the bundle.
+app.on('will-quit', () => {
+  updateAbort?.abort();
+  if (!pendingApply) return;
+  const script = pendingApply.relaunch ? pendingApply.restartScript : pendingApply.quitScript;
+  try { const helper = require('child_process').spawn('/bin/sh', [script], { detached: true, stdio: 'ignore' });
+    helper.on('error', () => dlog('update', 'helper could not start')); helper.unref(); }
+  catch { dlog('update', 'helper could not start'); }
+});
 
 
 // ======================= subscription usage (read-only) =======================

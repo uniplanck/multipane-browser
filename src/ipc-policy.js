@@ -88,6 +88,8 @@ const ACTIONS = {
   'broadcast-prompt': {}, 'toggle-notifications': {}, close: {}, 'fav-add-current': {}, 'recovery-fresh': {},
   'diag-open': {}, 'diag-copy': {},                         // 診断 screen; main builds the summary itself (nothing of it comes from the page)
   'diag-persist': { shape: x => bool(x.on) },
+  'update-check': {}, 'update-start': {}, 'update-restart': {}, 'update-later': {},
+  'update-choice': { shape: x => bool(x.on) }, 'update-toggle': { shape: x => bool(x.on) },
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },

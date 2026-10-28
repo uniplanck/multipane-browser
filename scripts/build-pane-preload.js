@@ -4,6 +4,7 @@
 //   node scripts/build-pane-preload.js           write src/pane-preload.js       (npm run build:preload)
 //   node scripts/build-pane-preload.js --check   verify only, never writes; exit 1 when missing / out of date   (npm run check:preload)
 // Also the electron-builder beforePack hook (package.json build.beforePack): packaging stops when the built preload is stale.
+// --write-info checks the preload and writes build info before a build using an external config that may not inherit the hook.
 const fs = require('fs'), path = require('path');
 const TEMPLATE = 'src/pane-preload.template.js', SHARED = 'src/pane-rules.js', OUT = 'src/pane-preload.js';
 const SLOT = '// @include src/pane-rules.js\n', BEGIN = '// SHARED-BEGIN\n', END = '// SHARED-END\n';
@@ -33,6 +34,33 @@ function run(root, check) {
   return 0;
 }
 const ROOT = path.join(__dirname, '..');
-async function beforePack() { if (run(ROOT, true) !== 0) throw new Error(`${OUT} is missing or out of date: run npm run build:preload`); }
-module.exports = { render, run, beforePack, TEMPLATE, SHARED, OUT };
-if (require.main === module) process.exit(run(ROOT, process.argv.includes('--check')));
+// Never put Git credentials in the bundle, including query-string credentials.
+function stripCredentials(remote) {
+  const s = String(remote || '').trim().replace(/\/\/[^/\s]*@/, '//').replace(/^[^/@]+@(?=[^/:]+:)/, '').replace(/[?#].*$/, '');
+  try { const u = new URL(s); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return u.toString(); }
+  catch { return s; }
+}
+function writeBuildInfo(root, context = {}) {
+  const { execFileSync } = require('child_process');
+  const git = args => { try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim(); } catch { return ''; } };
+  const config = context.packager?.config || context.packager?.info?.config || {};
+  const local = config.extraMetadata?.main === 'src/local-entry.js' || /(^|[\\/])dist-local([\\/]|$)/.test(String(config.directories?.output || context.outDir || '')) || process.argv.some(a => String(a).includes('electron-builder.local.json'));
+  const candidates = [process.env.npm_execpath, path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')];
+  let resolved = ''; try { resolved = require.resolve('npm/bin/npm-cli.js'); } catch {}
+  const npmCli = [...candidates, resolved].find(p => p && /npm-cli\.js$/.test(p) && fs.existsSync(p)) || '';
+  const info = { repoDir: path.resolve(root), commit: git(['rev-parse', 'HEAD']), branch: git(['branch', '--show-current']),
+    remote: stripCredentials(git(['remote', 'get-url', 'origin'])), builtAt: new Date().toISOString(), nodeBin: path.dirname(process.execPath), npmCli, config: local ? 'local' : 'default' };
+  fs.writeFileSync(path.join(root, 'src/build-info.json'), JSON.stringify(info, null, 2) + '\n');
+  return info;
+}
+async function beforePack(context) {
+  if (run(ROOT, true) !== 0) throw new Error(`${OUT} is missing or out of date: run npm run build:preload`);
+  try { writeBuildInfo(ROOT, context); } catch { console.warn('build-info: unavailable; packaging continues'); }
+}
+module.exports = { render, run, beforePack, writeBuildInfo, stripCredentials, TEMPLATE, SHARED, OUT };
+if (require.main === module) {
+  const writeInfo = process.argv.includes('--write-info');
+  const code = run(ROOT, writeInfo || process.argv.includes('--check'));
+  if (code === 0 && writeInfo) { try { writeBuildInfo(ROOT); } catch { console.warn('build-info: unavailable; packaging continues'); } }
+  process.exit(code);
+}

@@ -133,17 +133,19 @@ list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.
 $('#scrim').onclick = () => mpb.closeOverlay();
 function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
 mpb.onApproveRect(apRect);
-addEventListener('keydown', e => { if (mode === 'approve' && e.key === 'Escape') mpb.closeOverlay(); });
+addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
 mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true); });
 mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
   document.body.classList.toggle('approve', mode === 'approve');
+  document.body.classList.toggle('update', mode === 'update' || mode === 'update-first');
   document.body.classList.toggle('diag', mode === 'diag');
   document.body.classList.toggle('queue', mode === 'queue');
-  items = [];                                                // (#01) nothing kept from the previous screen
-  if (mode === 'approve') { apRect(o.rect); return; }
   document.body.classList.toggle('bc', mode === 'broadcast');
+  items = [];                                                // (#01) nothing kept from the previous screen
+  if (mode === 'update' || mode === 'update-first') { document.body.classList.toggle('light', !o.dark); renderUpdate(o); return; }
+  if (mode === 'approve') { apRect(o.rect); return; }
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
   q.value = o.value || ''; q.readOnly = mode === 'recovery' || mode === 'diag';
@@ -158,6 +160,35 @@ mpb.onOverlayOpen(o => {
   if (mode === 'recovery') { sel = Math.max(0, items.findIndex(it => it.act)); render(); }   // start on the first choice, not the explanation
   q.focus(); q.select();
 });
+
+// ---- update settings: main owns all state and operations; this view sends only fixed actions. ----
+const updatePanel = $('#update-panel');
+function renderUpdate(o) {
+  const u = o.update || {}, active = document.activeElement?.dataset?.updateAction || '';
+  if (mode === 'update-first') {
+    updatePanel.innerHTML = `<div class="update-head"><span class="update-icon">↻</span><h2>アップデートの設定</h2></div>
+      <p class="update-copy">GitHub の <b>${esc(o.repo || 'このリポジトリ')}</b> から新しい版を確認して更新します。<br>ペイン・下書き・設定・ログインはそのままです。</p>
+      <div class="update-actions update-first-actions"><button class="primary" data-update-action="update-choice" data-on="true">自動アップデートをオンにする（おすすめ）</button>
+      <button data-update-action="update-choice" data-on="false">オフ（設定からいつでも手動で更新）</button></div>`;
+  } else {
+    const actions = u.busy ? '' : u.pending ? '<button class="primary" data-update-action="update-restart">今すぐ再起動</button>'
+      : u.available ? '<button class="primary" data-update-action="update-start">更新して再起動</button><button data-update-action="update-later">あとで</button>' : '';
+    updatePanel.innerHTML = `<div class="update-head"><span class="update-icon">↻</span><h2>アップデート</h2></div>
+      <div class="update-card"><div class="caption">インストール中の版</div><div>${esc(u.status || '')}</div></div>
+      <label class="update-toggle"><input type="checkbox" id="update-auto" ${u.auto ? 'checked' : ''}><span>自動アップデート<br><small>起動時と6時間ごとに確認し、見つかれば裏で準備して次回の終了時に適用します。</small></span></label>
+      <div class="update-card"><div class="caption">前回の確認: ${esc(u.last || 'まだ確認していません')}</div><div>${esc(u.message || '')}</div>${u.progress ? `<div class="detail">${esc(u.progress)}</div>` : ''}
+      ${u.unavailable ? '<div class="detail">クローンしたフォルダで npm ci と npm run install:mac を実行してください。</div>' : ''}</div>
+      <div class="update-actions"><button class="${actions ? '' : 'primary'}" data-update-action="update-check" ${u.busy ? 'disabled' : ''}>今すぐ確認・更新</button>${actions}</div>`;
+  }
+  if (!o.refresh) setTimeout(() => updatePanel.querySelector('.primary')?.focus(), 0);
+  else if (active) updatePanel.querySelector(`[data-update-action="${active}"]`)?.focus();
+}
+updatePanel.addEventListener('click', e => {
+  const b = e.target.closest('[data-update-action]'); if (!b || b.disabled) return;
+  const action = { type: b.dataset.updateAction }; if (action.type === 'update-choice') action.on = b.dataset.on === 'true';
+  mpb.run(action);
+});
+updatePanel.addEventListener('change', e => { if (e.target.id === 'update-auto') mpb.run({ type: 'update-toggle', on: e.target.checked }); });
 
 // ---- broadcast composer (#12): compose -> プレビュー (main reads every chosen pane, nothing is sent) -> 「このN件に送信」 -> progress per target ----
 // main builds the preview / progress (bc-state: phase + Japanese labels); this page shows it and sends back only the numbers main gave it.

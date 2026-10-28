@@ -140,7 +140,7 @@ t('diagnostics: the quiet-hours setting is shown as on / off only', DG.SETTINGS.
     && /const m = NP\.compose\(live\);/.test(take) && /\{ title: m\.item\.title, body: m\.item\.body, silent: false \} : \{ title: m\.title, body: m\.body, silent: false \}/.test(take));
   t('main: MPB_NOTIFY_DRYRUN shows nothing (returns before the Notification)', /const NOTIFY_DRYRUN = !!process\.env\.MPB_NOTIFY_DRYRUN;/.test(main) && take.indexOf('if (NOTIFY_DRYRUN || !Notification.isSupported()) return;') >= 0
     && take.indexOf('if (NOTIFY_DRYRUN') < take.indexOf('new Notification('));
-  t('main: two Notification sites only (this one + the unchanged download one)', main.split('new Notification(').length - 1 === 2 && /new Notification\(\{ title: 'ダウンロード完了', body: path\.basename\(dest\) \}\)/.test(main));
+  t('main: notification sites cover panes, downloads, and prepared updates', main.split('new Notification(').length - 1 === 3 && /new Notification\(\{ title: 'ダウンロード完了', body: path\.basename\(dest\) \}\)/.test(main) && /new Notification\(\{ title: 'アップデートの準備ができました'/.test(main));
   t('main: click - one pane: clickOk + its own window, focus without marking read; merged / stale: front only', /NP\.clickOk\(it, it\.p\) && ctxOf\(it\.p\) === c/.test(click) && /if \(ok\) c\.openPane\(it\.p\);/.test(click)
     && /openPane\(p\) \{ const i = panes\.indexOf\(p\); if \(i >= 0\) focusPane\(i, \{ clear: false \}\); \}/.test(main) && !/focusPaneById|clearUnread|panes\[/.test(click));
   t('main: diagnostics get fixed codes, pane numbers and counts only', [offer, take, click].every(f => [...f.matchAll(/diag\.rec\(([^\n]*?)\);/g)].every(m => /^'notify', /.test(m[1]) && !/title|body|\.name\b|url|key\b|ek\b/.test(m[1]))));
