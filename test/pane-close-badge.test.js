@@ -49,16 +49,18 @@ function element() {
   };
 }
 function setup(mod = '⌘') {
-  const calls = { close: [], focus: [], max: [], dock: [], payloads: [] };
-  const nodes = Object.fromEntries(['.head', '.url', '.title', '.badge', '.sleepph', '.gpr', '.loadph', '.pbl', '.pbr'].map(s => [s, element()]));
+  const calls = { close: [], focus: [], max: [], half: [], dock: [], payloads: [], animations: [] };
+  const nodes = Object.fromEntries(['.head', '.url', '.title', '.badge', '.sleepph', '.gpr', '.loadph', '.pbl', '.pbr', '[data-a=maximize]'].map(s => [s, element()]));
   const badge = nodes['.badge'], header = nodes['.head'], pane = element(), body = element();
+  nodes['[data-a=maximize]'].animate = (frames, opts) => { calls.animations.push({ frames, opts }); return { cancel() {} }; };
   badge.closest = s => (s === '.badge' || s === 'button,input') ? badge : null;
   badge.matches = s => s === ':hover, :focus' && (badge.hovered || badge.focused);
   header.closest = () => null;
   pane.querySelector = s => nodes[s]; pane.querySelectorAll = () => []; pane.addEventListener = () => {};
   const document = { createElement: () => pane, body, querySelectorAll: () => [] };
   const context = vm.createContext({ document, MOD: mod, root: { appendChild: () => {} }, els: new Map(), esc: String,
-    mpb: { close: id => calls.close.push(id), focusPane: id => calls.focus.push(id), maximize: id => calls.max.push(id) },
+    GbarLongPress: require('../src/gbar-long-press'),
+    mpb: { close: id => calls.close.push(id), focusPane: id => calls.focus.push(id), maximize: id => calls.max.push(id), maximizeHalf: (id, side) => calls.half.push([id, side]) },
     requestAnimationFrame: () => {}, dockStart: id => calls.dock.push(['start', id]), dockStop: () => calls.dock.push(['stop']) });
   const titleFn = renderer.slice(renderer.indexOf('function badgeTitle('), renderer.indexOf('\n', renderer.indexOf('function badgeTitle(')));
   const updateStart = renderer.indexOf("    const b = d.querySelector('.badge');"), updateEnd = renderer.indexOf("    d.querySelector('[data-a=back]')", updateStart);
@@ -67,6 +69,23 @@ function setup(mod = '⌘') {
   vm.runInContext(tipHelpers + titleFn + '\n' + mk + '\nfunction updateBadge(d, p) {\n' + update + '\n}', context);
   context.mk(42);
   return { calls, nodes, pane, body, context, badge, header, update: p => context.updateBadge(pane, { unread: 0, glow: false, isGrok: false, ...p }) };
+}
+{
+  const { nodes, calls, header } = setup();
+  const button = nodes['[data-a=maximize]'];
+  const e = (at, extra = {}) => ({ ...event(button, calls), button: 0, detail: 1, pointerId: 1, clientX: 0, clientY: 0, timeStamp: at, ...extra });
+  let down = e(0); button.onpointerdown(down); button.onmousedown(down); button.onpointerup(e(100)); button.onclick(e(100));
+  t('maximize short left press selects left half and shows the same hold feedback', JSON.stringify(calls.half) === '[[42,"left"]]' && calls.animations[0].opts.duration === 500);
+  button.onpointerdown(e(200)); button.onpointerup(e(701)); const longClick = e(701); button.onclick(longClick);
+  t('maximize long press selects full once and suppresses the subsequent click', JSON.stringify(calls.max) === '[42]' && calls.half.length === 1 && longClick.prevented && longClick.stopped);
+  const right = e(800, { button: 2 }); button.onpointerdown(right); button.oncontextmenu(right);
+  t('maximize right click selects right half and prevents and stops contextmenu', right.prevented && right.stopped && JSON.stringify(calls.half) === '[[42,"left"],[42,"right"]]');
+  const trailing = e(801); button.onclick(trailing);
+  t('a trailing click after contextmenu cannot also select left', trailing.prevented && trailing.stopped && calls.half.length === 2);
+  button.onpointerdown(e(900)); button.onpointermove(e(920, { clientX: 7 })); button.onpointerup(e(1500, { clientX: 7 })); const moved = e(1500); button.onclick(moved);
+  t('moving more than 6px cancels the hold and its click', moved.prevented && calls.max.length === 1 && calls.half.length === 2);
+  down = e(1600); button.onpointerdown(down); button.onmousedown(down); const drag = event(header, calls); header.ondragstart(drag);
+  t('maximize button press cannot start a retargeted header dock drag', drag.prevented && !calls.dock.length);
 }
 function event(target, calls) {
   return { target, stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; },

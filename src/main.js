@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const CPU = require('./cpu-meter');
 const { placeTooltip } = require('./tooltip-layout');
+const { halfRects } = require('./half-layout');
 
 // dev/test hook: MPB_SWITCHES="name=value;name2" appends Chromium switches before the app is ready
 for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
@@ -722,7 +723,7 @@ let queueNow = [];                         // (#01) the list the last sendState 
 let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane not on screen yet (pane-navigation.js mayFocus / holds)
 let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
-let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null;
+let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null, maxMode = null;
 let keyboardFocus = null;                                  // last accepted keyboard owner in this window (including chrome / overlay)
 const rememberKeyboard = wc => wc.on('focus', () => { keyboardFocus = wc; });
 let lastBounds = spec.window?.bounds || null;
@@ -780,10 +781,12 @@ const areaNow = () => { const [w, h] = win.getContentSize(); return { x: GAP, y:
 function cells(grid = false) {                         // grid: the rows' layout even while a pane is maximized (#51 keyboard moves)
   const n = panes.length; if (!n) return [];
   const area = areaNow();
-  if (!grid && maximizedId != null && byId(maximizedId))
+  if (!grid && maximizedId != null && byId(maximizedId) && maxMode === 'full')
     return panes.map(p => p.id === maximizedId ? { x: area.x, y: area.y, w: area.w, h: area.h } : null);
   const r = geom(getStacks(), area);
   lastGeom = r.g;
+  if (!grid && maximizedId != null && byId(maximizedId) && (maxMode === 'left' || maxMode === 'right'))
+    return halfRects(area, r.g.cE, r.g.cols, maxMode, panes.findIndex(p => p.id === maximizedId), n, GAP);
   return r.out;
 }
 // the panes' rectangles (panes[] order) for rows whose cells hold stacks[r][c] panes: the cells side by side, a stacked cell's panes share
@@ -829,7 +832,7 @@ function splitters() {
   return out;
 }
 function splitMove(pt) {
-  const d = splitDrag, g = lastGeom; if (!d || !g) return;
+  const d = splitDrag, g = lastGeom; if (!d || !g || maximizedId != null) return;
   const k = d.axis === 'c' ? g.cols : g.rows, E = d.axis === 'c' ? (g.sync ? g.cE : g.cEs[d.row || 0]) : g.rE;
   const start = d.axis === 'c' ? g.area.x : g.area.y, len = (d.axis === 'c' ? g.area.w : g.area.h) + GAP;
   const pos = (d.axis === 'c' ? pt.x : pt.y) + GAP / 2;
@@ -846,7 +849,7 @@ function splitMove(pt) {
   relayout();
 }
 function splitStart(axis, i, row) {
-  if (!['c', 'r'].includes(axis) || !Number.isInteger(i)) return;
+  if (maximizedId != null || !['c', 'r'].includes(axis) || !Number.isInteger(i)) return;
   splitDrag = { axis, i, row: Number.isInteger(row) ? row : 0, t0: Date.now() };
   clearInterval(splitDrag.timer);
   splitDrag.timer = setInterval(() => {
@@ -907,7 +910,7 @@ function applyPreset(key) {
   if (!PRESETS[key]) return;
   const want = PRESETS[key][0] * PRESETS[key][1];
   guardRun('LAYOUT', () => panes.slice(want), () => {          // the panes past the preset are closed: asked first when one holds input (#11)
-    layout = key; maximizedId = null;
+    layout = key; maximizedId = null; maxMode = null;
     while (panes.length > want) closePane(panes[panes.length - 1].id, true);
     while (panes.length < want) addPane({ url: '' }, { focus: false, from: 'fill' });
     rowLens = null; stackLens = null;                     // a preset re-initialises the rows (no stacked cells)
@@ -915,9 +918,11 @@ function applyPreset(key) {
     relayout(true); save();
   });
 }
-function toggleMaximize(id, takeFocus = true) {
+function toggleMaximize(id, takeFocus = true, mode = 'full') {
   const p = byId(id ?? panes[focused]?.id); if (!p) return;
-  maximizedId = maximizedId === p.id ? null : p.id;
+  const restore = maximizedId === p.id && maxMode === mode;
+  maximizedId = restore ? null : p.id;
+  maxMode = restore ? null : mode;
   if (takeFocus) setFocused(panes.indexOf(p));
   relayout(true);
   if (takeFocus) { keyboardFocus = p.view.webContents; if (!p.view.webContents.isFocused()) p.view.webContents.focus(); }
@@ -928,8 +933,8 @@ function setPcMax(p, on) {
   dlog(`pane${p?.id}`, 'pcmax', on);
   if (!p || p.view.webContents.isDestroyed() || on === !!p.pcMax) return;
   p.pcMax = on;
-  if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.pcMaxedPane = true; } else p.pcMaxedPane = false; }
-  else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id) toggleMaximize(p.id, false); }   // page cleanup, never a focus request
+  if (on) { if (maximizedId !== p.id || maxMode !== 'full') { toggleMaximize(p.id); p.pcMaxedPane = true; } else p.pcMaxedPane = false; }
+  else if (p.pcMaxedPane) { p.pcMaxedPane = false; if (maximizedId === p.id && maxMode === 'full') toggleMaximize(p.id, false); }   // page cleanup, never a focus request
   p.view.webContents.send('mpb:pc', on);
 }
 // 画像クリックで最大化 (pane-preload img-opened / img-closed): maximized like the cloud PC (no size-cap CSS); p.imgMaxedPane = this maximized it (a pane
@@ -938,8 +943,8 @@ function setImgMax(p, on, back = true) {
   if (!p || p.view.webContents.isDestroyed() || on === !!p.imgMax) return;
   dlog(`pane${p.id}`, 'imgmax', on, back);
   p.imgMax = on;
-  if (on) { if (maximizedId !== p.id) { toggleMaximize(p.id); p.imgMaxedPane = true; } else p.imgMaxedPane = false; }
-  else { const mine = p.imgMaxedPane; p.imgMaxedPane = false; if (back && mine && maximizedId === p.id) toggleMaximize(p.id, false); }
+  if (on) { if (maximizedId !== p.id || maxMode !== 'full') { toggleMaximize(p.id); p.imgMaxedPane = true; } else p.imgMaxedPane = false; }
+  else { const mine = p.imgMaxedPane; p.imgMaxedPane = false; if (back && mine && maximizedId === p.id && maxMode === 'full') toggleMaximize(p.id, false); }
 }
 function togglePc(id) { const p = byId(id ?? panes[focused]?.id); if (p && isBotUrl(p.view.webContents.getURL())) setPcMax(p, !p.pcMax); }
 const pcItem = p => ({ label: p.pcMax ? 'クラウドPCを元のサイズに戻す' : 'クラウドPCを最大化', accelerator: 'CmdOrCtrl+Shift+P', enabled: isBotUrl(p.view.webContents.getURL()), click: () => setPcMax(p, !p.pcMax) });
@@ -1022,7 +1027,7 @@ function displayTitle(p) {
 function sendState(cs = cells()) {
   if (!win || win.isDestroyed()) return;
   const state = {
-    layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, reloadChoices: RELOAD_CHOICES,
+    layout, effLayout: (() => { if (!panes.length) return layout; return splitKey(); })(), max: MAX, focusedId: panes[focused]?.id, maximizedId, maxMode, reloadChoices: RELOAD_CHOICES,
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
     canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
     usage: UC.view(settings),                                // 使用量表示: which gauges show and where each one's numbers come from
@@ -1073,7 +1078,7 @@ function setFocused(i) {
 function focusPane(i, { clear = true } = {}) {
   const p = panes[i]; if (!p) return;
   keyboardFocus = p.view.webContents;                       // explicit selection, before a synchronous wake can show the view
-  if (maximizedId != null && maximizedId !== p.id) { maximizedId = p.id; relayout(true); }
+  if (maxMode === 'full' && maximizedId != null && maximizedId !== p.id) { maximizedId = p.id; relayout(true); }
   setFocused(i);
   if (clear) clearUnread(p);
   if (!p.view.webContents.isFocused()) p.view.webContents.focus();   // it has the keyboard already (clicked into): not focused again (a focus can drop its selection)
@@ -1101,7 +1106,7 @@ function clearUnread(p) {
   if (had) { updateBadge(); sendState(); }
 }
 function windowActive() { return win && !win.isDestroyed() && win.isFocused() && !win.isMinimized() && win.isVisible(); }
-const inView = p => panes[focused] === p && windowActive() && (maximizedId == null || maximizedId === p.id);   // the user is looking at it
+const inView = p => panes[focused] === p && windowActive() && (maximizedId == null || maxMode !== 'full' || maximizedId === p.id);   // the user is looking at it
 function canAlert(p) {
   if (!win) return false;
   if (inView(p)) return false;
@@ -2054,7 +2059,7 @@ function reopenClosed() {
     const pl = DL.reopen(before, p.id, e);                      // back into the row it was closed from (if there is room; its stacked cell if it still fits)
     panes.splice(panes.indexOf(p), 1);
     if (!applyGrid(pl, [p])) { panes.push(p); rowLens = null; stackLens = null; }   // (not expected) the default grid rather than a pane left out
-    maximizedId = null; setFocused(panes.indexOf(p)); relayout(true); save(); sendState();
+    maximizedId = null; maxMode = null; setFocused(panes.indexOf(p)); relayout(true); save(); sendState();
     diag.rec('reopen', 'OK', { p: p.id, n: closedStack.length });
     const at = { ...focusNow(), id: p.id };                     // the keyboard may still be where ⌘⇧T / ↩ / the palette left it: that pane, the bar, the new one
     at.fws = [at.fw, wcId(prev && prev.view.webContents), wcId(p.view.webContents)];
@@ -2070,7 +2075,7 @@ function closePane(id, keepEmpty) {
   const [p] = panes.splice(i, 1);
   draftStore?.remove(p.draftId);                             // closing forgets every URL of this pane; ⌘⇧T has a new identity
   disposePane(p, 'CLOSED');
-  if (maximizedId === id) maximizedId = null;
+  if (maximizedId === id) { maximizedId = null; maxMode = null; }
   focused = Math.max(0, Math.min(focused, panes.length - 1));
   if (!panes.length && !keepEmpty) addPane({ url: '' }, { from: 'fill' });
   else { updateBadge(); relayout(true); save(); }
@@ -2093,7 +2098,7 @@ function disposePane(p, code) {
 }
 function newPane(url = '') {
   if (panes.length >= MAX) { const p = panes[focused]; if (p) openIn(p, url); return; }
-  maximizedId = null;
+  maximizedId = null; maxMode = null;
   const p = addPane({ url }, { from: 'new' });               // no URL (＋ / ⌘T / 新しい空のペイン): grok.com, its sidebar opened once (新規ペインはGrok)
   relayout(true);
   if (p) setTimeout(() => { if (!p.view.webContents.isDestroyed() && panes[focused] === p) { keyboardFocus = p.view.webContents; p.view.webContents.focus(); } }, 50);
@@ -2173,7 +2178,7 @@ function handleKey(input, pane) {
     if (overlayOpen) { closeOverlay(); return true; }
     if (pane?.pcMax) return false;                         // Esc closes the page's computer view first (the pane then returns to normal)
     if (pane?.imgMax) return false;                        // the same for an image viewer opened by a click (img-closed gives the pane back)
-    if (maximizedId != null) { toggleMaximize(maximizedId); return true; }
+    if (maximizedId != null) { toggleMaximize(maximizedId, false, maxMode); return true; }
     return false;
   }
   if (!mod) return false;
@@ -2366,7 +2371,7 @@ function paneMenu(id) {
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     approvePaneItem(p),
     { type: 'separator' },
-    { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
+    { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id, true, maximizedId === id ? maxMode : 'full') },
     pcItem(p),
     { label: '複製', enabled: panes.length < MAX, click: () => { const q = addPane({ ...paneSpec(p), name: p.name ? p.name + ' (2)' : '' }); relayout(true); } },
     { label: 'URLをコピー', click: () => clipboard.writeText(paneUrl(p)) },
@@ -2401,7 +2406,7 @@ function loadWorkspace(name) {
   guardRun('WORKSPACE', () => panes.slice(), () => {           // every pane is replaced: asked first when one holds input (#11)
     const ws = workspaces[name]; if (!ws) return;
     const wasFocused = focused;                              // replaced panes have new ids: keep the selected position, bounded by the new count
-    maximizedId = null;
+    maximizedId = null; maxMode = null;
     lq.batch(() => {                                         // (#31) every new pane requested before any starts: the focused one first
       [...panes].forEach(p => closePane(p.id, true));
       if (PRESETS[ws.layout]) layout = ws.layout;
@@ -2727,7 +2732,7 @@ function chipMenu(id) {
     { label: '新しいペインに複製', enabled: panes.length < MAX, click: () => { addPane({ ...paneSpec(p), name: p.name ? p.name + '2' : '' }); relayout(true); } },
     { label: 'お気に入りに追加', enabled: !!paneUrl(p), click: () => addFavorite(paneUrl(p), p.name || displayTitle(p)) },
     approvePaneItem(p),
-    { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id) },
+    { label: maximizedId === id ? '元のサイズに戻す' : '最大化', click: () => toggleMaximize(id, true, maximizedId === id ? maxMode : 'full') },
     pcItem(p),
     { type: 'separator' },
     { label: '閉じる（新しいタブに戻す）', click: () => openIn(p, '', 'NEWTAB', q => { q.name = ''; sendState(); save(); }) },
@@ -2760,6 +2765,7 @@ on('dock-hover', (x, y) => dockHover(x, y));
 on('dock-drop', (x, y) => dockDrop(x, y));
 on('dock-end', () => dockEnd('END'));
 on('maximize', id => toggleMaximize(id));
+on('maximize-half', (id, side) => toggleMaximize(id, true, side));
 on('sleep-toggle', id => { const p = byId(id); if (!p) return; p.sleepOn = p.sleepOn === false; if (p.sleepOn === false && p.sleeping) reloadPane(p); sendState(); save(); });
 on('wake-pane', id => { const p = byId(id); if (p?.sleeping || p?.loadIdle) reloadPane(p); });   // wake only; a placeholder click selects explicitly in renderer.js
 on('load-cancel', id => { const p = byId(id); if (p) lq.cancel(t => t.win === ctx && t.ent === p.obs.ent && !t.probe && t.state === 'wait', 'USER'); });
@@ -2807,7 +2813,7 @@ paneOn('pane:msgcount', (p, c) => onMsgCount(p, IPC.msgCount(c)));
 paneOn('pane:pc-opened', p => {                              // the page's computer view appeared (user clicked 'コンピュータを表示')
   if (p.pcMax || p.sleeping || !isBotUrl(p.view.webContents.getURL())) return;
   if (!inView(p) || !p.view.webContents.isFocused()) return;   // a modal restored by a wake / router fix is not a click into this pane
-  if (maximizedId === p.id || settings.autoPc !== false) setPcMax(p, true);   // already maximised: just relax the size caps (no maximize / restore dance)
+  if (maximizedId === p.id && maxMode === 'full' || settings.autoPc !== false) setPcMax(p, true);   // already fully maximised: just relax the size caps
 });
 paneOn('pane:pc-closed', p => { if (p.pcMax) setPcMax(p, false); });
 paneOn('pane:img-opened', p => {                             // the user clicked an image of a grok.com page (settings.autoImg)

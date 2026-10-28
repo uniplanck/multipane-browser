@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('mpb', {
   add: () => send('add'), layout: l => send('layout', l),
   focusPane: id => send('focus-pane', id), activatePane: id => send('activate-pane', id),
   setReload: (id, m) => send('set-reload', id, m),
-  swap: (a, b) => send('swap', a, b), maximize: id => send('maximize', id),
+  swap: (a, b) => send('swap', a, b), maximize: id => send('maximize', id), maximizeHalf: (id, side) => send('maximize-half', id, side),
   dockBegin: id => send('dock-begin', id), dockReady: seq => send('dock-ready', seq), dockHover: (x, y) => send('dock-hover', x, y),
   dockDrop: (x, y) => send('dock-drop', x, y), dockEnd: () => send('dock-end'), onDock: cb => listen('dock', (_, m) => cb(m)),
   paneMenu: id => send('pane-menu', id), palette: () => send('palette'),

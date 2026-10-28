@@ -127,7 +127,7 @@ function mk(id) {
       <button data-a="back" ${tipAttrs('戻る', '前に見たページへ戻ります。', `${MOD}[`)}>‹</button>
       <button data-a="forward" ${tipAttrs('進む', '戻る前のページへ進みます。', `${MOD}]`)}>›</button>
       <button data-a="reload" ${tipAttrs('再読み込み', 'このページを読み込み直します。', `${MOD}R`)}>↻</button>
-      <button data-a="maximize" ${tipAttrs('最大化・元に戻す', 'このペインの大きさを切り替えます。', `${MOD}\\`, 'ヘッダーのダブルクリックでも切り替えられます。')}>⤢</button>
+      <button data-a="maximize" ${tipAttrs('拡大・元に戻す', 'クリックで左半分、右クリックで右半分、長押しで全体に拡大します。もう一度同じ操作で元に戻します。', `${MOD}\\ (全体)`, `ヘッダーのダブルクリック・${MOD}\\ は全体表示の切り替えです。`)}>⤢</button>
       <button data-a="paneMenu" ${tipAttrs('ペインの設定', '名前や色、通知などを設定します。')}>⋯</button>
       <button data-a="sleepToggle" class="slp" ${tipAttrs('自動スリープ', '待機中や終了後のスリープを切り替えます。', '', 'ON')}>💤</button>
     </div>
@@ -150,13 +150,38 @@ function mk(id) {
   d.querySelectorAll('.tools button').forEach(b => b.onclick = e => { e.stopPropagation(); mpb[b.dataset.a](id); });
   const head = d.querySelector('.head'), inp = d.querySelector('.url'), title = d.querySelector('.title'), badge = d.querySelector('.badge');
   // A non-draggable child can still start a drag on its draggable parent; exclude that press from docking too.
-  let badgePressed = false;
+  let badgePressed = false, maxPressed = false;
+  const maxBtn = d.querySelector('[data-a=maximize]');
+  let maxHold = GbarLongPress.idle(), maxFeedback = null, contextClick = false;
+  const clearMaxFeedback = () => { if (maxFeedback) maxFeedback.cancel(); maxFeedback = null; };
+  const cancelMaxHold = e => { maxHold = GbarLongPress.cancel(maxHold, e); if (!maxHold.press) clearMaxFeedback(); };
+  maxBtn.onpointerdown = e => {
+    contextClick = false; clearMaxFeedback(); maxHold = GbarLongPress.begin(e);
+    if (maxHold.press) maxFeedback = maxBtn.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
+  };
+  maxBtn.onpointermove = e => { maxHold = GbarLongPress.move(maxHold, e); if (!maxHold.press) clearMaxFeedback(); };
+  maxBtn.onpointerleave = maxBtn.onpointercancel = cancelMaxHold;
+  maxBtn.onmousedown = e => { maxPressed = true; badgePressed = false; e.stopPropagation(); };
+  maxBtn.ondragstart = e => { cancelMaxHold(); e.preventDefault(); e.stopPropagation(); };
+  maxBtn.onpointerup = e => {
+    const result = GbarLongPress.release(maxHold, e); maxHold = result.state;
+    if (!maxHold.press) clearMaxFeedback();
+    if (result.openHere) mpb.maximize(id);
+  };
+  maxBtn.onclick = e => {
+    const result = GbarLongPress.click(maxHold, e); maxHold = result.state;
+    clearMaxFeedback();
+    if (result.suppress || (contextClick && e.detail !== 0)) { contextClick = false; e.preventDefault(); e.stopPropagation(); return; }
+    contextClick = false; e.stopPropagation();
+    if (e.button === 0 && !e.ctrlKey) mpb.maximizeHalf(id, 'left');
+  };
+  maxBtn.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); cancelMaxHold(); contextClick = true; mpb.maximizeHalf(id, 'right'); };
   badge.onclick = e => { e.stopPropagation(); mpb.close(id); };
   badge.onmousedown = e => { badgePressed = true; e.preventDefault(); e.stopPropagation(); };
   badge.ondblclick = e => e.stopPropagation();
   badge.ondragstart = e => { e.preventDefault(); e.stopPropagation(); };
   badge.onmouseenter = badge.onmouseleave = badge.onfocus = badge.onblur = () => badgeTitle(badge);
-  head.onmousedown = e => { badgePressed = false; if (!e.target.closest('button,input')) mpb.focusPane(id); };
+  head.onmousedown = e => { badgePressed = false; maxPressed = false; if (!e.target.closest('button,input')) mpb.focusPane(id); };
   head.ondblclick = e => { if (!e.target.closest('button,input')) mpb.maximize(id); };
   title.onclick = () => startEdit(d);
   inp.onkeydown = e => {
@@ -166,7 +191,7 @@ function mk(id) {
   inp.onfocus = () => { d.classList.add('editing'); inp.select(); mpb.focusPane(id); };
   inp.onblur = () => d.classList.remove('editing');
   // drag a pane by its header: docking (dockStart below; main decides the zone and the drop). A tab of the strip dropped on a header still swaps
-  head.ondragstart = e => { if (badgePressed || e.target.closest('.badge')) { e.preventDefault(); return; } e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); dockStart(id); };
+  head.ondragstart = e => { if (badgePressed || maxPressed || e.target.closest('.badge')) { e.preventDefault(); return; } e.dataTransfer.setData('text/x-mpb-pane', String(id)); e.dataTransfer.effectAllowed = 'move'; document.body.classList.add('dragging'); d.classList.add('drag-src'); dockStart(id); };
   head.ondragend = () => { document.body.classList.remove('dragging'); d.classList.remove('drag-src'); document.querySelectorAll('.drop-over').forEach(x => x.classList.remove('drop-over')); dockStop(); };
   const accept = e => !drag && e.dataTransfer.types.includes('text/x-mpb-pane');
   d.ondragover = e => { if (accept(e)) { e.preventDefault(); d.classList.add('drop-over'); } };
@@ -228,7 +253,7 @@ const onS = s => {
   renderFavs(s.favorites || []);
   if (s.approve) renderApproveButton(s.approve);
   document.body.classList.toggle('light', !s.dark);
-  document.body.classList.toggle('has-max', s.maximizedId != null);
+  document.body.classList.toggle('has-max', s.maximizedId != null && s.maxMode === 'full');
   $('#presets').querySelectorAll('button').forEach(b => { const active = b.dataset.k === (s.effLayout || s.layout); b.classList.toggle('active', active); b.dataset.tipDetail = active ? '現在のレイアウト' : ''; });
   const glowN = 0, unreadN = s.panes.filter(p => p.needsReply).length;
   const us = $('#unread-sum');
@@ -302,7 +327,9 @@ const onS = s => {
     d.classList.toggle('done', !!p.done);
     d.classList.toggle('working', !!p.working);
     d.classList.toggle('unopened', !!p.unopened);
-    d.classList.toggle('maxed', p.id === s.maximizedId);
+    d.classList.toggle('maxed', p.id === s.maximizedId && s.maxMode === 'full');
+    d.classList.toggle('half-left', p.id === s.maximizedId && s.maxMode === 'left');
+    d.classList.toggle('half-right', p.id === s.maximizedId && s.maxMode === 'right');
     d.classList.toggle('sleeping', !!p.sleeping);
     const lqWait = p.lq === 'wait';                                 // waiting for a load slot (#31); held: nothing to show yet, the placeholder instead of the page
     d.classList.toggle('lqwait', lqWait); d.classList.toggle('held', !!p.held); d.classList.toggle('idle', !!p.idle);
@@ -345,8 +372,10 @@ const onS = s => {
     b.classList.toggle('wait', !!p.waiting); b.classList.toggle('work', !!p.working); b.classList.toggle('done', !!p.done); b.classList.toggle('unop', !!p.unopened);
     d.querySelector('[data-a=back]').disabled = !p.canBack;
     d.querySelector('[data-a=forward]').disabled = !p.canForward;
-    d.querySelector('[data-a=maximize]').textContent = p.id === s.maximizedId ? '⤡' : '⤢';
-    d.querySelector('[data-a=maximize]').dataset.tipDetail = p.id === s.maximizedId ? '現在: 最大化中' : 'ヘッダーのダブルクリックでも切り替えられます。';
+    const maxBtn = d.querySelector('[data-a=maximize]'), mode = p.id === s.maximizedId ? s.maxMode : null;
+    maxBtn.textContent = mode === 'full' ? '⤡' : mode === 'left' ? '◧' : mode === 'right' ? '◨' : '⤢';
+    maxBtn.dataset.tipDetail = mode === 'full' ? '現在: 最大化中' : mode === 'left' ? '現在: 左半分に拡大中' : mode === 'right' ? '現在: 右半分に拡大中' : `ヘッダーのダブルクリック・${MOD}\\ は全体表示の切り替えです。`;
+    maxBtn.setAttribute('aria-label', [maxBtn.dataset.tip, maxBtn.dataset.tipDesc, maxBtn.dataset.tipDetail].filter(Boolean).join('。'));
   }
 };
 mpb.onState(onS);

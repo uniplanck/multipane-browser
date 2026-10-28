@@ -36,7 +36,7 @@ const contents = name => ({
 });
 const panes = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, sleeping: true, view: { webContents: contents(`p${i + 1}`) } }));
 const chrome = contents('chrome'), overlay = contents('overlay');
-const ctx = vm.createContext({ mayKeepPaneFocus, panes, focused: 6, keyboardFocus: chrome, maximizedId: null, win: { isDestroyed: () => false, webContents: chrome },
+const ctx = vm.createContext({ mayKeepPaneFocus, panes, focused: 6, keyboardFocus: chrome, maximizedId: null, maxMode: null, win: { isDestroyed: () => false, webContents: chrome },
   windowActive: () => active, clearUnread() {}, relayout() {},
   setFocused: i => { ctx.focused = i; } });
 vm.runInContext(`${source('paneGotFocus')}\n${source('focusPane')}`, ctx);
@@ -95,13 +95,13 @@ panes[1].sleeping = false; ctx.keyboardFocus = panes[1].view.webContents; actual
 Object.assign(ctx, { byId: id => panes.find(p => p.id === id), dlog() {} });
 vm.runInContext(`${source('toggleMaximize')}\n${source('setPcMax')}\n${source('setImgMax')}`, ctx);
 const bg = panes[2];
-ctx.maximizedId = bg.id; bg.pcMax = true; bg.pcMaxedPane = true; calls.length = 0;
+ctx.maximizedId = bg.id; ctx.maxMode = 'full'; bg.pcMax = true; bg.pcMaxedPane = true; calls.length = 0;
 ctx.setPcMax(bg, false);
 assert.strictEqual(ctx.maximizedId, null);
 assert.strictEqual(ctx.focused, 1);
 assert.strictEqual(actual, 'p2');
 assert(!calls.some(c => c.startsWith('focus:')));
-ctx.maximizedId = bg.id; bg.imgMax = true; bg.imgMaxedPane = true;
+ctx.maximizedId = bg.id; ctx.maxMode = 'full'; bg.imgMax = true; bg.imgMaxedPane = true;
 ctx.setImgMax(bg, false);
 assert.strictEqual(ctx.maximizedId, null);
 assert.strictEqual(ctx.focused, 1);

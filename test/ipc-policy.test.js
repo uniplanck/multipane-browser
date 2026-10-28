@@ -35,6 +35,7 @@ const SAMPLE = {
   'pane:draft-load': ['pane', [{ gen: 1, url: 'https://grok.com/bot/abc', rev: 0 }]],
   'pane:draft-save': ['pane', [{ gen: 1, url: 'https://grok.com/bot/abc', rev: 1, text: '下書き' }]],
   navigate: ['chrome', [1, 'https://grok.com/bot/abc']], 'set-reload': ['chrome', [1, 5]], swap: ['chrome', [1, 3]],
+  'maximize-half': ['chrome', [1, 'left']],
   'dock-begin': ['chrome', [2]], 'dock-ready': ['chrome', [4]], 'dock-hover': ['chrome', [640, 300]], 'dock-drop': ['chrome', [12, 70]], 'dock-end': ['chrome', []],
   layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
   'fav-open': ['chrome', [1, 'here']], 'fav-menu': ['chrome', [2]], 'fav-move': ['chrome', [2, 1]], 'fav-add': ['chrome', ['https://example.com/', '']],
@@ -68,6 +69,10 @@ t('every role not listed for a channel -> E_ROLE', CH.every(ch => P.ROLES.filter
 t('a web pane cannot change settings / other panes (UI channels)', ['navigate', 'close', 'layout', 'sync-cols', 'overlay-run', 'fav-add', 'focus-other', 'usage:margin', 'set-reload'].every(ch => chk(ch, 'pane', SAMPLE[ch][1]) === 'E_ROLE' && chk(ch, 'web', SAMPLE[ch][1]) === 'E_ROLE'));
 t('the UI cannot fake pane signals', ['pane:msgcount', 'pane:interact', 'pane:draft'].every(ch => chk(ch, 'chrome', SAMPLE[ch][1]) === 'E_ROLE' && chk(ch, 'overlay', SAMPLE[ch][1]) === 'E_ROLE'));
 t('chrome-only channels from the overlay -> E_ROLE', chk('navigate', 'overlay', [1, 'x']) === 'E_ROLE' && chk('focus-other', 'overlay', [2, 7]) === 'E_ROLE' && chk('claude:auth-dialog', 'overlay') === 'E_ROLE');
+t('half maximize accepts only a local pane and a left/right side from chrome', ['left', 'right'].every(side => chk('maximize-half', 'chrome', [1, side]) === null)
+  && ['full', '', null, 1].every(side => chk('maximize-half', 'chrome', [1, side]) === 'E_PAYLOAD')
+  && chk('maximize-half', 'chrome', [1, 'left', 'extra']) === 'E_PAYLOAD' && chk('maximize-half', 'chrome', [7, 'left']) === 'E_TARGET'
+  && chk('maximize-half', 'overlay', [1, 'right']) === 'E_ROLE' && chk('maximize-half', 'pane', [1, 'left']) === 'E_ROLE');
 t('overlay-only channels from the chrome bar -> E_ROLE', chk('overlay-close', 'chrome') === 'E_ROLE' && chk('usage:margin', 'chrome', [5]) === 'E_ROLE' && chk('usage-pop-size', 'chrome', [10]) === 'E_ROLE');
 t('probe sending other pane signals -> E_ROLE (ignored)', ['pane:draft', 'pane:editing', 'pane:ime', 'pane:sel', 'pane:msgmode-off', 'pane:interact'].every(ch => chk(ch, 'probe', SAMPLE[ch][1]) === 'E_ROLE'));
 
@@ -300,7 +305,7 @@ const CALLS = [
   ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }], ['chrome', 'run', { type: 'queue-open' }],
   ['chrome', 'approveOpen'], ['chrome', 'approveKeepAwakeToggle'], ['chrome', 'approveInline', { x: 700, y: 5, width: 28, height: 28 }], ['chrome', 'approveInlineAnchor', { x: 700, y: 5, width: 28, height: 28 }],
   ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
-  ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
+  ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'maximizeHalf', 1, 'left'], ['chrome', 'maximizeHalf', 1, 'right'], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
   ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],
   ['chrome', 'dockBegin', 2], ['chrome', 'dockReady', 1], ['chrome', 'dockHover', 700, 95], ['chrome', 'dockHover', 0, 70], ['chrome', 'dockDrop', 1394, 893], ['chrome', 'dockEnd'],
   ['chrome', 'renamePane', 1], ['chrome', 'chipMenu', 2], ['chrome', 'syncReset'], ['chrome', 'syncCols', false], ['chrome', 'syncCols', true],

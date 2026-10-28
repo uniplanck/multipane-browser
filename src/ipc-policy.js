@@ -125,6 +125,7 @@ const CHANNELS = {
   back: { roles: CHROME, ...P1 }, forward: { roles: CHROME, ...P1 }, 'copy-pane-url': { roles: CHROME, ...P1 },
   reload: { roles: CHROME, ...P1 }, close: { roles: CHROME, ...P1 }, 'focus-pane': { roles: CHROME, ...P1 }, 'activate-pane': { roles: CHROME, ...P1 },
   maximize: { roles: CHROME, ...P1 }, 'sleep-toggle': { roles: CHROME, ...P1 }, 'wake-pane': { roles: CHROME, ...P1 }, 'sleep-now': { roles: CHROME, ...P1 },
+  'maximize-half': { roles: CHROME, shape: a => a.length === 2 && id(a[0]) && (a[1] === 'left' || a[1] === 'right'), target: P1.target },
   'load-cancel': { roles: CHROME, ...P1 },                    // 取消 on a pane waiting for a load slot (#31)
   'probe-resume': { roles: CHROME },                          // (#33) 確認を再開 after a sign-in page stopped the background checks (no payload)
   'pane-menu': { roles: CHROME, ...P1 }, 'chip-menu': { roles: CHROME, ...P1 }, 'rename-pane': { roles: CHROME, ...P1 },
