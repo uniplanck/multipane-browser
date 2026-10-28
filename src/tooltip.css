@@ -12,6 +12,15 @@
 .tip-description{margin-top:3px;color:#c6c6cd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tip-card.light .tip-description,.tip-card.light .tip-detail{color:#66666d}
 .tip-detail{margin-top:3px;color:#aaaab2;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.tip-list{margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.12)}
+.tip-card.light .tip-list{border-color:rgba(0,0,0,.1)}
+.tip-row{display:flex;align-items:center;gap:7px;min-width:0;padding:2px 0}
+.tip-avatar{position:relative;display:grid;place-items:center;width:20px;height:20px;flex:none;border-radius:50%;background:rgba(127,127,135,.25);font-size:10px;font-weight:700;overflow:hidden}
+.tip-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%}
+.tip-row-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tip-row-kind,.tip-more{color:#aaaab2;font-size:11px;white-space:nowrap}
+.tip-card.light .tip-row-kind,.tip-card.light .tip-more{color:#66666d}
+.tip-more{padding:3px 0 0 27px}
 .tip-card [hidden]{display:none}
 .tip-in{animation:tip-fade .12s ease-out}
 @keyframes tip-fade{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}

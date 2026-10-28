@@ -450,7 +450,7 @@ const approveEffective = () => AS.effective(settings, process.env.MULTIPANE_APPR
 function setApproveSettings(value) {
   if (value) {
     const url = AS.normalizeUrl(value.url);
-    if (!url || !AS.validLabel(value.label)) return false;
+    if (!AS.validUrl(value.url) || !AS.validLabel(value.label)) return false;
     settings.approveUrl = url;
     settings.approveLabel = AS.label(value.label, DEFAULT_APPROVE_LABEL);
   } else { delete settings.approveUrl; delete settings.approveLabel; }
@@ -1033,6 +1033,7 @@ function sendState(cs = cells()) {
         chk: p.sleeping ? PB.label(p.pb, { hold: probeAuthHold, off: settings.sleepCheck === false }) : '' };   // (#33) last success / next check / failures / stopped
     }),
   };
+  state.unreadOrder = unreadOrder().map(p => p.id);          // exactly the next-unread traversal, starting after the focused pane
   state.queue = queueBuild(state.panes);                      // (#01) 対応キュー: the bar's count and the open list
   queueNow = state.queue;                                    // (#51) ⌘⇧J reads it right after
   state.qNote = overlayOpen && overlayMode === 'queue' ? queueNote : '';
@@ -1179,12 +1180,18 @@ function onMsgCount(p, c) {
   updateBadge(); sendState();
 }
 function updateBadge() { updateDockBadge(); }
-function nextUnread() {
+function unreadOrder() {
   const n = panes.length;
+  const result = [];
   for (let k = 1; k <= n; k++) {
     const i = (focused + k) % n;
-    if (panes[i].glow || panes[i].needsReply) { focusPane(i, { clear: false }); return; }
+    if (panes[i].glow || panes[i].needsReply) result.push(panes[i]);
   }
+  return result;
+}
+function nextUnread() {
+  const p = unreadOrder()[0];
+  if (p) focusPane(panes.indexOf(p), { clear: false });
 }
 // ---- keyboard moves (#51, pane-navigation.js) ----
 // the ペイン menu and handleKey: nothing while a prompt / the palette / another overlay is open (the 対応キュー overlay is closed by the move)
@@ -2227,11 +2234,11 @@ function destroyApprove() {
   try { if (!approve.webContents.isDestroyed()) approve.webContents.close(); } catch {}
   approve = null; approvePane = null;
 }
-function openApprove() {
+function openApprove(rect) {
   dlog('approve', 'open requested', approveOpen);
   if (approveOpen) { closeOverlay(); return; }
   const { url } = approveEffective();
-  if (!url) { openApproveSettings(); return; }
+  if (!url) { openApproveInline(rect); return; }
   if (overlayOpen) closeOverlay();
   clearTimeout(approveTimer); approveTimer = null;
   if (approve && !approve.webContents.isDestroyed() && approve.webContents.isCrashed()) destroyApprove();   // (#32) the hidden copy's renderer is gone: a new one
@@ -2251,13 +2258,28 @@ function openApproveSettings() {
   if (approveOpen) hideApprove();
   openOverlay('approve-settings', { approve: approveEffective() });
 }
+let approveAnchorPending = false;
+function knownApproveBots() {
+  const bar = GB.view(grok);
+  const barItems = [...bar.pins, ...bar.sections.flatMap(s => s.items)];
+  const paneItems = ctxs.flatMap(c => c.panes.filter(p => !p.view.webContents.isDestroyed()).map(p => ({
+    url: paneUrl(p), name: p.name || displayTitle(p), favicon: p.favicon || ''
+  })));
+  return AS.knownBots(barItems, favorites, paneItems);
+}
+function openApproveInline(rect) {
+  if (!rect) { approveAnchorPending = true; win.webContents.send('approve-anchor-request'); return; }
+  approveAnchorPending = false;
+  if (approveOpen) hideApprove();
+  openOverlay('approve-inline', { approve: approveEffective(), anchor: rect, bots: knownApproveBots() });
+}
 function approveChanged() {
   const wasOpen = approveOpen;
   if (wasOpen) { approveOpen = false; try { approve?.setVisible(false); } catch {} }
   destroyApprove();
   if (!wasOpen) return;
   const { url } = approveEffective();
-  if (!url) { closeOverlay(); openApproveSettings(); return; }
+  if (!url) { closeOverlay(); openApproveInline(); return; }
   if (!ensureApprove(url)) return;
   approveOpen = true;
   const r = approveRect();
@@ -2272,6 +2294,7 @@ function hideApprove() {
 }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
+  approveAnchorPending = false;
   dismissTip();
   if (overlayOpen && overlayMode === 'update-first' && mode !== 'update-first') updateChoice(true);
   dockEnd('OVERLAY');                                          // (dock) a header drag ends (the views come back) before anything is shown over them
@@ -2285,7 +2308,7 @@ function openOverlay(mode, extra = {}) {
   if (!updateMode) sendState();
   overlay.webContents.focus();
   if (updateMode) { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
-  if (mode === 'approve-settings') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
+  if (mode === 'approve-settings' || mode === 'approve-inline') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
   Promise.resolve().then(() => clipboard.readText()).catch(() => '').then(t => {   // sync or async depending on Electron version
     if (!overlayOpen || overlayMode !== mode) return;         // an older palette / popup must not replace a newer settings screen
     const clip = String(t || '').trim();
@@ -2294,6 +2317,7 @@ function openOverlay(mode, extra = {}) {
   });
 }
 function closeOverlay() {
+  approveAnchorPending = false;
   if (!overlayOpen) return;
   if (overlayMode === 'update-first' && settings.updateChoiceDone !== true) updateChoice(true);
   const wasUpdate = overlayMode === 'update' || overlayMode === 'update-first';
@@ -2418,8 +2442,15 @@ function runAction(a) {
     case 'ws-save-prompt': openOverlay('ws-save'); break;
     case 'ws-save': saveWorkspace(a.value); closeOverlay(); break;
     case 'approve-open': closeOverlay(); openApprove(); break;
-    case 'approve-save': if (overlayMode === 'approve-settings' && setApproveSettings({ url: a.url, label: a.label })) closeOverlay(); break;
-    case 'approve-reset': if (overlayMode === 'approve-settings') { setApproveSettings(null); closeOverlay(); } break;
+    case 'approve-save': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline') && setApproveSettings({ url: a.url, label: a.label })) closeOverlay(); break;
+    case 'approve-pick': {
+      if (!overlayOpen || overlayMode !== 'approve-inline') break;
+      const url = AS.normalizeUrl('https://grok.com/bot/' + a.id);
+      const bot = url && knownApproveBots().find(b => b.url === url);
+      if (bot && setApproveSettings({ url: bot.url, label: bot.name })) overlay.webContents.send('approve-picked', bot);
+      break;
+    }
+    case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
     case 'ws-overwrite': closeOverlay(); overwriteWorkspace(String(a.name || ''), !!a.confirm); break;
     case 'ws-load': closeOverlay(); loadWorkspace(a.name); break;
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
@@ -2731,7 +2762,12 @@ on('usage-pop-keep', () => clearTimeout(popTimer));
 on('usage-pop-leave', () => popLater());
 on('usage-pop-size', h => { if (popOpen && !overlayOpen) { overlay.setBounds(popBounds(Number(h))); if (tipCurrent) showTip(tipCurrent); } });
 on('ws-menu', () => wsMenu());
-on('approve-open', () => openApprove());
+on('approve-open', rect => openApprove(rect));
+on('approve-inline-open', rect => openApproveInline(rect));
+on('approve-inline-anchor', rect => {
+  if (approveAnchorPending) openApproveInline(rect);
+  else if (overlayOpen && overlayMode === 'approve-inline') overlay.webContents.send('approve-inline-anchor', rect);
+});
 on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
 on('sync-cols', v => syncColsApply(!!v));
 on('sync-reset', () => syncReset());
@@ -2869,7 +2905,7 @@ if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximi
 win.loadFile(path.join(__dirname, 'index.html'));
 win.once('ready-to-show', () => { win.show(); updateFirstWhenReady(ctx); });
 win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
-win.on('resize', () => { dismissTip(); relayout(); });
+win.on('resize', () => { dismissTip(); relayout(); if (overlayOpen && overlayMode === 'approve-inline') win.webContents.send('approve-anchor-request'); });
 win.on('move', dismissTip);
 win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });

@@ -5,6 +5,7 @@ const html = read('index.html'), renderer = read('renderer.js'), css = read('too
 const controller = read('tooltip-controller.js'), main = read('main.js');
 const { placeTooltip } = require('../src/tooltip-layout');
 const IPC = require('../src/ipc-policy');
+const TL = require('../src/tooltip-list');
 
 // Document title and the pane's .title text/class are not tooltip attributes.
 for (const [file, text] of [['index.html', html], ['renderer.js', renderer], ['tooltip-controller.js', controller]]) {
@@ -115,7 +116,91 @@ assert.strictEqual(check('chrome', payload), null);
 for (const role of ['overlay', 'pane', 'probe', 'approve']) assert.strictEqual(check(role, payload), 'E_ROLE');
 assert.strictEqual(check('chrome', { ...payload, rect: { ...payload.rect, x: Infinity } }), 'E_PAYLOAD');
 assert.strictEqual(check('chrome', { ...payload, tip: { ...payload.tip, detail: 'x'.repeat(2049) } }), 'E_PAYLOAD');
+assert.strictEqual(check('chrome', { ...payload, tip: { ...payload.tip, unexpected: 'x' } }), 'E_PAYLOAD');
+assert.strictEqual(check('chrome', { ...payload, unexpected: 'x' }), 'E_PAYLOAD');
+assert.strictEqual(check('chrome', { ...payload, rect: { ...payload.rect, extra: 1 } }), 'E_PAYLOAD');
+assert.strictEqual(check('chrome', { ...payload, size: { ...payload.size, extra: 1 } }), 'E_PAYLOAD');
+assert.strictEqual(IPC.check('tip-show', sender('chrome'), [payload, 'extra'], { owned: true }), 'E_PAYLOAD');
 assert.strictEqual(check('chrome', { ...payload, size: { width: 0, height: 20 } }), 'E_PAYLOAD');
+
+// Main's ⌘J traversal is the source of the list, starting after the focused
+// pane, wrapping around and including the focused pane last when it qualifies.
+{
+  const code = main.slice(main.indexOf('function unreadOrder() {'), main.indexOf('// ---- keyboard moves'));
+  const panes = [{ id: 1, needsReply: true }, { id: 2 }, { id: 3, glow: true }, { id: 4, needsReply: true }];
+  const moves = [], ctx = { panes, focused: 1, focusPane: (i, opts) => moves.push([i, opts.clear]) };
+  vm.runInNewContext(code, ctx);
+  assert.deepStrictEqual(Array.from(ctx.unreadOrder(), p => p.id), [3, 4, 1]);
+  ctx.nextUnread(); assert.deepStrictEqual(moves, [[2, false]]);
+  ctx.focused = 3; assert.deepStrictEqual(Array.from(ctx.unreadOrder(), p => p.id), [1, 3, 4]);
+  ctx.panes = []; assert.strictEqual(ctx.unreadOrder().length, 0); ctx.nextUnread(); assert.strictEqual(moves.length, 1);
+  assert(main.includes('state.unreadOrder = unreadOrder().map(p => p.id)'));
+}
+
+// The rich rows preserve both main-provided orders, use the bar avatar or the
+// pane favicon, cap the list and include an accurate remainder.
+{
+  const panes = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `ペイン ${i + 1}`, title: 'title',
+    url: `https://grok.com/bot/b${i + 1}`, needsReply: i !== 2, favicon: `https://img.example/${i + 1}.png` }));
+  const queue = [panes[6], panes[1], panes[8], panes[0]].map((p, i) => ({ id: p.id, name: `キュー ${p.id}`, kja: ['要返信', '待機中', '観測異常', '新着'][i] }));
+  const bar = { pins: [{ id: 'b7', icon: 'data:image/png;base64,AAAA' }], sections: [{ items: [{ id: 'b3', icon: 'https://img.example/avatar.png' }] }] };
+  const lists = TL.fromState({ panes, queue, unreadOrder: [3, 1, 10, 2, 4, 5, 6, 7, 8, 9] }, bar);
+  // Only 未返信 panes are listed (pane 3 is merely new), in ⌘J order.
+  assert.deepStrictEqual(lists.unread.rows.map(r => r.name), ['ペイン 1', 'ペイン 10', 'ペイン 2', 'ペイン 4', 'ペイン 5', 'ペイン 6', 'ペイン 7', 'ペイン 8']);
+  assert.strictEqual(lists.unread.more, 1); assert.strictEqual(lists.unread.rows[0].kind, '要返信');
+  assert.strictEqual(lists.unread.rows[0].image, 'https://img.example/1.png');
+  panes[2].needsReply = true;
+  assert.strictEqual(TL.fromState({ panes, queue, unreadOrder: [3] }, bar).unread.rows[0].image, 'https://img.example/avatar.png');
+  assert.deepStrictEqual(lists.queue.rows.map(r => [r.name, r.kind]), [['キュー 7', '要返信'], ['キュー 2', '待機中'], ['キュー 9', '観測異常'], ['キュー 1', '新着']]);
+  assert.strictEqual(lists.queue.rows[0].image, 'data:image/png;base64,AAAA');
+  assert(TL.validList(lists.unread) && TL.validList(lists.queue));
+  assert.deepStrictEqual(TL.parse(JSON.stringify(lists.unread)), lists.unread);
+}
+
+// A compromised sender cannot grow the list without bound, introduce markup
+// through attributes, or make the tooltip load arbitrary URI schemes.
+{
+  const row = { name: 'Bot', kind: '要返信', image: 'data:image/png;base64,AAAA' };
+  const list = { rows: Array.from({ length: 8 }, () => row), more: 2 };
+  const withList = value => ({ ...payload, tip: { ...payload.tip, list: value } });
+  assert.strictEqual(check('chrome', withList(list)), null);
+  for (const bad of [
+    { ...list, rows: [...list.rows, row] }, { ...list, rows: Array(1) }, { ...list, more: -1 }, { ...list, more: 1.5 }, { ...list, more: 10001 },
+    { ...list, extra: true }, { ...list, rows: [{ ...row, extra: true }] }, { ...list, rows: [{ ...row, name: 'x'.repeat(121) }] },
+    { ...list, rows: [{ ...row, kind: 'x'.repeat(41) }] }, { ...list, rows: [{ ...row, image: `data:image/png;base64,${'A'.repeat(16384)}` }] },
+    ...['http://example.com/a', 'javascript:alert(1)', 'file:///x', 'https://user:pw@example.com/a', 'data:image/svg+xml;base64,AAAA'].map(image => ({ ...list, rows: [{ ...row, image }] })),
+  ]) assert.strictEqual(check('chrome', withList(bad)), 'E_PAYLOAD');
+  assert.strictEqual(TL.parse('{bad'), undefined); assert.strictEqual(TL.parse('x'.repeat(200000)), undefined);
+  assert(read('tooltip.html').includes('img-src https: data:'));
+}
+
+// Exercise the shared card renderer with hostile text and a failed avatar.
+// Dynamic data must use textContent; the only HTML in the card is static.
+{
+  class Node {
+    constructor() { this.children = []; this.className = ''; this.hidden = false; this.listeners = {}; this.classList = { toggle() {} }; this._text = ''; }
+    set textContent(value) { this._text = String(value); this.children = []; }
+    get textContent() { return this._text; }
+    appendChild(node) { this.children.push(node); node.parent = this; return node; }
+    append(...nodes) { nodes.forEach(node => this.appendChild(node)); }
+    replaceChildren() { this.children = []; }
+    addEventListener(event, cb) { this.listeners[event] = cb; }
+    remove() { this.parent.children = this.parent.children.filter(n => n !== this); }
+  }
+  const nodes = Object.fromEntries(['.tip-card', '.tip-name', '.tip-key', '.tip-description', '.tip-detail', '.tip-list'].map(k => [k, new Node()]));
+  const wrap = { querySelector: sel => nodes[sel] }, win = {};
+  vm.runInNewContext(read('tooltip-card.js'), { window: win, document: { createElement: () => new Node() }, TooltipList: TL });
+  win.TooltipCard.render(wrap, { name: '名前', key: '⌘J', description: '説明', detail: '詳細', dark: false,
+    list: { rows: [{ name: '<img onerror=alert(1)>', kind: '<b>状態</b>', image: 'https://img.example/a.png' }, { name: '猫', kind: '', image: '' }], more: 3 } });
+  const list = nodes['.tip-list']; assert.strictEqual(list.hidden, false); assert.strictEqual(list.children.length, 3);
+  const first = list.children[0], avatar = first.children[0];
+  assert.strictEqual(first.children[1].textContent, '<img onerror=alert(1)>'); assert.strictEqual(first.children[2].textContent, '<b>状態</b>');
+  assert.strictEqual(avatar.children[0].src, 'https://img.example/a.png');
+  avatar.children[0].listeners.error(); assert.strictEqual(avatar.children.length, 0); assert.strictEqual(avatar.textContent, '<');
+  assert.strictEqual(list.children[2].textContent, '…ほか 3件');
+  win.TooltipCard.render(wrap, { name: '名前', dark: true, list: { rows: [{ name: 'bad', kind: '', image: 'javascript:alert(1)' }], more: 0 } });
+  assert.strictEqual(list.hidden, true); assert.strictEqual(list.children.length, 0);
+}
 
 // Exercise the real event controller with a deterministic clock and a small DOM.
 function fixture() {
@@ -136,7 +221,7 @@ function fixture() {
   }
   const ctx = vm.createContext({ document: doc, window: win, innerWidth: 600, innerHeight: 400,
     getComputedStyle: n => ({ display: n.display || 'block', visibility: n.visibility || 'visible', opacity: n.opacity ?? '1' }),
-    TooltipCard: { create: () => measure, render: (_, tip) => { measure.tip = tip; } },
+    TooltipList: TL, TooltipCard: { create: () => measure, render: (_, tip) => { measure.tip = tip; } },
     mpb: { tipShow: tip => shown.push(tip), tipPrepare: () => { prepared++; }, tipHide: () => { hides++; }, onTipDismiss: cb => { wl['tip-dismiss'] = [cb]; } },
     Date: { now: () => time },
     setTimeout: (fn, ms) => { const id = next++; timers.set(id, { fn, at: time + ms }); return id; }, clearTimeout: id => timers.delete(id),
@@ -150,6 +235,9 @@ function fixture() {
   const f = fixture(), a = f.el('最初'), b = f.el('次', 70);
   f.fire('mouseover', { target: a }); assert.strictEqual(f.prepared, 1); f.advance(299); assert.strictEqual(f.shown.length, 0);
   f.advance(1); assert.strictEqual(f.shown[0].tip.name, '最初');
+  a.dataset.tipList = JSON.stringify({ rows: [{ name: '猫', kind: '要返信', image: '' }], more: 0 });
+  f.observer([{ target: a }]); assert.strictEqual(f.shown.at(-1).tip.list.rows[0].name, '猫');
+  a.dataset.tipList = '{bad'; f.observer([{ target: a }]); assert.strictEqual(f.shown.at(-1).tip.list, undefined);
   a.dataset.tipDetail = 'OFF'; f.observer([{ target: a }]); assert.strictEqual(f.shown.at(-1).tip.detail, 'OFF');
   f.fire('mouseout', { target: a, relatedTarget: b }); f.advance(39); assert.strictEqual(f.shown.at(-1).tip.name, '最初');
   f.advance(1); assert.strictEqual(f.shown.at(-1).tip.name, '次');

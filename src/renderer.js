@@ -36,7 +36,20 @@ $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
 $('#queue-sum').onclick = () => mpb.run({ type: 'queue-open' });   // (#01) 対応キュー in the overlay (opening it marks nothing read)
-$('#approve-btn').onclick = () => mpb.approveOpen();
+function approveButtonRect() {
+  const { x, y, width, height } = $('#approve-btn').getBoundingClientRect();
+  return { x, y, width, height };
+}
+function renderApproveButton(a) {
+  const name = a.label || '右上ボタンのBot';
+  $('#approve-label').textContent = a.label;
+  $('#approve-label').hidden = !a.label;
+  $('#approve-btn').classList.toggle('icon-only', !a.label);
+  setTip($('#approve-btn'), name, a.configured ? (a.label ? `${a.label}を別の画面で開きます。` : '設定したBotを別の画面で開きます。') : '右クリックまたはクリックでBotのリンクを設定します。');
+}
+$('#approve-btn').onclick = () => mpb.approveOpen(approveButtonRect());
+$('#approve-btn').oncontextmenu = e => { e.preventDefault(); mpb.approveInline(approveButtonRect()); };
+mpb.onApproveAnchorRequest(() => mpb.approveInlineAnchor(approveButtonRect()));
 let approveSavedTimer;
 mpb.onApproveSaved?.(() => { const b = $('#approve-btn'); b.classList.add('saved'); clearTimeout(approveSavedTimer); approveSavedTimer = setTimeout(() => b.classList.remove('saved'), 1400); });
 // panes.json warning (state-store.js): unreadable at start -> recovery list; a save failed -> retry. The panes stay as they are.
@@ -182,14 +195,15 @@ function syncBtn(s) {
 syncEl.onmousedown = () => { syncHeld = false; clearTimeout(syncHold); if (!S || !S.canSync) return; syncHold = setTimeout(() => { syncHeld = true; mpb.syncReset(); syncEl.classList.add('pulse'); setTimeout(() => syncEl.classList.remove('pulse'), 700); }, 600); };
 syncEl.onmouseup = syncEl.onmouseleave = () => clearTimeout(syncHold);
 syncEl.onclick = () => { if (syncHeld || !S || !S.canSync) return; mpb.syncCols(S.syncCols === false); };
+function renderSummaryTips(s) {
+  const lists = TooltipList.fromState(s, G);
+  $('#unread-sum').dataset.tipList = JSON.stringify(lists.unread);
+  $('#queue-sum').dataset.tipList = JSON.stringify(lists.queue);
+}
 const onS = s => {
   S = s;
   renderFavs(s.favorites || []);
-  if (s.approve) {
-    const a = s.approve, name = a.configured ? a.label : `${a.label}（未設定）`;
-    $('#approve-label').textContent = a.configured ? a.label : '未設定';
-    setTip($('#approve-btn'), name, a.configured ? `${a.label}を別の画面で開きます。` : 'クリックして右上ボタンのBotを設定します。');
-  }
+  if (s.approve) renderApproveButton(s.approve);
   document.body.classList.toggle('light', !s.dark);
   document.body.classList.toggle('has-max', s.maximizedId != null);
   $('#presets').querySelectorAll('button').forEach(b => { const active = b.dataset.k === (s.effLayout || s.layout); b.classList.toggle('active', active); b.dataset.tipDetail = active ? '現在のレイアウト' : ''; });
@@ -204,6 +218,7 @@ const onS = s => {
     qs.dataset.k = q.length ? q[0].kind : '';
     qs.dataset.tipDetail = q.length ? `${q.length}件・${Object.entries(n).map(([k, c]) => `${k} ${c}`).join('・')}` : '';
     qs.classList.toggle('show', q.length > 0); }
+  renderSummaryTips(s);
   $('#add').disabled = s.panes.length >= s.max;
   $('#reopen').disabled = !s.canReopen; $('#reopen').style.opacity = s.canReopen ? '' : '.4';
   { const w = $('#save-warn'), st = s.store || {}, rec = !!st.status && st.status !== 'ready';
@@ -352,6 +367,7 @@ mpb.onGbar(v => {
     `${v.at ? `前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件・` : ''}右クリックで表示を切替（${GbarMode.LABEL[gMode]} → ${GbarMode.LABEL[GbarMode.nextMode(gMode)]}）`);
   gnote.textContent = v.busy ? '読み込み中…' : v.note || '';
   renderFavs(S ? S.favorites || [] : []);
+  if (S) renderSummaryTips(S);
 });
 function gIcon(b) {                                          // its icon (16 px round), or the first letter when there is none / it does not load
   const l = document.createElement('span'); l.className = 'fic'; l.textContent = GbarMode.initial(b.name);   // a whole character (emoji, marks)

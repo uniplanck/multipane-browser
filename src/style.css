@@ -63,21 +63,30 @@ body.mac #tl-space{width:68px}
 /* ---- pane cards ---- */
 #panes{position:fixed;inset:0;background:var(--bg)}
 .pane{position:absolute;border-radius:9px;background:var(--card);box-shadow:var(--shadow);outline:1px solid var(--line);
-  transition:left .14s cubic-bezier(.2,.8,.2,1),top .14s cubic-bezier(.2,.8,.2,1),width .14s cubic-bezier(.2,.8,.2,1),height .14s cubic-bezier(.2,.8,.2,1),outline-color .2s,box-shadow .25s,opacity .16s,transform .16s}
+  transition:left .14s cubic-bezier(.2,.8,.2,1),top .14s cubic-bezier(.2,.8,.2,1),width .14s cubic-bezier(.2,.8,.2,1),height .14s cubic-bezier(.2,.8,.2,1),opacity .16s,transform .16s}
 .pane.entering{opacity:0;transform:scale(.97)} .pane.leaving{opacity:0;transform:scale(.97)}
 .pane.hidden{opacity:0;pointer-events:none}
-.pane.focused{outline:2px solid var(--accent);outline-offset:0}
+.pane.focused{outline:3px solid var(--accent);outline-offset:0;box-shadow:0 0 0 1px var(--accent),0 0 10px color-mix(in srgb,var(--accent) 65%,transparent)}
 .pane.unread{outline:2px solid var(--glow);box-shadow:0 0 0 1px var(--glow),0 0 18px color-mix(in srgb,var(--glow) 55%,transparent);animation:glow 1.8s ease-in-out infinite alternate}
+.pane.focused.unread{outline:3px solid var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 12px color-mix(in srgb,var(--glow) 65%,transparent);animation:none}
 @keyframes glow{from{box-shadow:0 0 0 1px var(--glow),0 0 8px color-mix(in srgb,var(--glow) 35%,transparent)}to{box-shadow:0 0 0 1px var(--glow),0 0 22px color-mix(in srgb,var(--glow) 70%,transparent)}}
 @keyframes pulse{50%{opacity:.4}}
 .head{height:30px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;background:var(--head);border-radius:9px 9px 0 0;border-bottom:1px solid var(--line);position:relative;cursor:grab}
 .pane.colored .head::before{content:"";position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:0 3px 3px 0;background:var(--pc)}
 .pane.colored .head{background:linear-gradient(90deg,color-mix(in srgb,var(--pc) 16%,var(--head)),var(--head) 60%)}
 .pane.unread .head{background:linear-gradient(90deg,color-mix(in srgb,var(--glow) 22%,var(--head)),var(--head) 70%)}
+.pane.colored.unread:not(.focused) .head{background:linear-gradient(90deg,color-mix(in srgb,var(--pc) 18%,var(--head)),color-mix(in srgb,var(--glow) 15%,var(--head)) 55%,var(--head) 90%)}
+.pane.focused .head{background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 24%,var(--head)),var(--head) 70%)}
+.pane.focused.colored .head{background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 20%,color-mix(in srgb,var(--pc) 20%,var(--head))),var(--head) 70%)}
+.pane.focused.unread .head{background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 24%,var(--head)),color-mix(in srgb,var(--glow) 12%,var(--head)) 55%,var(--head) 90%)}
+.pane.focused.colored.unread .head{background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 20%,color-mix(in srgb,var(--pc) 20%,var(--head))),color-mix(in srgb,var(--glow) 12%,var(--head)) 55%,var(--head) 90%)}
 .titlebox{flex:1;min-width:0;position:relative;height:22px;display:flex;align-items:center;overflow:hidden}
 .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text;padding:2px 4px;border-radius:5px}
+.pane:not(.focused) .title{opacity:.75}
+.pane.focused .title{font-weight:700}
 .title:hover{background:var(--ctl)}
 .title b{font-weight:600;margin-right:6px}
+.pane.focused .title b{font-weight:700}
 .title .sub{color:var(--dim)}
 .url{position:absolute;inset:0;width:100%;opacity:0;pointer-events:none;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:6px;padding:0 7px;font:12px var(--font);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent);transition:opacity .12s}
 .pane.editing .url{opacity:1;pointer-events:auto}
@@ -253,6 +262,7 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .ochip .od{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--wait);box-shadow:0 0 4px var(--wait)}
 .ochip .od.work{background:var(--work);box-shadow:0 0 4px var(--work)}
 #approve-btn{display:flex;align-items:center;gap:4px;width:auto;max-width:132px;padding:0 7px;color:var(--dim)}
+#approve-btn.icon-only{width:28px;padding:0;justify-content:center}
 #approve-btn svg{flex:none}
 #approve-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 #approve-btn.saved{background:rgba(48,209,88,.35);color:var(--text)}

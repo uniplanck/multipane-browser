@@ -80,7 +80,7 @@ function validate(doc) {
     BOOL_FLAGS.forEach(k => { if (doc.settings[k] !== undefined && typeof doc.settings[k] !== 'boolean') e.push(`settings.${k}: not a boolean`); });
     if (doc.settings.usageProv !== undefined && !UC.valid(doc.settings.usageProv)) e.push('settings.usageProv: not a clean provider list');
     if (doc.settings.gbarMode !== undefined && !GM.isMode(doc.settings.gbarMode)) e.push('settings.gbarMode: not a mode');
-    if (doc.settings.approveUrl !== undefined && (!AS.normalizeUrl(doc.settings.approveUrl) || AS.normalizeUrl(doc.settings.approveUrl) !== doc.settings.approveUrl)) e.push('settings.approveUrl: not a normalized Bot URL');
+    if (doc.settings.approveUrl !== undefined && (!AS.validUrl(doc.settings.approveUrl) || AS.normalizeUrl(doc.settings.approveUrl) !== doc.settings.approveUrl)) e.push('settings.approveUrl: not a normalized Bot URL');
     if (doc.settings.approveLabel !== undefined && (!AS.validLabel(doc.settings.approveLabel) || doc.settings.approveLabel !== doc.settings.approveLabel.trim())) e.push('settings.approveLabel: not a clean label');
   }
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
@@ -152,11 +152,11 @@ function migrate(raw) {
   if (isObj(settings)) {
     for (const key of ['approveUrl', 'approveLabel']) {
       if (settings[key] === undefined) continue;
-      const value = key === 'approveUrl' ? AS.normalizeUrl(settings[key]) : AS.validLabel(settings[key]) ? settings[key].trim() : null;
-      if (value === settings[key] && (key !== 'approveUrl' || value)) continue;
+      const value = key === 'approveUrl' ? AS.validUrl(settings[key]) ? AS.normalizeUrl(settings[key]) : null : AS.validLabel(settings[key]) ? settings[key].trim() : null;
+      if (value !== null && value === settings[key]) continue;
       settings = { ...settings };
-      if (value === null || (key === 'approveUrl' && !value)) delete settings[key]; else settings[key] = value;
-      fixes.push(`settings.${key}: ${value === null || !value && key === 'approveUrl' ? 'dropped' : 'repaired'}`);
+      if (value === null) delete settings[key]; else settings[key] = value;
+      fixes.push(`settings.${key}: ${value === null ? 'dropped' : 'repaired'}`);
     }
   }
   const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings, workspaces };

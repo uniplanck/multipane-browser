@@ -10,6 +10,7 @@ const path = require('path');
 const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
 const AS = require('./approve-setting');
+const TL = require('./tooltip-list');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -44,6 +45,8 @@ const obj = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = v => str(v, TEXT_MAX);
 const newName = v => text(v) && v.trim().slice(0, 60) !== '__proto__';  // a workspace name main stores as a key
 const axis = v => v === 'c' || v === 'r';
+const approveRect = r => obj(r) && Object.keys(r).length === 4 && ['x', 'y'].every(k => num(r[k], -1e5, 1e5))
+  && ['width', 'height'].every(k => num(r[k], 0, 1e5));
 const row = v => opt(v, x => int(x, 0, MAX_PANES));
 const kind = v => v === 'codex' || v === 'claude' || v === 'kimi';           // a gauge whose numbers ai-usage.js reads (= usage-config WEB)
 const gauge = v => kind(v) || v === 'grok' || v === 'antigravity';           // any gauge of the bar (= usage-config PROVIDERS)
@@ -91,7 +94,9 @@ const ACTIONS = {
   'diag-persist': { shape: x => bool(x.on) },
   'update-check': {}, 'update-start': {}, 'update-restart': {}, 'update-later': {},
   'update-choice': { shape: x => bool(x.on) }, 'update-toggle': { shape: x => bool(x.on) },
-  'approve-save': { shape: x => Object.keys(x).length === 3 && !!AS.normalizeUrl(x.url) && AS.validLabel(x.label) },
+  'approve-save': { shape: x => Object.keys(x).length === 3 && AS.validUrl(x.url) && AS.validLabel(x.label) },
+  'approve-pick': { shape: x => Object.keys(x).length === 2 && typeof x.id === 'string' && /^[A-Za-z0-9_-]+$/.test(x.id)
+    && x.id !== '__proto__' && !!AS.normalizeUrl('https://grok.com/bot/' + x.id) },
   'approve-reset': { shape: x => Object.keys(x).length === 1 },
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
@@ -132,7 +137,10 @@ const CHANNELS = {
   'dock-hover': { roles: CHROME, shape: a => num(a[0], -1e5, 1e5) && num(a[1], -1e5, 1e5) },
   'dock-drop': { roles: CHROME, shape: a => num(a[0], -1e5, 1e5) && num(a[1], -1e5, 1e5) },
   'dock-end': { roles: CHROME },
-  add: { roles: CHROME }, 'reopen-closed': { roles: CHROME }, 'reload-all': { roles: CHROME }, 'ws-menu': { roles: CHROME }, 'approve-open': { roles: CHROME },
+  add: { roles: CHROME }, 'reopen-closed': { roles: CHROME }, 'reload-all': { roles: CHROME }, 'ws-menu': { roles: CHROME },
+  'approve-open': { roles: CHROME, shape: a => a.length <= 1 && opt(a[0], approveRect) },
+  'approve-inline-open': { roles: CHROME, shape: a => a.length === 1 && approveRect(a[0]) },
+  'approve-inline-anchor': { roles: CHROME, shape: a => a.length === 1 && approveRect(a[0]) },
   palette: { roles: CHROME }, ready: { roles: CHROME }, 'save-retry': { roles: CHROME }, 'recovery-open': { roles: CHROME },
   'sync-reset': { roles: CHROME }, 'split-end': { roles: CHROME },
   layout: { roles: CHROME, shape: a => PRESETS.includes(a[0]) },
@@ -152,10 +160,12 @@ const CHANNELS = {
   'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },
   'focus-other': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.winPane(a[0], a[1]) },   // a chip of a pane in another window
   // Chrome-only, bounded display data. The tooltip window itself has no IPC send API.
-  'tip-show': { roles: CHROME, shape: ([p]) => obj(p) && obj(p.tip) && str(p.tip.name, 500) && str(p.tip.description, 500)
-    && str(p.tip.key, 40) && str(p.tip.detail, 2048) && bool(p.tip.dark) && bool(p.preferSide)
-    && obj(p.rect) && ['x', 'y'].every(k => num(p.rect[k], -1e5, 1e5)) && ['width', 'height'].every(k => num(p.rect[k], 0, 1e5))
-    && obj(p.size) && ['width', 'height'].every(k => num(p.size[k], 1, 1e4)) },
+  'tip-show': { roles: CHROME, shape: ([p, ...extra]) => !extra.length && obj(p) && Object.keys(p).length === 4 && obj(p.tip)
+    && Object.keys(p.tip).every(k => ['name', 'description', 'key', 'detail', 'dark', 'list'].includes(k))
+    && str(p.tip.name, 500) && str(p.tip.description, 500)
+    && str(p.tip.key, 40) && str(p.tip.detail, 2048) && bool(p.tip.dark) && opt(p.tip.list, TL.validList) && bool(p.preferSide)
+    && obj(p.rect) && Object.keys(p.rect).length === 4 && ['x', 'y'].every(k => num(p.rect[k], -1e5, 1e5)) && ['width', 'height'].every(k => num(p.rect[k], 0, 1e5))
+    && obj(p.size) && Object.keys(p.size).length === 2 && ['width', 'height'].every(k => num(p.size[k], 1, 1e4)) },
   'tip-prepare': { roles: CHROME }, 'tip-hide': { roles: CHROME },
   'usage-pop-show': { roles: CHROME, shape: ([r]) => obj(r) && num(r.right, -1e5, 1e5) && num(r.bottom, -1e5, 1e5) && gauge(r.kind) && opt(r.sel, text) },
   'usage-win-menu': { roles: CHROME, shape: a => kind(a[0]) && opt(a[1], text) },

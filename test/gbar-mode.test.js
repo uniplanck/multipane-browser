@@ -178,7 +178,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const modeCtx = vm.createContext({ GM, settings: {}, save() {}, gbPush() {} });
   vm.runInContext(main.match(/function gbModeNext\(\) \{[^\n]*?\}(?=\s)/)[0], modeCtx);
   const mpb = new Proxy({}, { get: (_, k) => (k === 'onGbar' ? cb => { box.gbar = cb; } : (...a) => { box.calls.push([k, ...a]); if (k === 'gbarMode') modeCtx.gbModeNext(); }) });
-  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
+  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', renderSummaryTips() {}, GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: has(e, 'gsep') ? '4px' : '0px', marginRight: has(e, 'gsep') ? '4px' : '0px' }),
     ResizeObserver: class { constructor(cb) { box.ro = cb; } observe() {} } });
   vm.runInContext(ren.slice(ren.indexOf('function setTip('), ren.indexOf('function tipAttrs(')) + ren.slice(A0, A1) + ren.slice(B0, B1), ctx);

@@ -23,6 +23,7 @@
     const d = target.dataset, r = target.getBoundingClientRect();
     const tip = { name: d.tip.slice(0, 500), description: (d.tipDesc || '').slice(0, 500), key: (d.tipKey || '').slice(0, 40),
       detail: (d.tipDetail || '').slice(0, 2048), dark: !document.body.classList.contains('light') };
+    const list = TooltipList.parse(d.tipList); if (list) tip.list = list;
     TooltipCard.render(measure, tip);
     const size = measure.getBoundingClientRect();
     mpb.tipShow({ tip, rect: { x: r.left, y: r.top, width: r.width, height: r.height },

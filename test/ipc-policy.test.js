@@ -41,6 +41,8 @@ const SAMPLE = {
   'focus-other': ['chrome', [2, 7]], 'usage-pop-show': ['chrome', [{ right: 812.5, bottom: 36, kind: 'grok', sel: '' }]], 'usage-win-menu': ['chrome', ['codex', '']],
   'tip-show': ['chrome', [{ tip: { name: '戻る', description: '前のページへ戻ります。', key: '⌘[', detail: '', dark: true }, rect: { x: 3, y: 4, width: 20, height: 20 }, size: { width: 180, height: 60 }, preferSide: false }]],
   'tip-prepare': ['chrome', []], 'tip-hide': ['chrome', []],
+  'approve-inline-open': ['chrome', [{ x: 700, y: 5, width: 28, height: 28 }]],
+  'approve-inline-anchor': ['chrome', [{ x: 700, y: 5, width: 28, height: 28 }]],
   'usage-pop-leave': ['overlay', []], 'usage-pop-keep': ['overlay', []], 'usage-pop-size': ['overlay', [242]], 'overlay-close': ['overlay', []],
   'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
   'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []], 'usage-connect': ['chrome', ['kimi']], 'usage-open': ['overlay', ['antigravity']],
@@ -159,7 +161,7 @@ const RUNS = [
   { type: 'open-here', url: 'example.com' }, { type: 'new-window', url: '' }, { type: 'fav-add', url: 'https://example.com/' }, { type: 'fav-open', id: 1, where: 'here' }, { type: 'fav-open', id: 1, where: 'new' },
   { type: 'focus', id: 3 }, { type: 'next-unread' }, { type: 'maximize' }, { type: 'rename-prompt' }, { type: 'ws-overwrite', name: 'A' }, { type: 'ws-overwrite', name: 'A', confirm: true },
   { type: 'ws-save-prompt' }, { type: 'approve-open' }, { type: 'broadcast-prompt' }, { type: 'fav-add-current' }, { type: 'reload-all' }, { type: 'reopen-closed' }, { type: 'clear-unread' },
-  { type: 'approve-save', url: 'https://grok.com/bot/abc', label: 'Bot' }, { type: 'approve-reset' },
+  { type: 'approve-save', url: 'https://grok.com/bot/abc', label: 'Bot' }, { type: 'approve-pick', id: 'abc' }, { type: 'approve-reset' },
   { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
   { type: 'bc-preview', text: 'こんにちは', ids: [1, 3] }, { type: 'bc-send', pid: 5 }, { type: 'bc-cancel', bid: 6 }, { type: 'bc-reset' }, { type: 'toggle-notifications' },
   { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },
@@ -296,7 +298,8 @@ t('preload: a channel name as argument is just data', (() => { const n = UP.sent
 // ---- what renderer.js (chrome) and overlay.js (overlay) send today, through the real preload ----
 const CALLS = [
   ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }], ['chrome', 'run', { type: 'queue-open' }],
-  ['chrome', 'approveOpen'], ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
+  ['chrome', 'approveOpen'], ['chrome', 'approveInline', { x: 700, y: 5, width: 28, height: 28 }], ['chrome', 'approveInlineAnchor', { x: 700, y: 5, width: 28, height: 28 }],
+  ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
   ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
   ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],
   ['chrome', 'dockBegin', 2], ['chrome', 'dockReady', 1], ['chrome', 'dockHover', 700, 95], ['chrome', 'dockHover', 0, 70], ['chrome', 'dockDrop', 1394, 893], ['chrome', 'dockEnd'],

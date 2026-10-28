@@ -71,7 +71,7 @@ function build() {
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
     ...(S?.activeWs ? [[`ワークスペース「${S.activeWs}」を上書き保存`, '⧉', { type: 'ws-overwrite', name: S.activeWs }]] : []),
     ['ワークスペースとして新規保存…', '⧉', { type: 'ws-save-prompt' }],
-    [S?.approve?.configured ? `${S.approve.label}を開く` : '右上ボタンのBotを設定（未設定）', '✓', { type: 'approve-open' }],
+    [S?.approve?.configured ? `${S.approve.label || '右上ボタンのBot'}を開く` : '右上ボタンのBotを設定（未設定）', '✓', { type: 'approve-open' }],
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
     ['フォーカス中のペインをお気に入りに追加', '★', { type: 'fav-add-current' }],
     ['新しいウィンドウ', '⧉', { type: 'new-window', url: '' }, `${MOD}N`],
@@ -133,21 +133,25 @@ list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.
 $('#scrim').onclick = () => mpb.closeOverlay();
 function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
 mpb.onApproveRect(apRect);
-addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'approve-settings' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
+addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'approve-settings' || mode === 'approve-inline' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
+addEventListener('resize', () => { if (mode === 'approve-inline') positionApproveInline(); });
+mpb.onApproveInlineAnchor(anchor => { if (mode === 'approve-inline') { ctx.anchor = anchor; positionApproveInline(); } });
 mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true);
   else if (mode === 'approve-settings') { const source = $('#approve-source'); if (source) source.textContent = approveSource(s.approve?.source); } });
 mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
+  $('#box').style.left = ''; $('#box').style.top = '';
   document.body.classList.toggle('approve', mode === 'approve');
   document.body.classList.toggle('update', mode === 'update' || mode === 'update-first');
   document.body.classList.toggle('approve-settings', mode === 'approve-settings');
+  document.body.classList.toggle('approve-inline', mode === 'approve-inline');
   document.body.classList.toggle('diag', mode === 'diag');
   document.body.classList.toggle('queue', mode === 'queue');
   document.body.classList.toggle('bc', mode === 'broadcast');
   items = [];                                                // (#01) nothing kept from the previous screen
   if (mode === 'update' || mode === 'update-first') { document.body.classList.toggle('light', !o.dark); renderUpdate(o); return; }
-  if (mode === 'approve-settings') { document.body.classList.toggle('light', !o.dark); renderApproveSettings(o); return; }
+  if (mode === 'approve-settings' || mode === 'approve-inline') { document.body.classList.toggle('light', !o.dark); renderApproveSettings(o); return; }
   if (mode === 'approve') { apRect(o.rect); return; }
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
@@ -168,32 +172,56 @@ mpb.onOverlayOpen(o => {
 const updatePanel = $('#update-panel');
 const approveSettingsPanel = $('#approve-settings-panel');
 const approveSource = source => ({ setting: '設定', environment: '環境変数', default: '既定', unset: '未設定' }[source] || '未設定');
+function positionApproveInline() {
+  if (!ctx.anchor) return;
+  const box = $('#box'), size = box.getBoundingClientRect();
+  const pos = ApproveSetting.inlinePosition(ctx.anchor, size, { width: innerWidth, height: innerHeight });
+  box.style.left = `${pos.x}px`; box.style.top = `${pos.y}px`;
+}
 function renderApproveSettings(o) {
-  const a = o.approve || {}, source = approveSource(a.source);
-  approveSettingsPanel.innerHTML = `<div class="update-head"><span class="update-icon">✓</span><h2>右上ボタンのBot</h2></div>
-    <p class="update-copy">右上のボタンで開くGrok Botを設定します。現在の設定元: <b id="approve-source">${esc(source)}</b></p>
+  const a = o.approve || {}, source = approveSource(a.source), inline = o.mode === 'approve-inline';
+  approveSettingsPanel.innerHTML = `${inline ? '<h2 class="approve-inline-title">右上ボタンのBot</h2>' : `<div class="update-head"><span class="update-icon">✓</span><h2>右上ボタンのBot</h2></div>
+    <p class="update-copy">右上のボタンで開くGrok Botを設定します。現在の設定元: <b id="approve-source">${esc(source)}</b></p>`}
     <form id="approve-settings-form" novalidate>
-      <label class="approve-field">BotのURL<input id="approve-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://grok.com/bot/…" value="${esc(a.url || '')}"></label>
-      <label class="approve-field">表示名（20文字まで）<input id="approve-name" type="text" autocomplete="off" placeholder="空欄なら既定の名前" value="${esc(a.label || '')}"></label>
+      <label class="approve-field">Botのリンク<input id="approve-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://grok.com/bot/…" value="${esc(a.url || '')}"></label>
+      <label class="approve-field">名前（20文字まで）<input id="approve-name" type="text" autocomplete="off" placeholder="空欄ならアイコンのみ" value="${esc(a.label || '')}"></label>
       <div id="approve-error" role="alert" aria-live="polite"></div>
-      <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="reset">既定に戻す</button><button type="button" data-approve-action="cancel">キャンセル</button></div>
-    </form>`;
-  setTimeout(() => approveSettingsPanel.querySelector('#approve-url')?.focus(), 0);
+      <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="cancel">キャンセル</button><button class="approve-reset" type="button" data-approve-action="reset">既定に戻す</button></div>
+    </form>${inline && o.bots?.length ? `<div class="approve-picker-label">Botを選択（すぐに反映）</div><div class="approve-picker" aria-label="Bot一覧">${o.bots.map(b => {
+      const selected = b.url === a.url, initial = (Array.from(b.name.trim())[0] || '•').toUpperCase();
+      return `<button type="button" class="approve-pick${selected ? ' selected' : ''}" data-approve-pick="${esc(b.id)}" aria-pressed="${selected}"><span class="approve-avatar">${esc(initial)}${b.icon ? `<img src="${esc(b.icon)}" alt="" referrerpolicy="no-referrer">` : ''}</span><span class="approve-pick-name">${esc(b.name)}</span><span class="approve-check" aria-hidden="true">${selected ? '✓' : ''}</span></button>`;
+    }).join('')}</div>` : ''}`;
+  if (inline) positionApproveInline();
+  setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#approve-url')?.focus(); }, 0);
 }
 approveSettingsPanel.addEventListener('submit', e => {
   e.preventDefault();
   const url = approveSettingsPanel.querySelector('#approve-url').value, label = approveSettingsPanel.querySelector('#approve-name').value;
   const error = approveSettingsPanel.querySelector('#approve-error');
-  if (!ApproveSetting.normalizeUrl(url)) { error.textContent = 'https://grok.com/bot/ で始まるBotのURLを入力してください。'; return; }
-  if (!ApproveSetting.validLabel(label)) { error.textContent = '表示名は制御文字を含まない20文字以内で入力してください。'; return; }
+  if (!ApproveSetting.validUrl(url)) { error.textContent = 'https://grok.com/bot/ で始まるBotのURLを入力してください。'; if (mode === 'approve-inline') positionApproveInline(); return; }
+  if (!ApproveSetting.validLabel(label)) { error.textContent = '表示名は制御文字を含まない20文字以内で入力してください。'; if (mode === 'approve-inline') positionApproveInline(); return; }
   error.textContent = '';
   mpb.run({ type: 'approve-save', url, label });
 });
 approveSettingsPanel.addEventListener('input', () => { const error = approveSettingsPanel.querySelector('#approve-error'); if (error) error.textContent = ''; });
 approveSettingsPanel.addEventListener('click', e => {
+  const pick = e.target.closest('[data-approve-pick]');
+  if (pick && mode === 'approve-inline') { mpb.run({ type: 'approve-pick', id: pick.dataset.approvePick }); return; }
   const action = e.target.closest('[data-approve-action]')?.dataset.approveAction;
   if (action === 'reset') mpb.run({ type: 'approve-reset' });
   else if (action === 'cancel') mpb.closeOverlay();
+});
+approveSettingsPanel.addEventListener('error', e => { if (e.target.matches('.approve-avatar img')) e.target.remove(); }, true);
+mpb.onApprovePicked?.(bot => {
+  if (mode !== 'approve-inline' || !ctx.bots?.some(b => b.id === bot.id && b.url === bot.url)) return;
+  approveSettingsPanel.querySelector('#approve-url').value = bot.url;
+  approveSettingsPanel.querySelector('#approve-name').value = bot.name;
+  approveSettingsPanel.querySelector('#approve-error').textContent = '';
+  approveSettingsPanel.querySelectorAll('[data-approve-pick]').forEach(el => {
+    const selected = el.dataset.approvePick === bot.id;
+    el.classList.toggle('selected', selected); el.setAttribute('aria-pressed', String(selected));
+    el.querySelector('.approve-check').textContent = selected ? '✓' : '';
+  });
 });
 function renderUpdate(o) {
   const u = o.update || {}, active = document.activeElement?.dataset?.updateAction || '';
