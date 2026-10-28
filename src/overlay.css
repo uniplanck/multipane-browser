@@ -80,6 +80,14 @@ body.approve #scrim{background:rgba(0,0,0,.42)}
 
 /* アップデート: a compact settings panel in the same surface as the other overlays. */
 #update-panel{display:none}
+#approve-settings-panel{display:none}
+body.approve-settings #inwrap,body.approve-settings #list,body.approve-settings #foot{display:none}
+body.approve-settings #box{width:min(570px,90vw);max-height:80vh;overflow:auto}
+body.approve-settings #approve-settings-panel{display:block;padding:26px 28px 24px}
+.approve-field{display:block;color:var(--text);font-weight:600;margin:14px 0}
+.approve-field input{display:block;width:100%;margin-top:6px;padding:9px 10px;background:var(--ctl);border:1px solid var(--line);border-radius:8px;color:var(--text);font:13px var(--font);outline:none}
+.approve-field input:focus{border-color:#0a84ff}
+#approve-error{min-height:1.4em;color:#ff6b6b;font-size:12px;line-height:1.4}
 body.update #inwrap,body.update #list,body.update #foot{display:none}
 body.update #box{width:min(570px,90vw)}
 body.update #update-panel{display:block;padding:26px 28px 24px}

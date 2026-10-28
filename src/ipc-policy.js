@@ -9,6 +9,7 @@
 const path = require('path');
 const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
+const AS = require('./approve-setting');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -90,6 +91,8 @@ const ACTIONS = {
   'diag-persist': { shape: x => bool(x.on) },
   'update-check': {}, 'update-start': {}, 'update-restart': {}, 'update-later': {},
   'update-choice': { shape: x => bool(x.on) }, 'update-toggle': { shape: x => bool(x.on) },
+  'approve-save': { shape: x => Object.keys(x).length === 3 && !!AS.normalizeUrl(x.url) && AS.validLabel(x.label) },
+  'approve-reset': { shape: x => Object.keys(x).length === 1 },
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },

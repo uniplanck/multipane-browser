@@ -37,6 +37,8 @@ $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
 $('#queue-sum').onclick = () => mpb.run({ type: 'queue-open' });   // (#01) 対応キュー in the overlay (opening it marks nothing read)
 $('#approve-btn').onclick = () => mpb.approveOpen();
+let approveSavedTimer;
+mpb.onApproveSaved?.(() => { const b = $('#approve-btn'); b.classList.add('saved'); clearTimeout(approveSavedTimer); approveSavedTimer = setTimeout(() => b.classList.remove('saved'), 1400); });
 // panes.json warning (state-store.js): unreadable at start -> recovery list; a save failed -> retry. The panes stay as they are.
 $('#save-warn').onclick = () => { const st = (S && S.store) || {}; if (st.status && st.status !== 'ready') mpb.recoveryOpen(); else mpb.saveRetry(); };
 // Memory / CPU meters: tabular digits; <1GB -> "333MB", else "1.2GB". IPC carries numbers only.
@@ -183,6 +185,11 @@ syncEl.onclick = () => { if (syncHeld || !S || !S.canSync) return; mpb.syncCols(
 const onS = s => {
   S = s;
   renderFavs(s.favorites || []);
+  if (s.approve) {
+    const a = s.approve, name = a.configured ? a.label : `${a.label}（未設定）`;
+    $('#approve-label').textContent = a.configured ? a.label : '未設定';
+    setTip($('#approve-btn'), name, a.configured ? `${a.label}を別の画面で開きます。` : 'クリックして右上ボタンのBotを設定します。');
+  }
   document.body.classList.toggle('light', !s.dark);
   document.body.classList.toggle('has-max', s.maximizedId != null);
   $('#presets').querySelectorAll('button').forEach(b => { const active = b.dataset.k === (s.effLayout || s.layout); b.classList.toggle('active', active); b.dataset.tipDetail = active ? '現在のレイアウト' : ''; });

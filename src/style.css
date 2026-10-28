@@ -252,8 +252,12 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 .ochip.working .oc{background:var(--work);color:#fff}
 .ochip .od{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--wait);box-shadow:0 0 4px var(--wait)}
 .ochip .od.work{background:var(--work);box-shadow:0 0 4px var(--work)}
-#approve-btn{display:grid;place-items:center;color:var(--dim)}
+#approve-btn{display:flex;align-items:center;gap:4px;width:auto;max-width:132px;padding:0 7px;color:var(--dim)}
+#approve-btn svg{flex:none}
+#approve-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+#approve-btn.saved{background:rgba(48,209,88,.35);color:var(--text)}
 #approve-btn:hover{color:var(--text)}
+@media (max-width:900px){#approve-label{display:none}#approve-btn{width:28px;padding:0;justify-content:center}}
 #ws-btn.saved{background:var(--wait);color:#fff}
 #ws-btn.active-ws{box-shadow:inset 0 -2px 0 var(--accent)}
 

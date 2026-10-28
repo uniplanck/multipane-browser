@@ -159,6 +159,7 @@ const RUNS = [
   { type: 'open-here', url: 'example.com' }, { type: 'new-window', url: '' }, { type: 'fav-add', url: 'https://example.com/' }, { type: 'fav-open', id: 1, where: 'here' }, { type: 'fav-open', id: 1, where: 'new' },
   { type: 'focus', id: 3 }, { type: 'next-unread' }, { type: 'maximize' }, { type: 'rename-prompt' }, { type: 'ws-overwrite', name: 'A' }, { type: 'ws-overwrite', name: 'A', confirm: true },
   { type: 'ws-save-prompt' }, { type: 'approve-open' }, { type: 'broadcast-prompt' }, { type: 'fav-add-current' }, { type: 'reload-all' }, { type: 'reopen-closed' }, { type: 'clear-unread' },
+  { type: 'approve-save', url: 'https://grok.com/bot/abc', label: 'Bot' }, { type: 'approve-reset' },
   { type: 'layout', layout: '5x2' }, { type: 'ws-load', name: 'A' }, { type: 'ws-rename-prompt', name: 'A' }, { type: 'ws-delete', name: 'A' },
   { type: 'bc-preview', text: 'こんにちは', ids: [1, 3] }, { type: 'bc-send', pid: 5 }, { type: 'bc-cancel', bid: 6 }, { type: 'bc-reset' }, { type: 'toggle-notifications' },
   { type: 'diag-open' }, { type: 'diag-copy' }, { type: 'diag-persist', on: true }, { type: 'diag-persist', on: false },

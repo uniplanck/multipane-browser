@@ -71,7 +71,7 @@ function build() {
     ['フォーカス中のペインの名前を変更', '✎', { type: 'rename-prompt' }],
     ...(S?.activeWs ? [[`ワークスペース「${S.activeWs}」を上書き保存`, '⧉', { type: 'ws-overwrite', name: S.activeWs }]] : []),
     ['ワークスペースとして新規保存…', '⧉', { type: 'ws-save-prompt' }],
-    ['Tiboを開く', '✓', { type: 'approve-open' }],
+    [S?.approve?.configured ? `${S.approve.label}を開く` : '右上ボタンのBotを設定（未設定）', '✓', { type: 'approve-open' }],
     ['一斉送信（複数のBotに同じメッセージ）…', '📣', { type: 'broadcast-prompt' }, `${MOD}⇧B`],
     ['フォーカス中のペインをお気に入りに追加', '★', { type: 'fav-add-current' }],
     ['新しいウィンドウ', '⧉', { type: 'new-window', url: '' }, `${MOD}N`],
@@ -133,18 +133,21 @@ list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.
 $('#scrim').onclick = () => mpb.closeOverlay();
 function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
 mpb.onApproveRect(apRect);
-addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
-mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true); });
+addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'approve-settings' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
+mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true);
+  else if (mode === 'approve-settings') { const source = $('#approve-source'); if (source) source.textContent = approveSource(s.approve?.source); } });
 mpb.onOverlayOpen(o => {
   document.body.classList.remove('upop');
   mode = o.mode; ctx = o; sel = 0;
   document.body.classList.toggle('approve', mode === 'approve');
   document.body.classList.toggle('update', mode === 'update' || mode === 'update-first');
+  document.body.classList.toggle('approve-settings', mode === 'approve-settings');
   document.body.classList.toggle('diag', mode === 'diag');
   document.body.classList.toggle('queue', mode === 'queue');
   document.body.classList.toggle('bc', mode === 'broadcast');
   items = [];                                                // (#01) nothing kept from the previous screen
   if (mode === 'update' || mode === 'update-first') { document.body.classList.toggle('light', !o.dark); renderUpdate(o); return; }
+  if (mode === 'approve-settings') { document.body.classList.toggle('light', !o.dark); renderApproveSettings(o); return; }
   if (mode === 'approve') { apRect(o.rect); return; }
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
@@ -163,6 +166,35 @@ mpb.onOverlayOpen(o => {
 
 // ---- update settings: main owns all state and operations; this view sends only fixed actions. ----
 const updatePanel = $('#update-panel');
+const approveSettingsPanel = $('#approve-settings-panel');
+const approveSource = source => ({ setting: '設定', environment: '環境変数', default: '既定', unset: '未設定' }[source] || '未設定');
+function renderApproveSettings(o) {
+  const a = o.approve || {}, source = approveSource(a.source);
+  approveSettingsPanel.innerHTML = `<div class="update-head"><span class="update-icon">✓</span><h2>右上ボタンのBot</h2></div>
+    <p class="update-copy">右上のボタンで開くGrok Botを設定します。現在の設定元: <b id="approve-source">${esc(source)}</b></p>
+    <form id="approve-settings-form" novalidate>
+      <label class="approve-field">BotのURL<input id="approve-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://grok.com/bot/…" value="${esc(a.url || '')}"></label>
+      <label class="approve-field">表示名（20文字まで）<input id="approve-name" type="text" autocomplete="off" placeholder="空欄なら既定の名前" value="${esc(a.label || '')}"></label>
+      <div id="approve-error" role="alert" aria-live="polite"></div>
+      <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="reset">既定に戻す</button><button type="button" data-approve-action="cancel">キャンセル</button></div>
+    </form>`;
+  setTimeout(() => approveSettingsPanel.querySelector('#approve-url')?.focus(), 0);
+}
+approveSettingsPanel.addEventListener('submit', e => {
+  e.preventDefault();
+  const url = approveSettingsPanel.querySelector('#approve-url').value, label = approveSettingsPanel.querySelector('#approve-name').value;
+  const error = approveSettingsPanel.querySelector('#approve-error');
+  if (!ApproveSetting.normalizeUrl(url)) { error.textContent = 'https://grok.com/bot/ で始まるBotのURLを入力してください。'; return; }
+  if (!ApproveSetting.validLabel(label)) { error.textContent = '表示名は制御文字を含まない20文字以内で入力してください。'; return; }
+  error.textContent = '';
+  mpb.run({ type: 'approve-save', url, label });
+});
+approveSettingsPanel.addEventListener('input', () => { const error = approveSettingsPanel.querySelector('#approve-error'); if (error) error.textContent = ''; });
+approveSettingsPanel.addEventListener('click', e => {
+  const action = e.target.closest('[data-approve-action]')?.dataset.approveAction;
+  if (action === 'reset') mpb.run({ type: 'approve-reset' });
+  else if (action === 'cancel') mpb.closeOverlay();
+});
 function renderUpdate(o) {
   const u = o.update || {}, active = document.activeElement?.dataset?.updateAction || '';
   if (mode === 'update-first') {

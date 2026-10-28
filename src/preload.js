@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('mpb', {
   saveRetry: () => send('save-retry'), recoveryOpen: () => send('recovery-open'),
   onMem: cb => listen('mem', (_, data) => cb(data)), onOthers: cb => listen('others', (_, l) => cb(l)),
   onWsSaved: cb => listen('ws-saved', (_, n) => cb(n)), onApproveRect: cb => listen('approve-rect', (_, r) => cb(r)),
+  onApproveSaved: cb => listen('approve-saved', () => cb()),
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),
   tipShow: p => send('tip-show', p), tipPrepare: () => send('tip-prepare'), tipHide: () => send('tip-hide'), onTipDismiss: cb => listen('tip-dismiss', () => cb()),
   usageMargin: v => ipcRenderer.invoke('usage:margin', v),
