@@ -135,7 +135,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   let favs = null;
   const mode = () => (/\bgm-compact\b/.test(favs.className) ? 'compact' : /\bgm-semi\b/.test(favs.className) ? 'semi' : 'normal');
   class El {
-    constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parent = null; this.className = ''; this.id = ''; this.title = ''; this.style = {}; this.attrs = {}; this.on = {}; this._t = ''; }
+    constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parent = null; this.className = ''; this.id = ''; this.dataset = {}; this.style = {}; this.attrs = {}; this.on = {}; this._t = ''; }
     get classList() { const el = this, set = () => new Set(el.className.split(/\s+/).filter(Boolean));
       return { contains: c => set().has(c), add(c) { this.toggle(c, true); }, remove(c) { this.toggle(c, false); }, toggle(c, v) { const s = set(), on = v === undefined ? !s.has(c) : !!v; if (on) s.add(c); else s.delete(c); el.className = [...s].join(' '); return on; } }; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
@@ -181,7 +181,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: has(e, 'gsep') ? '4px' : '0px', marginRight: has(e, 'gsep') ? '4px' : '0px' }),
     ResizeObserver: class { constructor(cb) { box.ro = cb; } observe() {} } });
-  vm.runInContext(ren.slice(A0, A1) + ren.slice(B0, B1), ctx);
+  vm.runInContext(ren.slice(ren.indexOf('function setTip('), ren.indexOf('function tipAttrs(')) + ren.slice(A0, A1) + ren.slice(B0, B1), ctx);
   const run = s => vm.runInContext(s, ctx), gbtn = byId['#fav-star'], gNext = run('gNext'), shortLabel = run('shortLabel');
   // the bar's list: 2 pins (one without an icon), 3 sections (the last one nameless), 2 favorites (one without a label)
   const bot = (id, name, o = {}) => ({ id, name, orig: name, url: 'https://grok.com/bot/' + id, group: !!o.group, icon: o.icon ? 'data:image/png;base64,AAAA' : '', pinned: !!o.pinned });
@@ -210,7 +210,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   t('vm 通常: no mode class; labels as before (Bots 10 columns, favorites 6, headings 12); group frame; the Grok button says right-click → セミコンパクト',
     favs.className === '' && allItems().every(({ e, key }) => labelOf(e) === shortLabel(key[0] === 'f' ? FAVNAME[key] : NAME[key], key[0] === 'f' ? 6 : 10))
     && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => !e.children.some(c => has(c, 'gmark')) && has(e, 'grp') === GROUP.has(key))
-    && J(GP().heads.map(h => h && h.textContent)) === J([shortLabel('仕事の依頼', 12), shortLabel('Dev tools', 12), null]) && /右クリック: 表示を切替（通常 → セミコンパクト）$/.test(gbtn.title));
+    && J(GP().heads.map(h => h && h.textContent)) === J([shortLabel('仕事の依頼', 12), shortLabel('Dev tools', 12), null]) && /右クリックで表示を切替（通常 → セミコンパクト）$/.test(gbtn.dataset.tipDetail));
   const pinW = { normal: GP().pinW }, pages = { normal: pageN() };
   t(`vm 通常: pins first (with names), the rest in pages that fit (${pages.normal} pages), 次へ at the end`, pinsShown().every((e, i) => has(e, 'gpin') && labelOf(e) === shortLabel(PINS[i].name, 10))
     && pages.normal >= 3 && kids().at(-1) === gNext && everyPage(fits).every(Boolean));
@@ -271,10 +271,10 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
     && pinsShown().every((e, i) => labelOf(e) === GM.truncate(PINS[i].name)) && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => !e.children.some(c => has(c, 'gmark')) && has(e, 'grp') === GROUP.has(key)));
   t('vm セミコンパクト: e.g. 議事録まとめ係 -> 議事, Code Reviewer -> Code, ①下書き -> ①下, a ZWJ emoji stays whole; headings cut to 4 units (title: the full name)',
     labelOf(GP().els[GP().keys.indexOf('bw0')]) === '議事' && labelOf(GP().els[GP().keys.indexOf('bd0')]) === 'Code' && labelOf(GP().els[GP().keys.indexOf('bd8')]) === '①下'
-    && labelOf(GP().els[GP().keys.indexOf('bd4')]) === MAN_PC + 'ペ' && J(GP().heads.map(h => h && [h.textContent, h.title])) === J([['仕事', '仕事の依頼'], ['Dev', 'Dev tools'], null]));
+    && labelOf(GP().els[GP().keys.indexOf('bd4')]) === MAN_PC + 'ペ' && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕事', '仕事の依頼'], ['Dev', 'Dev tools'], null]));
   t(`vm セミコンパクト: pages measured again: fewer pages (${pages.normal} -> ${pages.semi}), the pins narrower (${pinW.normal} -> ${pinW.semi} px), every page fits`,
     pages.semi < pages.normal && pinW.semi < pinW.normal && everyPage(fits).every(Boolean));
-  t('vm セミコンパクト: the Grok button says → コンパクト', /右クリック: 表示を切替（セミコンパクト → コンパクト）$/.test(gbtn.title));
+  t('vm セミコンパクト: the Grok button says → コンパクト', /右クリックで表示を切替（セミコンパクト → コンパクト）$/.test(gbtn.dataset.tipDetail));
 
   t('vm セミコンパクト: group frames / no gmark, including pins', groupFrames());
 
@@ -284,11 +284,11 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const iconOnly = (e, b) => e.children.length === 1 && (b.icon ? e.children[0].tagName === 'IMG' && has(e.children[0], 'gic') : has(e.children[0], 'fic') && e.children[0].textContent === GM.initial(b.name));
   const BOT = Object.fromEntries([...PINS, ...SECS.flatMap(s => s.items)].map(b => ['b' + b.id, b]));
   t('vm コンパクト: Bots and pins show the icon only (none: the first letter), no name, no group mark; the tooltip keeps the full name',
-    favs.className === 'gm-compact' && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => iconOnly(e, BOT[key]) && e.title.startsWith(BOT[key].name))
+    favs.className === 'gm-compact' && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => iconOnly(e, BOT[key]) && e.dataset.tip === BOT[key].name)
     && pinsShown().every((e, i) => iconOnly(e, PINS[i]) && has(e, 'gpin')));
   t('vm コンパクト: favorites (no icon of their own) show a first-letter badge; headings cut to 2 units',
     J(allItems().filter(x => x.key[0] === 'f').map(({ e }) => e.children.map(c => [c.className, c.textContent]))) === J([[['fic', 'E']], [['fic', 'N']]])
-    && J(GP().heads.map(h => h && [h.textContent, h.title])) === J([['仕', '仕事の依頼'], ['De', 'Dev tools'], null]));
+    && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕', '仕事の依頼'], ['De', 'Dev tools'], null]));
   t(`vm コンパクト: all fits in one page now (no 次へ), the pins narrower again (${pinW.compact} px)`, pages.compact === 1 && !kids().includes(gNext) && pinW.compact < pinW.semi && fits()
     && kids().length === GP().pinN + 27 + 1 + 2);           // pins + 2 favorites + 25 Bots, the separator, the 2 named headings
   t('vm コンパクト: group frames / no gmark, including pins', groupFrames());
@@ -368,8 +368,8 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
     t('vm ' + m + ': open and active frames (groups / pins / duplicate / detached page)',
       framed(['p2', 'd0'], 'd0') && listed.filter(x => x.id === 'p2').length === 2 && listed.some(x => !x.e.parent));
     t('vm ' + m + ': tooltip keeps name, group label and actions, and adds presence',
-      listed.filter(x => x.id === 'p2').every(x => /・グループ/.test(x.e.title) && /右クリック: メニュー/.test(x.e.title) && /\nペインで開いています$/.test(x.e.title))
-      && /\n今のペインで開いています$/.test(listed.find(x => x.id === 'd0').e.title));
+      listed.filter(x => x.id === 'p2').every(x => /グループ/.test(x.e.dataset.tipDetail) && /右クリックでメニュー/.test(x.e.dataset.tipDetail) && /^ペインで開いています/.test(x.e.dataset.tipDetail))
+      && /^今のペインで開いています/.test(listed.find(x => x.id === 'd0').e.dataset.tipDetail));
     const gp = GP(), page = gp.page, width = gp.pinW, nodes = gp.els.slice();
     const update = () => run('renderFavs(S.favorites)');       // same path onState calls, with an unchanged list key
     ctx.S.focusedId = 101; update();
@@ -379,7 +379,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
     t('vm ' + m + ': navigation emphasizes the Bot; group remains open in another pane', framed(['p1', 'p2', 'd0'], 'p1'));
     ctx.S.panes.pop(); update();
     t('vm ' + m + ': closing the final matching pane removes its frame and status tooltip',
-      framed(['p1', 'd0'], 'p1') && listed.filter(x => x.id === 'p2').every(x => !/ペインで開いています/.test(x.e.title)));
+      framed(['p1', 'd0'], 'p1') && listed.filter(x => x.id === 'p2').every(x => !/ペインで開いています/.test(x.e.dataset.tipDetail)));
     ctx.S.panes[0].url = 'https://example.com/'; update();
     t('vm ' + m + ': unrelated focused URL clears emphasis; another open group stays framed', framed(['d0'], ''));
     const pageAt = GP().page; gNext.onclick();
@@ -392,7 +392,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   ctx.S.panes = [{ id: 104, url: 'https://grok.com/bot/unlisted?chat=1' }]; ctx.S.focusedId = 104;
   run('renderFavs(S.favorites)');
   { const e = GP().els[GP().keys.indexOf('f3')];
-    t('vm: a Grok URL favorite is framed and emphasized by URL ID too', has(e, 'gopen') && has(e, 'gactive') && /今のペインで開いています$/.test(e.title)); }
+    t('vm: a Grok URL favorite is framed and emphasized by URL ID too', has(e, 'gopen') && has(e, 'gactive') && /^今のペインで開いています/.test(e.dataset.tipDetail)); }
   ctx.S.favorites.pop(); ctx.S.panes = []; delete ctx.S.focusedId;
 
   // back to 通常, and an unknown value
@@ -400,6 +400,6 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   t('vm: コンパクト -> 通常: the labels and the pages as before', favs.className === '' && allItems().every(({ e, key }) => labelOf(e) === shortLabel(key[0] === 'f' ? FAVNAME[key] : NAME[key], key[0] === 'f' ? 6 : 10))
     && pageN() === pages.normal && GP().pinW === pinW.normal && everyPage(fits).every(Boolean));
   send('weird');
-  t('vm: an unknown mode from main is shown as 通常 (→ セミコンパクト next)', run('gMode') === 'normal' && favs.className === '' && pageN() === pages.normal && /（通常 → セミコンパクト）$/.test(gbtn.title)); }
+  t('vm: an unknown mode from main is shown as 通常 (→ セミコンパクト next)', run('gMode') === 'normal' && favs.className === '' && pageN() === pages.normal && /（通常 → セミコンパクト）$/.test(gbtn.dataset.tipDetail)); }
 
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

@@ -1,31 +1,31 @@
 <!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:">
-<link rel="stylesheet" href="style.css"></head><body>
+<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="tooltip.css"></head><body>
 <header id="top">
   <div id="tl-space"></div>
-  <div id="mem" title="このアプリ全体のメモリ使用量（全プロセスの合計）">--</div>
-  <div id="cpu" title="左 / 右%：左はBotsの全プロセスのCPU使用率の合計（1コアを100%として計算するため100%を超える場合があります）。右はMac全体のCPU使用率（全コア平均、0〜100%）。約2.5秒ごとに更新し、取得できない側は --（右の初回を含む）を表示します。">-- / --%</div>
+  <div id="mem" data-tip="メモリ使用量" data-tip-desc="アプリ全体が使っているメモリです。" aria-label="アプリ全体のメモリ使用量">--</div>
+  <div id="cpu" data-tip="CPU使用率" data-tip-desc="左はBots、右はMac全体の使用率です。" data-tip-detail="Botsは100%を超えることがあります。取得できない値は -- です。" aria-label="CPU使用率。左はBots、右はMac全体">-- / --%</div>
   <div class="seg" id="presets" role="tablist" aria-label="レイアウト"></div>
   <div id="strip" aria-label="ペイン一覧"></div>
   <div id="others-sep"></div><div id="others" aria-label="他のウィンドウのペイン"></div>
-  <div id="queue-sum"></div>
-  <div id="unread-sum" title="次の未読ペインへ (⌘J)"></div>
-  <button id="save-warn"></button>
-  <button class="icon-btn" id="ws-btn" title="レイアウト保存・切替（保存したペイン構成をワンクリックで開く）">⧉</button>
-  <button class="icon-btn" id="sync-cols" title="上下の幅を同期: ON"></button>
-  <button class="icon-btn" id="reload-all" title="全ペインを再読み込み (⌘⇧R)">↻</button>
-  <button class="icon-btn" id="reopen" title="閉じたペインを開き直す (⌘⇧T)">↩</button>
-  <button class="icon-btn" id="add" title="新しいペイン (⌘T)">＋</button>
-  <button class="pill" id="cmdk" title="コマンドパレット (⌘K)"><span>検索・コマンド</span><kbd>⌘K</kbd></button>
+  <div id="queue-sum" data-tip="対応キュー" data-tip-desc="対応が必要なペインの一覧を開きます。" aria-label="対応キューを開く"></div>
+  <div id="unread-sum" data-tip="次の未読へ" data-tip-desc="次の未読ペインへ移動します。" aria-label="次の未読ペインへ移動"></div>
+  <button id="save-warn" data-tip="保存のお知らせ" data-tip-desc="保存や復旧の方法を確認します。" aria-label="保存のお知らせ"></button>
+  <button class="icon-btn" id="ws-btn" data-tip="レイアウト" data-tip-desc="ペインの配置を保存・切り替えます。" aria-label="レイアウトを保存・切り替え">⧉</button>
+  <button class="icon-btn" id="sync-cols" data-tip="上下の幅を同期" data-tip-desc="上下のペインの幅をそろえます。" aria-label="上下の幅を同期"></button>
+  <button class="icon-btn" id="reload-all" data-tip="すべて再読み込み" data-tip-desc="すべてのペインを読み込み直します。" aria-label="すべてのペインを再読み込み">↻</button>
+  <button class="icon-btn" id="reopen" data-tip="閉じたペインを開く" data-tip-desc="最後に閉じたペインを開き直します。" aria-label="閉じたペインを開き直す">↩</button>
+  <button class="icon-btn" id="add" data-tip="新しいペイン" data-tip-desc="新しいペインを追加します。" aria-label="新しいペインを追加">＋</button>
+  <button class="pill" id="cmdk" data-tip="検索・コマンド" data-tip-desc="ペインや操作を検索します。" aria-label="検索・コマンドを開く"><span>検索・コマンド</span><kbd>⌘K</kbd></button>
   <button class="pill usage" id="u-codex" data-kind="codex" hidden><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="u-claude" data-kind="claude" hidden><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="u-kimi" data-kind="kimi" hidden><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="u-antigravity" data-kind="antigravity" hidden><span class="uico"></span><span class="uval">--</span></button>
   <button class="pill usage" id="usage" data-kind="grok" hidden><span class="uico"></span><span class="uval">--</span></button>
-  <button class="icon-btn" id="approve-btn" title="Tibo"><svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.8 15 4v4.6c0 3.6-2.5 6.2-6 7.6-3.5-1.4-6-4-6-7.6V4z"/><path d="M6 9.2l2.1 2.1L12.2 7"/></svg></button>
+  <button class="icon-btn" id="approve-btn" data-tip="Tibo" data-tip-desc="Tiboを別の画面で開きます。" aria-label="Tiboを開く"><svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.8 15 4v4.6c0 3.6-2.5 6.2-6 7.6-3.5-1.4-6-4-6-7.6V4z"/><path d="M6 9.2l2.1 2.1L12.2 7"/></svg></button>
 </header>
-<nav id="favbar" aria-label="Grok Bot・お気に入り"><button id="fav-star" aria-label="Grok：Bot一覧を読み込み直す" title="Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12.3 5.1A5.3 5.3 0 1 0 10.9 12.2"/><path d="M4.6 13.6 13.6 2.6"/></svg></button><span id="gbar-note" role="status"></span><div id="favs"></div><span id="fav-hint">Grokボタンで Bot 一覧を読み込み</span></nav>
+<nav id="favbar" aria-label="Grok Bot・お気に入り"><button id="fav-star" aria-label="Grok：Bot一覧を読み込み直す" data-tip="Bot一覧を更新" data-tip-desc="GrokのBot一覧を読み込み直します。"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12.3 5.1A5.3 5.3 0 1 0 10.9 12.2"/><path d="M4.6 13.6 13.6 2.6"/></svg></button><span id="gbar-note" role="status"></span><div id="favs"></div><span id="fav-hint">Grokボタンで Bot 一覧を読み込み</span></nav>
 <div id="panes"></div>
 <div id="drop-hint"></div>
 <div id="splits"></div>
-<script src="gbar-long-press.js"></script><script src="cpu-meter.js"></script><script src="local-icons.js"></script><script src="gbar-presence.js"></script><script src="gbar-mode.js"></script><script src="gbar-pages.js"></script><script src="renderer.js"></script></body></html>
+<script src="tooltip-dom.js"></script><script src="gbar-long-press.js"></script><script src="cpu-meter.js"></script><script src="local-icons.js"></script><script src="gbar-presence.js"></script><script src="gbar-mode.js"></script><script src="gbar-pages.js"></script><script src="renderer.js"></script><script src="tooltip-card.js"></script><script src="tooltip-controller.js"></script></body></html>

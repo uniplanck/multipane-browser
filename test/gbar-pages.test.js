@@ -80,7 +80,7 @@ const a = ren.indexOf('let GP = null, gAnchor = null;'), z = ren.indexOf('functi
 t('renderer: the paging block is there (GP / gNext / gMeasure / gLayout / gShow / ResizeObserver) before renderFavs', a > 0 && z > a);
 { const box = { roCb: null };
   function El(w, cls = '', ml = 0, mr = 0) {
-    return { w, className: cls, ml, mr, parent: null, id: '', title: '', textContent: '', onclick: null,
+    return { w, className: cls, ml, mr, parent: null, id: '', dataset: {}, textContent: '', onclick: null, setAttribute() {},
       getBoundingClientRect() { return { width: this.parent && this.parent.shown !== false ? this.w : 0 }; },
       remove() { if (this.parent) { const c = this.parent.children; c.splice(c.indexOf(this), 1); this.parent = null; } } };
   }
@@ -91,7 +91,7 @@ t('renderer: the paging block is there (GP / gNext / gMeasure / gLayout / gShow 
   const ctx = vm.createContext({ favs, GbarPages: GB, document: { createElement: () => El(52) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: e.ml + 'px', marginRight: e.mr + 'px' }),
     ResizeObserver: class { constructor(cb) { box.roCb = cb; } observe(x) { box.observed = x; } } });
-  vm.runInContext(ren.slice(a, z), ctx);
+  vm.runInContext(ren.slice(ren.indexOf('function setTip('), ren.indexOf('function tipAttrs(')) + ren.slice(a, z), ctx);
   const run = s => vm.runInContext(s, ctx);
   const gNext = run('gNext'), pin = El(120, 'gpin');
   // like renderFavs: the pins in the bar, then the paged items (2 favorites, 3 sections; the last has no name)
@@ -106,14 +106,14 @@ t('renderer: the paging block is there (GP / gNext / gMeasure / gLayout / gShow 
   const page = () => run('GP.page'), npages = () => run('GP.pages.length');
   build(26);
   t('vm: the bar is watched for resizes', box.observed === favs && typeof box.roCb === 'function');
-  t('vm: overflowing list -> pages; the pin stays first, 次へ last; the page fits the bar', npages() === 3 && shown()[0] === 'gpin' && shown().at(-1) === 'NEXT' && width() <= favs.w && gNext.title === 'ページ 1/3：クリックで次のページへ');
+  t('vm: overflowing list -> pages; the pin stays first, 次へ last; the page fits the bar', npages() === 3 && shown()[0] === 'gpin' && shown().at(-1) === 'NEXT' && width() <= favs.w && gNext.dataset.tipDetail === 'ページ 1/3' && gNext.dataset.tipDesc === '次のBot一覧を表示します。');
   t('vm: page 1 = favorites, separator, heading, Bots', J(shown().slice(1, 6)) === J(['item0', 'item1', 'sep', 'h0', 'item2']));
   const firsts = [];
   for (let i = 0; i < 3; i++) { firsts.push(shown()[1]); gNext.onclick(); }
   t('vm: 次へ goes 1 -> 2 -> 3 -> back to 1; every page fits and starts (after the pin) with its section (separator + heading)', page() === 0 && J(firsts.slice(1)) === J(['sep', 'sep']) && (() => {
     const hs = []; for (let i = 0; i < 3; i++) { if (width() > favs.w) return false; hs.push(shown()[2]); gNext.onclick(); } return hs[0] === 'item1' && /^h\d$/.test(hs[1]) && /^h\d$/.test(hs[2]); })());
   gNext.onclick(); gNext.onclick();
-  t('vm: the title shows the page (3/3 on the last: back to the first)', page() === 2 && gNext.title === 'ページ 3/3：クリックで先頭のページへ戻る');
+  t('vm: the tooltip shows the page (3/3 on the last: back to the first)', page() === 2 && gNext.dataset.tipDetail === 'ページ 3/3' && gNext.dataset.tipDesc === 'Bot一覧の先頭に戻ります。');
   const anchor = run('gAnchor'), anchorEl = ctx.B.els[ctx.B.keys.indexOf(anchor)];
   favs.w = 1300; box.roCb();
   t('vm: a resize redoes the pages and stays on the page holding the item 次へ went to', run('GP.w') === 1300 && favs.children.includes(anchorEl) && width() <= favs.w);

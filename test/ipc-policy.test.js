@@ -39,6 +39,8 @@ const SAMPLE = {
   layout: ['chrome', ['2x2']], 'split-start': ['chrome', ['c', 1, undefined]], 'split-reset': ['chrome', ['r', undefined]], 'sync-cols': ['chrome', [true]],
   'fav-open': ['chrome', [1, 'here']], 'fav-menu': ['chrome', [2]], 'fav-move': ['chrome', [2, 1]], 'fav-add': ['chrome', ['https://example.com/', '']],
   'focus-other': ['chrome', [2, 7]], 'usage-pop-show': ['chrome', [{ right: 812.5, bottom: 36, kind: 'grok', sel: '' }]], 'usage-win-menu': ['chrome', ['codex', '']],
+  'tip-show': ['chrome', [{ tip: { name: '戻る', description: '前のページへ戻ります。', key: '⌘[', detail: '', dark: true }, rect: { x: 3, y: 4, width: 20, height: 20 }, size: { width: 180, height: 60 }, preferSide: false }]],
+  'tip-prepare': ['chrome', []], 'tip-hide': ['chrome', []],
   'usage-pop-leave': ['overlay', []], 'usage-pop-keep': ['overlay', []], 'usage-pop-size': ['overlay', [242]], 'overlay-close': ['overlay', []],
   'overlay-run': ['overlay', [{ type: 'focus', id: 2 }]], 'usage:get': ['overlay', [false]], 'usage:detail': ['chrome', []], 'usage:margin': ['overlay', [5]],
   'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []], 'usage-connect': ['chrome', ['kimi']], 'usage-open': ['overlay', ['antigravity']],

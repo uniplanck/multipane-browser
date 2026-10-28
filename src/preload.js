@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('mpb', {
   onMem: cb => listen('mem', (_, data) => cb(data)), onOthers: cb => listen('others', (_, l) => cb(l)),
   onWsSaved: cb => listen('ws-saved', (_, n) => cb(n)), onApproveRect: cb => listen('approve-rect', (_, r) => cb(r)),
   usagePopShow: r => send('usage-pop-show', r), usagePopKeep: () => send('usage-pop-keep'), usagePopLeave: () => send('usage-pop-leave'), usagePopSize: h => send('usage-pop-size', h),
+  tipShow: p => send('tip-show', p), tipPrepare: () => send('tip-prepare'), tipHide: () => send('tip-hide'), onTipDismiss: cb => listen('tip-dismiss', () => cb()),
   usageMargin: v => ipcRenderer.invoke('usage:margin', v),
   onUsagePop: cb => listen('usage-pop', (_, d) => cb(d)), onUsageUpdated: cb => listen('usage-updated', () => cb()),
   usageWinMenu: (kind, sel) => send('usage-win-menu', kind, sel), onUsageWin: cb => listen('usage-win-chosen', (_, k, id) => cb(k, id)),

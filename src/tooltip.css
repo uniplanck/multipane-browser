@@ -1,0 +1,19 @@
+.tip-page{margin:0;background:transparent;pointer-events:none;overflow:hidden}
+.tip-wrap,.tip-wrap *{box-sizing:border-box}
+.tip-wrap{width:max-content;max-width:min(376px,100vw);padding:8px;pointer-events:none}
+.tip-card{max-width:100%;padding:9px 11px;border:1px solid rgba(255,255,255,.13);border-radius:9px;
+  background:#303034;color:#f3f3f5;box-shadow:0 3px 12px rgba(0,0,0,.34),0 1px 3px rgba(0,0,0,.24);
+  font:12px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Hiragino Sans","Noto Sans JP","Segoe UI",sans-serif;pointer-events:none}
+.tip-card.light{background:#fff;color:#1d1d1f;border-color:rgba(0,0,0,.12);box-shadow:0 3px 12px rgba(0,0,0,.16),0 1px 3px rgba(0,0,0,.08)}
+.tip-heading{display:flex;align-items:center;gap:12px;min-width:0}
+.tip-name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tip-key{flex:none;margin-left:auto;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#dadade;font:inherit;font-size:11px}
+.tip-card.light .tip-key{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:#55555b}
+.tip-description{margin-top:3px;color:#c6c6cd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tip-card.light .tip-description,.tip-card.light .tip-detail{color:#66666d}
+.tip-detail{margin-top:3px;color:#aaaab2;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.tip-card [hidden]{display:none}
+.tip-in{animation:tip-fade .12s ease-out}
+@keyframes tip-fade{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){.tip-in{animation:none}}
+#tip-measure{position:fixed;left:-2000px;top:0;visibility:hidden;pointer-events:none}

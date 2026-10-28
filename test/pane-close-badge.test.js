@@ -9,7 +9,7 @@ const mkStart = renderer.indexOf('function mk(id) {'), mkEnd = renderer.indexOf(
 const mk = renderer.slice(mkStart, mkEnd);
 const head = (mk.match(/<div class="head" draggable="true">([\s\S]*?)\n  <\/div>/) || [])[1] || '';
 const tools = (head.match(/<div class="tools">([\s\S]*?)<\/div>/) || [])[1] || '';
-const badgeMarkup = '<button type="button" class="badge" draggable="false" aria-label="閉じる"></button>';
+const badgeMarkup = '<button type="button" class="badge" draggable="false" aria-label="閉じる" data-tip="閉じる" data-tip-desc="このペインを閉じます。"></button>';
 t('renderer is loaded by the existing HTML without a new module', /<script src="renderer\.js"><\/script>/.test(html));
 t('the accessible, non-draggable badge is the last header item after tools', head.includes(badgeMarkup)
   && head.indexOf(badgeMarkup) > head.indexOf('<div class="tools">') && head.trim().endsWith(badgeMarkup));
@@ -41,7 +41,7 @@ t('quiet, wait, work, done, unopened and stale styles are retained', ['.badge.qu
 
 function element() {
   const classes = new Set(); let content = '';
-  return { dataset: {}, hovered: false, focused: false, style: {},
+  return { dataset: {}, hovered: false, focused: false, style: {}, setAttribute() {},
     get textContent() { return content; }, set textContent(v) { content = String(v); },
     classList: { add: (...xs) => xs.forEach(x => classes.add(x)), remove: (...xs) => xs.forEach(x => classes.delete(x)),
       contains: x => classes.has(x), toggle: (x, on) => on ? classes.add(x) : classes.delete(x) },
@@ -57,13 +57,14 @@ function setup(mod = '⌘') {
   header.closest = () => null;
   pane.querySelector = s => nodes[s]; pane.querySelectorAll = () => []; pane.addEventListener = () => {};
   const document = { createElement: () => pane, body, querySelectorAll: () => [] };
-  const context = vm.createContext({ document, MOD: mod, root: { appendChild: () => {} }, els: new Map(),
+  const context = vm.createContext({ document, MOD: mod, root: { appendChild: () => {} }, els: new Map(), esc: String,
     mpb: { close: id => calls.close.push(id), focusPane: id => calls.focus.push(id), maximize: id => calls.max.push(id) },
     requestAnimationFrame: () => {}, dockStart: id => calls.dock.push(['start', id]), dockStop: () => calls.dock.push(['stop']) });
   const titleFn = renderer.slice(renderer.indexOf('function badgeTitle('), renderer.indexOf('\n', renderer.indexOf('function badgeTitle(')));
   const updateStart = renderer.indexOf("    const b = d.querySelector('.badge');"), updateEnd = renderer.indexOf("    d.querySelector('[data-a=back]')", updateStart);
   const update = renderer.slice(updateStart, updateEnd);
-  vm.runInContext(titleFn + '\n' + mk + '\nfunction updateBadge(d, p) {\n' + update + '\n}', context);
+  const tipHelpers = renderer.slice(renderer.indexOf('function setTip('), renderer.indexOf("for (const [id, key]"));
+  vm.runInContext(tipHelpers + titleFn + '\n' + mk + '\nfunction updateBadge(d, p) {\n' + update + '\n}', context);
   context.mk(42);
   return { calls, nodes, pane, body, context, badge, header, update: p => context.updateBadge(pane, { unread: 0, glow: false, isGrok: false, ...p }) };
 }
@@ -74,20 +75,20 @@ function event(target, calls) {
 for (const mod of ['⌘', 'Ctrl+']) {
   const { badge, update } = setup(mod);
   update({});
-  t(mod + ' zero count: blank slot keeps the existing update tooltip', badge.textContent === '' && badge.title === '更新回数');
+  t(mod + ' zero count: blank slot keeps the existing update tooltip', badge.textContent === '' && badge.dataset.tip === '更新回数' && badge.dataset.tipDetail === '更新回数: 0');
   update({ unread: 8, isGrok: true, glow: true, waiting: true });
   t(mod + ' count and marker: unread value, original tooltip and color class', badge.textContent === '8'
-    && badge.title === '自分の最後の送信以降に届いたBotのメッセージ数' && badge.classList.contains('wait') && !badge.classList.contains('quiet'));
+    && badge.dataset.tip === '自分の最後の送信以降に届いたBotのメッセージ数' && badge.dataset.tipDetail.endsWith(': 8') && badge.classList.contains('wait') && !badge.classList.contains('quiet'));
   badge.hovered = true; badge.onmouseenter();
   update({ unread: 100, isGrok: false, working: true });
-  t(mod + ' hover survives a state update: capped count and close tooltip', badge.textContent === '99+' && badge.title === `閉じる (${mod}W)`
+  t(mod + ' hover survives a state update: capped count and close tooltip', badge.textContent === '99+' && badge.dataset.tip === '閉じる' && badge.dataset.tipKey === `${mod}W` && badge.dataset.tipDetail === '更新回数: 100'
     && badge.classList.contains('work') && badge.classList.contains('quiet') && !badge.classList.contains('wait'));
   badge.hovered = false; badge.onmouseleave();
-  t(mod + ' leaving restores the latest original tooltip', badge.title === '更新回数');
+  t(mod + ' leaving restores the latest original tooltip', badge.dataset.tip === '更新回数');
   badge.focused = true; badge.onfocus();
-  t(mod + ' keyboard focus uses the close tooltip', badge.title === `閉じる (${mod}W)`);
+  t(mod + ' keyboard focus uses the close tooltip', badge.dataset.tip === '閉じる' && badge.dataset.tipKey === `${mod}W`);
   badge.focused = false; badge.onblur();
-  t(mod + ' blur restores the original tooltip', badge.title === '更新回数');
+  t(mod + ' blur restores the original tooltip', badge.dataset.tip === '更新回数');
 }
 {
   const { badge, header, body, calls, update } = setup();
@@ -98,7 +99,7 @@ for (const mod of ['⌘', 'Ctrl+']) {
   t('empty badge click closes exactly its pane and does not bubble', e.stopped && JSON.stringify(calls.close) === '[42]' && !calls.focus.length);
   update({ unread: 8 }); badge.hovered = true; badge.onmouseenter();
   e = event(badge, calls); badge.onclick(e);
-  t('count badge click uses the same close path', e.stopped && badge.title === '閉じる (⌘W)' && JSON.stringify(calls.close) === '[42,42]');
+  t('count badge click uses the same close path', e.stopped && badge.dataset.tip === '閉じる' && badge.dataset.tipKey === '⌘W' && JSON.stringify(calls.close) === '[42,42]');
   e = event(badge, calls); badge.ondblclick(e); if (!e.stopped) header.ondblclick(e);
   t('badge double-click cannot maximize the pane', e.stopped && !calls.max.length);
   e = event(badge, calls); header.ondblclick(e);

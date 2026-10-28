@@ -4,6 +4,17 @@ const mac = mpb.platform === 'darwin';
 document.body.classList.add(mac ? 'mac' : 'other');
 const MOD = mac ? '⌘' : 'Ctrl+';
 if (!mac) $('#cmdk kbd').textContent = 'Ctrl+K';
+function setTip(el, name, description, key = '', detail = '') {
+  el.dataset.tip = String(name || ''); el.dataset.tipDesc = String(description || '');
+  el.dataset.tipKey = String(key || ''); el.dataset.tipDetail = String(detail || '');
+  el.setAttribute('aria-label', [name, description, detail].filter(Boolean).join('。'));
+}
+function tipAttrs(name, description, key = '', detail = '') {
+  return `data-tip="${esc(name)}" data-tip-desc="${esc(description)}" data-tip-key="${esc(key)}" data-tip-detail="${esc(detail)}" aria-label="${esc([name, description, detail].filter(Boolean).join('。'))}"`;
+}
+for (const [id, key] of [['unread-sum', 'J'], ['reload-all', '⇧R'], ['reopen', '⇧T'], ['add', 'T'], ['cmdk', 'K']]) {
+  document.getElementById(id).dataset.tipKey = MOD + key;
+}
 const PK = ['2x1', '3x1', '4x1', '2x2', '3x2', '4x2', '3x3', '5x2'];
 function layoutIcon(k) {
   const [c, r] = k.split('x').map(Number), W = 16, H = 12, g = 1.5;
@@ -15,7 +26,7 @@ function layoutIcon(k) {
 PK.forEach((k, i) => {
   const b = document.createElement('button');
   b.innerHTML = layoutIcon(k) + `<span>${k}</span>`; b.dataset.k = k;
-  b.title = `${k.replace('x', '×')}（${MOD}${i + 1}）`;
+  setTip(b, `レイアウト ${k.replace('x', '×')}`, 'ペインの並べ方を切り替えます。', `${MOD}${i + 1}`);
   b.onclick = () => mpb.layout(k); $('#presets').appendChild(b);
 });
 $('#add').onclick = () => mpb.add();
@@ -35,6 +46,8 @@ mpb.onMem(data => {
   const mem = fmtMem(data.bytes), cpu = CpuMeter.formatCpu(data.appCpu, data.macCpu);
   if (memEl.textContent !== mem) memEl.textContent = mem;
   if (cpuEl.textContent !== cpu) cpuEl.textContent = cpu;
+  memEl.dataset.tipDetail = `現在: ${mem}`;
+  cpuEl.dataset.tipDetail = `現在: ${cpu}。Botsは100%を超えることがあります。取得できない値は -- です。`;
 });
 // notification chips for panes in other windows (hidden when there is only one window)
 const othersEl = $('#others'), othersSep = $('#others-sep');
@@ -42,17 +55,17 @@ mpb.onOthers(list => {
   const has = Array.isArray(list) && list.length > 0;
   othersEl.classList.toggle('show', has); othersSep.classList.toggle('show', has);
   if (!has) { othersEl.innerHTML = ''; return; }
-  othersEl.innerHTML = list.map(w => `<span class="owin" title="ウィンドウ${w.n}">${w.n}</span>` + w.panes.map(p => {
+  reconcileTooltipMarkup(othersEl, list.map(w => `<span class="owin" data-tip-window="${w.wid}" ${tipAttrs(`ウィンドウ ${w.n}`, '別のウィンドウにあるペインです。')}>${w.n}</span>` + w.panes.map(p => {
     const st = p.unopened ? 'unopened' : p.waiting ? 'waiting' : p.working ? 'working' : p.done ? 'done' : p.glow ? 'glow' : '';
     const ch = (Array.from(String(p.name || '•').trim())[0] || '•').toUpperCase();
     const lab = p.unopened ? '未開封の新着' : p.waiting ? '待機中' : p.working ? '作業中' : p.done ? '終了' : '新着';
-    return `<button class="ochip ${st}" data-w="${w.wid}" data-p="${p.id}" title="ウィンドウ${w.n}: ${esc(p.name)}（${lab}${p.unread ? ' ' + p.unread : ''}）クリックで移動">` +
+    return `<button class="ochip ${st}" data-w="${w.wid}" data-p="${p.id}" ${tipAttrs(p.name || 'ペイン', '別のウィンドウのペインへ移動します。', '', `ウィンドウ ${w.n}・${lab}${p.unread ? ` ${p.unread}件` : ''}`)}>` +
       `<span class="oc">${p.unread ? (p.unread > 99 ? '99' : p.unread) : esc(ch)}</span>${p.waiting ? '<span class="od"></span>' : p.working ? '<span class="od work"></span>' : p.done ? '<span class="od done"></span>' : ''}</button>`;
-  }).join('')).join('');
+  }).join('')).join(''));
 });
 othersEl.onclick = e => { const b = e.target.closest('.ochip'); if (b) mpb.focusOther(Number(b.dataset.w), Number(b.dataset.p)); };
 // "saved layout" feedback: the ⧉ button shows a tick for a moment
-mpb.onWsSaved(n => { const b = $('#ws-btn'); b.textContent = '✓'; b.classList.add('saved'); b.title = `「${n}」を保存しました`; setTimeout(() => { b.textContent = '⧉'; b.classList.remove('saved'); b.title = 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; }, 1400); });
+mpb.onWsSaved(n => { const b = $('#ws-btn'); b.textContent = '✓'; b.classList.add('saved'); setTip(b, 'レイアウトを保存', 'ペインの配置を保存・切り替えます。', '', `「${n}」を保存しました`); setTimeout(() => { b.textContent = '⧉'; b.classList.remove('saved'); setTip(b, 'レイアウト', 'ペインの配置を保存・切り替えます。', '', S?.activeWs ? `現在: ${S.activeWs}` : ''); }, 1400); });
 let S = null;
 // ---- short labels: max 6 display columns (half-width 1, full-width 2), hard cut, no ellipsis ----
 const WIDE = /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/;
@@ -63,7 +76,7 @@ function shortLabel(s, max = 6) {
   return out;
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-function badgeTitle(b) { b.title = b.matches(':hover, :focus') ? `閉じる (${MOD}W)` : (b.dataset.countTitle || ''); }
+function badgeTitle(b) { const count = `${b.dataset.countTitle || '更新回数'}: ${b.dataset.count || '0'}`; if (b.matches(':hover, :focus')) setTip(b, '閉じる', 'このペインを閉じます。', `${MOD}W`, count); else setTip(b, b.dataset.countTitle || '更新回数', 'ペインの更新状況を表示します。', '', count); b.setAttribute('aria-label', '閉じる'); }
 
 function mk(id) {
   const d = document.createElement('div'); d.className = 'pane entering';
@@ -73,18 +86,18 @@ function mk(id) {
     <div class="titlebox"><span class="title"></span><input class="url" spellcheck="false" autocomplete="off"></div>
     <span class="meta"></span>
     <div class="tools">
-      <button data-a="back" title="戻る (${MOD}[)">‹</button>
-      <button data-a="forward" title="進む (${MOD}])">›</button>
-      <button data-a="reload" title="再読み込み (${MOD}R)">↻</button>
-      <button data-a="maximize" title="最大化 / 元に戻す (${MOD}\\・ダブルクリック)">⤢</button>
-      <button data-a="paneMenu" title="名前・色・ミュート・自動リロード・ズームなど">⋯</button>
-      <button data-a="sleepToggle" class="slp" title="待機中・終了にスリープ: ON">💤</button>
+      <button data-a="back" ${tipAttrs('戻る', '前に見たページへ戻ります。', `${MOD}[`)}>‹</button>
+      <button data-a="forward" ${tipAttrs('進む', '戻る前のページへ進みます。', `${MOD}]`)}>›</button>
+      <button data-a="reload" ${tipAttrs('再読み込み', 'このページを読み込み直します。', `${MOD}R`)}>↻</button>
+      <button data-a="maximize" ${tipAttrs('最大化・元に戻す', 'このペインの大きさを切り替えます。', `${MOD}\\`, 'ヘッダーのダブルクリックでも切り替えられます。')}>⤢</button>
+      <button data-a="paneMenu" ${tipAttrs('ペインの設定', '名前や色、通知などを設定します。')}>⋯</button>
+      <button data-a="sleepToggle" class="slp" ${tipAttrs('自動スリープ', '待機中や終了後のスリープを切り替えます。', '', 'ON')}>💤</button>
     </div>
-    <button type="button" class="badge" draggable="false" aria-label="閉じる"></button>
+    <button type="button" class="badge" draggable="false" aria-label="閉じる" data-tip="閉じる" data-tip-desc="このペインを閉じます。"></button>
   </div>
-  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><div class="sleepr"></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="このペインの読み込み待ちを取り消す（スリープのまま）">取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" title="このペインを開いてログイン状態を確認します">ログインを確認</button><button class="pbx pbr" title="スリープ中の新着確認を再開します（1枚ずつ順番に確認）">確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
-  <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" title="このペインの読み込み待ちを取り消す">取消</button><small>同時に読み込むのは通常4枚まで。順番が来ると自動で読み込みます</small></div>
-  <div class="goneph"><span class="gp1">⚠ ページが停止しました</span><button class="pbx gpr" title="このペインのページを読み込み直します">再読み込み</button><span class="gp2">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" title="この読み込み待ちを取り消す">取消</button></span><span class="gp3">再読み込み中…</span><small>このペインのページの処理が止まりました（ほかのペインはそのままです）。自動では再読み込みしません。入力途中の文字・添付は戻らないことがあります</small></div>
+  <div class="sleepph"><div class="sleepid"><div class="sn"></div><div class="sg"></div></div><div class="sleepr"></div><span class="sp1">💤 スリープ中 — クリックで復帰</span><span class="sp2">✉ 未開封の新着メッセージがあります — クリックで開く</span><span class="sp3">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" ${tipAttrs('読み込みを取消', '読み込み待ちを取り消します。', '', 'スリープは続きます。')}>取消</button></span><blockquote class="sleepq"></blockquote><div class="chk"><span class="chkt"></span><button class="pbx pbl" ${tipAttrs('ログインを確認', 'ペインを開いてログイン状態を確認します。')}>ログインを確認</button><button class="pbx pbr" ${tipAttrs('確認を再開', 'スリープ中の新着確認を再開します。')}>確認を再開</button></div><small>終了（1分後）・待機中（30分後）に休止（メモリ節約）。入力途中の文字やリアルタイム更新は復帰まで失われます</small></div>
+  <div class="loadph"><span class="lp1">⏳ 読み込み待ち<b class="lpn"></b></span><span class="lp2">読み込みを取り消しました — クリックで読み込む</span><button class="lqx" ${tipAttrs('読み込みを取消', 'このペインの読み込み待ちを取り消します。')}>取消</button><small>同時に読み込むのは通常4枚まで。順番が来ると自動で読み込みます</small></div>
+  <div class="goneph"><span class="gp1">⚠ ページが停止しました</span><button class="pbx gpr" ${tipAttrs('再読み込み', 'このページを読み込み直します。')}>再読み込み</button><span class="gp2">⏳ 読み込み待ち<b class="lpn"></b><button class="lqx" ${tipAttrs('読み込みを取消', 'このペインの読み込み待ちを取り消します。')}>取消</button></span><span class="gp3">再読み込み中…</span><small>このペインのページの処理が止まりました（ほかのペインはそのままです）。自動では再読み込みしません。入力途中の文字・添付は戻らないことがあります</small></div>
   <img class="dockshot" alt="" draggable="false">`;
   const openSleeping = () => { mpb.focusPane(id); mpb.wakePane(id); };   // only this explicit pane click selects; wake-pane itself preserves focus
   d.querySelector('.sleepph').onclick = openSleeping;
@@ -128,7 +141,7 @@ function mk(id) {
 function startEdit(d) { const inp = d.querySelector('.url'); inp.focus(); }
 
 const copied = new Map();
-function flashIcon(c) { const ic = c.querySelector('.cicon'); if (ic) { ic.textContent = '✓'; ic.classList.add('copied'); ic.title = 'リンクをコピーしました'; } }
+function flashIcon(c) { const ic = c.querySelector('.cicon'); if (ic) { ic.textContent = '✓'; ic.classList.add('copied'); setTip(ic, 'コピーしました', 'このペインのリンクをコピーしました。'); } }
 function chip(p) {
   const c = document.createElement('button');
   c.className = 'chip'; c.dataset.id = p.id;
@@ -162,7 +175,7 @@ function syncBtn(s) {
   const on = s.syncCols !== false;
   syncEl.innerHTML = on ? SYNC_ON : SYNC_OFF;
   syncEl.classList.toggle('on', on && s.canSync); syncEl.classList.toggle('off', !on); syncEl.classList.toggle('na', !s.canSync);
-  syncEl.title = s.canSync ? `上下の幅を同期: ${on ? 'ON' : 'OFF'}（クリックで切替／長押しで全行を均等幅に）` : '上下の幅を同期: 2段以上のレイアウトで使えます';
+  setTip(syncEl, '上下の幅を同期', '上下のペインの幅をそろえます。', '', s.canSync ? `${on ? 'ON' : 'OFF'}・長押しで均等幅に戻します。` : '2段以上のレイアウトで使えます。');
 }
 syncEl.onmousedown = () => { syncHeld = false; clearTimeout(syncHold); if (!S || !S.canSync) return; syncHold = setTimeout(() => { syncHeld = true; mpb.syncReset(); syncEl.classList.add('pulse'); setTimeout(() => syncEl.classList.remove('pulse'), 700); }, 600); };
 syncEl.onmouseup = syncEl.onmouseleave = () => clearTimeout(syncHold);
@@ -172,25 +185,25 @@ const onS = s => {
   renderFavs(s.favorites || []);
   document.body.classList.toggle('light', !s.dark);
   document.body.classList.toggle('has-max', s.maximizedId != null);
-  $('#presets').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.k === (s.effLayout || s.layout)));
+  $('#presets').querySelectorAll('button').forEach(b => { const active = b.dataset.k === (s.effLayout || s.layout); b.classList.toggle('active', active); b.dataset.tipDetail = active ? '現在のレイアウト' : ''; });
   const glowN = 0, unreadN = s.panes.filter(p => p.needsReply).length;
   const us = $('#unread-sum');
   us.innerHTML = glowN || unreadN ? `<span class="dot"></span>${glowN ? `新着 ${glowN}ペイン` : `未返信 ${unreadN}`}<kbd>${MOD}J</kbd>` : '';
+  us.dataset.tipDetail = `未返信 ${unreadN}ペイン`;
   us.classList.toggle('show', !!(glowN || unreadN));
   { const q = s.queue || [], qs = $('#queue-sum'), n = {};   // (#01) 対応 n: main's list (要返信 → 未確認の新着 → 観測異常 → 待機); the dot = its first kind
     q.forEach(it => { n[it.kja] = (n[it.kja] || 0) + 1; });
     qs.innerHTML = q.length ? `<span class="dot"></span>対応 ${q.length}` : '';
     qs.dataset.k = q.length ? q[0].kind : '';
-    qs.title = q.length ? `対応キューを開く（${Object.entries(n).map(([k, c]) => `${k} ${c}`).join('・')}）` : '';
+    qs.dataset.tipDetail = q.length ? `${q.length}件・${Object.entries(n).map(([k, c]) => `${k} ${c}`).join('・')}` : '';
     qs.classList.toggle('show', q.length > 0); }
   $('#add').disabled = s.panes.length >= s.max;
   $('#reopen').disabled = !s.canReopen; $('#reopen').style.opacity = s.canReopen ? '' : '.4';
   { const w = $('#save-warn'), st = s.store || {}, rec = !!st.status && st.status !== 'ready';
     w.classList.toggle('show', rec || !!st.saveError);
     w.textContent = rec ? '⚠ 構成を復旧' : '⚠ 保存できません';
-    w.title = rec ? '構成ファイル（panes.json）を読み込めないため、自動保存を止めています（元のファイルは変更していません）。クリックで復旧方法を選ぶ'
-      : `構成を保存できませんでした（${st.saveError}）。表示中の状態はそのままです。前回保存した内容は残っています。クリックで再試行`; }
-  { const wb = $('#ws-btn'); if (!wb.classList.contains('saved')) wb.title = s.activeWs ? `レイアウト保存・切替（現在: 「${s.activeWs}」— クリックで上書き保存／新規保存／切替）` : 'レイアウト保存・切替（保存したペイン構成をワンクリックで開く）'; wb.classList.toggle('active-ws', !!s.activeWs); }
+    setTip(w, rec ? '構成を復旧' : '保存できません', rec ? '保存した構成の復旧方法を選びます。' : '構成の保存を再試行します。', '', rec ? '読み込めないため自動保存を停止中です。' : `前回の保存は残っています。${st.saveError || ''}`); }
+  { const wb = $('#ws-btn'); if (!wb.classList.contains('saved')) setTip(wb, 'レイアウト', 'ペインの配置を保存・切り替えます。', '', s.activeWs ? `現在: ${s.activeWs}` : ''); wb.classList.toggle('active-ws', !!s.activeWs); }
 
   // strip
   const ids = s.panes.map(p => p.id);
@@ -209,14 +222,14 @@ const onS = s => {
     const lastOnly = p.obs === 'last' && !!(p.waiting || p.working || p.done), lt = lastOnly ? '・最終確認値（現在は未確認）' : '';   // marker not confirmed for the page as it is now
     c.classList.toggle('stale', lastOnly);
     c.classList.toggle('colored', !!color);
-    c.title = `${p.name || p.title}（ダブルクリックで名前変更・右クリックでメニュー）\n${p.url || '新しいペイン'}${p.muted ? '\n🔕 通知ミュート' : ''}`;
+    setTip(c, p.name || p.title || '新しいペイン', 'クリックで開き、ダブルクリックで名前を変えます。', '', `${p.url || '新しいペイン'}${p.muted ? '・通知ミュート中' : ''}`);
     const n = p.unread || 0;
     const chars = Array.from(String(p.name || p.title || '').trim());
     const first = (chars[0] || '•').toUpperCase();
     const lbl = shortLabel(chars.slice(1).join(''));
     const justCopied = (copied.get(p.id) || 0) > Date.now();
-    c.innerHTML = (justCopied ? `<span class="cicon copied" title="リンクをコピーしました">✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}${p.unopened ? ' unop' : ''}" title="クリックでこのタブのリンクをコピー">${n > 99 ? '99' : n}</span>` : `<span class="cicon" title="クリックでこのタブのリンクをコピー">${esc(first)}</span>`) +
-      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? '<span class="zz" title="スリープ中に新着あり（未開封）">💤✉</span>' : '<span class="zz" title="スリープ中">💤</span>') : '') + (p.waiting ? `<span class="wdot" title="待機中（緑）${lt}"></span>` : p.working ? `<span class="wdot work" title="作業中（赤）${lt}"></span>` : p.done ? `<span class="wdot done" title="終了（紫）${lt}"></span>` : '');
+    reconcileTooltipMarkup(c, (justCopied ? `<span class="cicon copied" ${tipAttrs('コピーしました', 'このペインのリンクをコピーしました。')}>✓</span>` : n >= 1 ? `<span class="cicon ccount${p.glow ? ' hot' : ''}${p.unopened ? ' unop' : ''}" ${tipAttrs('リンクをコピー', 'このペインのリンクをコピーします。', '', `新着 ${n}件`)}>${n > 99 ? '99' : n}</span>` : `<span class="cicon" ${tipAttrs('リンクをコピー', 'このペインのリンクをコピーします。')}>${esc(first)}</span>`) +
+      `<span class="clabel">${esc(lbl)}</span>` + (p.sleeping ? (p.unopened ? `<span class="zz" ${tipAttrs('スリープ中', 'スリープ中に新着が届きました。', '', '未開封')}>💤✉</span>` : `<span class="zz" ${tipAttrs('スリープ中', 'このペインは休止しています。')}>💤</span>`) : '') + (p.waiting ? `<span class="wdot" ${tipAttrs('待機中', 'Botが次の指示を待っています。', '', lt)}></span>` : p.working ? `<span class="wdot work" ${tipAttrs('作業中', 'Botが作業しています。', '', lt)}></span>` : p.done ? `<span class="wdot done" ${tipAttrs('終了', 'Botの作業が終了しました。', '', lt)}></span>` : ''));
   });
 
   syncBtn(s);
@@ -225,7 +238,7 @@ const onS = s => {
   (s.splitters || []).forEach(g => {
     const e = document.createElement('div'); e.className = 'splitter ' + g.axis;
     Object.assign(e.style, { left: g.x + 'px', top: g.y + 'px', width: g.w + 'px', height: g.h + 'px' });
-    e.title = 'ドラッグでサイズ変更・ダブルクリックで均等に戻す';
+    setTip(e, 'ペインの幅を調整', 'ドラッグで大きさを変えます。', '', 'ダブルクリックで均等に戻します。');
     e.onmousedown = ev => { ev.preventDefault(); document.body.classList.add('splitting', 'split-' + g.axis); mpb.splitStart(g.axis, g.i, g.row); };
     e.ondblclick = () => mpb.splitReset(g.axis, g.row);
     sh.appendChild(e);
@@ -256,30 +269,31 @@ const onS = s => {
     { const r = d.querySelector('.sleepr'); r.textContent = p.rs || ''; r.classList.toggle('on', !!p.rs); }   // (#22) restored after a restart: 前回・未再確認 (main's line)
     { const q = d.querySelector('.sleepq'); q.textContent = p.quote || ''; q.classList.toggle('on', !!p.quote); }
     { const c = d.querySelector('.chk'); c.querySelector('.chkt').textContent = p.chk || ''; c.classList.toggle('on', !!p.chk); c.classList.toggle('hold', !!(p.chk && s.chkHold)); }   // (#33) main's line: last success / next / failures / stopped
-    { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); sb.title = `待機中・終了にスリープ: ${p.sleepOn ? 'ON' : 'OFF'}（クリックで切替）${s.sleepGlobal ? '' : '\n※メニューの自動スリープが全体でOFFです'}`; }
+    { const sb = d.querySelector('.slp'); sb.classList.toggle('on', p.sleepOn); setTip(sb, '自動スリープ', '待機中や終了後のスリープを切り替えます。', '', `${p.sleepOn ? 'ON' : 'OFF'}${s.sleepGlobal ? '' : '・全体設定はOFFです。'}`); }
     const color = s.colors[p.color];
     d.style.setProperty('--pc', color || 'transparent');
     d.classList.toggle('colored', !!color);
     d.querySelector('.fav').innerHTML = favHtml(p);
     d.querySelector('.title').innerHTML = p.name ? `<b>${esc(p.name)}</b><span class="sub">${esc(p.title)}</span>` : esc(p.title);
-    d.querySelector('.title').title = p.url ? `${p.url}\nクリックでURLを編集 (${MOD}L)` : '';
+    setTip(d.querySelector('.title'), 'URLを編集', 'クリックしてURLや検索語を入力します。', `${MOD}L`, p.url || '新しいペイン');
     const inp = d.querySelector('.url'); if (document.activeElement !== inp) inp.value = p.url;
     inp.placeholder = 'URL・検索語を入力（Grok BotのURLを貼り付けてもOK）';
     const meta = [];
-    if (p.sleeping) meta.push(p.unopened ? '<span title="スリープ中に新着メッセージ（未開封）— クリックで開く">💤✉ 未開封</span>' : '<span title="スリープ中（クリックで復帰）">💤</span>');
-    if (lqWait && !p.held && !p.sleeping) meta.push(`<span class="lqw" title="同時に読み込むのは2枚まで。順番が来ると自動で読み込みます（それまで表示中のページはそのまま）">⏳ 読み込み待ち${p.lqPos ? ` ${p.lqPos}番目` : ''}</span><button class="lqx" title="この読み込み待ちを取り消す">取消</button>`);
+    if (p.sleeping) meta.push(p.unopened ? `<span ${tipAttrs('未開封の新着', 'スリープ中に新着が届きました。')}>💤✉ 未開封</span>` : `<span ${tipAttrs('スリープ中', 'このペインは休止しています。')}>💤</span>`);
+    if (lqWait && !p.held && !p.sleeping) meta.push(`<span class="lqw" ${tipAttrs('読み込み待ち', '順番が来ると自動で読み込みます。', '', p.lqPos ? `${p.lqPos}番目` : '')}>⏳ 読み込み待ち${p.lqPos ? ` ${p.lqPos}番目` : ''}</span><button class="lqx" ${tipAttrs('読み込みを取消', 'このペインの読み込み待ちを取り消します。')}>取消</button>`);
     // (#32) a failed load: an automatic reload is planned (bounded) / manual only; unresponsive: noted only, never reloaded by itself
-    if (p.fail === 'retry') meta.push('<span class="rfail" title="ページを読み込めませんでした（通信エラー）。少し待って自動で読み込み直します（入力中の内容があるときは読み込み直しません・10分に2回まで）">⚠ 読込失敗・再試行待ち</span>');
-    else if (p.fail === 'manual') meta.push('<span class="rfail" title="ページを読み込めませんでした。自動では読み込み直しません。↻ で再読み込みできます">⚠ 読込失敗</span>');
-    if (p.hang) meta.push('<span class="rhang" title="ページが応答していません（重い処理の途中かもしれません）。自動では再読み込みしません。待つか ↻ で再読み込みできます">⏳ 応答なし</span>');
-    if (lastOnly) meta.push('<span class="lastok" title="表示中の待機中・作業中・終了は最後に確認できた状態です（再読み込み・移動・返信の生成中などで、今の状態はまだ確認できていません）。確認できるまで自動スリープしません">最終確認</span>');
-    if (p.muted) meta.push('<span title="通知ミュート中">🔕</span>');
-    if (p.reloadMinutes) meta.push(`<span title="${p.reloadMinutes}分ごとに自動リロード">↻${p.reloadMinutes}m</span>`);
-    if (p.zoomIndiv) meta.push(`<span class="zind" title="ズームは個別設定（全体ズームの影響を受けません）">🔍個別 ${Math.round(p.zoom * 100)}%</span>`);
-    else if (p.zoom && Math.abs(p.zoom - 1) > 0.01) meta.push(`<span title="全体ズーム">${Math.round(p.zoom * 100)}%</span>`);
-    d.querySelector('.meta').innerHTML = meta.join('');
+    if (p.fail === 'retry') meta.push(`<span class="rfail" ${tipAttrs('読み込み失敗', '少し待って自動で読み込み直します。', '', '入力中は再読み込みしません。')}>⚠ 読込失敗・再試行待ち</span>`);
+    else if (p.fail === 'manual') meta.push(`<span class="rfail" ${tipAttrs('読み込み失敗', '再読み込みボタンでやり直せます。', '', '自動では再読み込みしません。')}>⚠ 読込失敗</span>`);
+    if (p.hang) meta.push(`<span class="rhang" ${tipAttrs('応答なし', 'ページの応答を待っています。', '', '必要なら再読み込みできます。')}>⏳ 応答なし</span>`);
+    if (lastOnly) meta.push(`<span class="lastok" ${tipAttrs('最終確認', '表示は最後に確認できた状態です。', '', '現在の状態はまだ確認できていません。')}>最終確認</span>`);
+    if (p.muted) meta.push(`<span ${tipAttrs('通知ミュート', 'このペインの通知を止めています。')}>🔕</span>`);
+    if (p.reloadMinutes) meta.push(`<span ${tipAttrs('自動再読み込み', 'このページを定期的に読み込み直します。', '', `${p.reloadMinutes}分ごと`)}>↻${p.reloadMinutes}m</span>`);
+    if (p.zoomIndiv) meta.push(`<span class="zind" ${tipAttrs('個別ズーム', 'このペインだけの表示倍率です。', '', `${Math.round(p.zoom * 100)}%`)}>🔍個別 ${Math.round(p.zoom * 100)}%</span>`);
+    else if (p.zoom && Math.abs(p.zoom - 1) > 0.01) meta.push(`<span ${tipAttrs('全体ズーム', '全体に設定した表示倍率です。', '', `${Math.round(p.zoom * 100)}%`)}>${Math.round(p.zoom * 100)}%</span>`);
+    reconcileTooltipMarkup(d.querySelector('.meta'), meta.join(''));
     const b = d.querySelector('.badge');
     b.textContent = p.unread ? (p.unread > 99 ? '99+' : p.unread) : '';
+    b.dataset.count = String(p.unread || 0);
     b.dataset.countTitle = p.isGrok ? '自分の最後の送信以降に届いたBotのメッセージ数' : '更新回数';
     badgeTitle(b);
     b.classList.toggle('quiet', !p.glow);
@@ -287,6 +301,7 @@ const onS = s => {
     d.querySelector('[data-a=back]').disabled = !p.canBack;
     d.querySelector('[data-a=forward]').disabled = !p.canForward;
     d.querySelector('[data-a=maximize]').textContent = p.id === s.maximizedId ? '⤡' : '⤢';
+    d.querySelector('[data-a=maximize]').dataset.tipDetail = p.id === s.maximizedId ? '現在: 最大化中' : 'ヘッダーのダブルクリックでも切り替えられます。';
   }
 };
 mpb.onState(onS);
@@ -296,13 +311,14 @@ mpb.onState(onS);
 const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
 let G = null, gRev = 0, favKey = '', gMode = 'normal';
 let gItems = [];                                            // includes pins and detached pages; state changes never rebuild the bar
-function gTrack(el, item) { gItems.push({ el, id: GbarPresence.botId(item.url), title: el.title }); }
+function gTrack(el, item) { gItems.push({ el, id: GbarPresence.botId(item.url), detail: el.dataset.tipDetail }); }
 function gPresence() {
   const { openIds, focusedId } = GbarPresence.match(S ? S.panes || [] : [], S && S.focusedId);
-  gItems.forEach(({ el, id, title }) => {
+  gItems.forEach(({ el, id, detail }) => {
     const open = openIds.has(id), active = !!id && id === focusedId;
     el.classList.toggle('gopen', open); el.classList.toggle('gactive', active);
-    el.title = title + (active ? '\n今のペインで開いています' : open ? '\nペインで開いています' : '');
+    el.dataset.tipDetail = (active ? '今のペインで開いています・' : open ? 'ペインで開いています・' : '') + detail;
+    el.setAttribute('aria-label', [el.dataset.tip, el.dataset.tipDesc, el.dataset.tipDetail].filter(Boolean).join('。'));
     el.setAttribute('aria-current', active ? 'page' : 'false');
   });
 }
@@ -325,8 +341,8 @@ gbtn.onclick = (e = {}) => {
 mpb.onGbar(v => {
   G = v; gRev++; gMode = GbarMode.normMode(v.mode);
   gbtn.classList.toggle('busy', !!v.busy); gbtn.setAttribute('aria-busy', v.busy ? 'true' : 'false');
-  gbtn.title = (v.busy ? 'Bot一覧を読み込み中…（grok.com を裏で開いています）' : `Grok：クリックでBot一覧を読み込み直す（grok.com のサイドバーの全Bot・グループ。増えた・消えた・名前・アイコンを反映）${v.at ? `\n前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件` : ''}`)
-    + `\n右クリック: 表示を切替（${GbarMode.LABEL[gMode]} → ${GbarMode.LABEL[GbarMode.nextMode(gMode)]}）`;
+  setTip(gbtn, 'Bot一覧を更新', v.busy ? 'GrokのBot一覧を読み込み中です。' : 'GrokのBot一覧を読み込み直します。', '',
+    `${v.at ? `前回: ${new Date(v.at).toLocaleString('ja-JP', { hour12: false })}・${v.count}件・` : ''}右クリックで表示を切替（${GbarMode.LABEL[gMode]} → ${GbarMode.LABEL[GbarMode.nextMode(gMode)]}）`);
   gnote.textContent = v.busy ? '読み込み中…' : v.note || '';
   renderFavs(S ? S.favorites || [] : []);
 });
@@ -342,7 +358,8 @@ function gbotBtn(b, pin) {
   el.className = 'fav-btn gbot' + (pin ? ' gpin' : '') + (b.group ? ' grp' : '');
   el.appendChild(gIcon(b));
   if (gMode !== 'compact') el.insertAdjacentHTML('beforeend', `<span class="flabel">${esc(gLabel(b.name, 10))}</span>`);   // コンパクト: the icon only
-  el.title = `${b.name}${b.name !== b.orig ? `（元の名前: ${b.orig}）` : ''}${b.group ? '・グループ' : ''}${b.pinned ? '・お気に入り' : ''}\n${b.url}\nクリック: 新しいペインで開く（上限時は今のペイン）\n長押しで今のペインで開く（約0.5秒押して離す）\n${MOD}・Optionクリック: 今のペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（今のペイン・名前変更・お気に入り）${pin ? ' ／ ドラッグで並べ替え' : ''}`;
+  setTip(el, b.name, 'クリックで開き、長押しで今のペインに開きます。', '',
+    `${b.name !== b.orig ? `元の名前: ${b.orig}・` : ''}${b.group ? 'グループ・' : ''}${b.pinned ? 'お気に入り・' : ''}${b.url}・右クリックでメニュー`);
   gTrack(el, b);
   let hold = GbarLongPress.idle(), feedback = null;
   const clearFeedback = () => { if (feedback) feedback.cancel(); feedback = null; };
@@ -418,7 +435,7 @@ function gShow() {                                           // the page after t
     if (b.head >= 0 && GP.heads[b.head]) out.push(GP.heads[b.head]);
     out.push(GP.els[j]);
   }
-  if (n > 1) { out.push(gNext); gNext.title = `ページ ${GP.page + 1}/${n}：クリックで${GP.page + 1 < n ? '次のページへ' : '先頭のページへ戻る'}`; }
+  if (n > 1) { out.push(gNext); setTip(gNext, '次のページ', GP.page + 1 < n ? '次のBot一覧を表示します。' : 'Bot一覧の先頭に戻ります。', '', `ページ ${GP.page + 1}/${n}`); }
   const now = [...favs.children].slice(GP.pinN);
   if (now.length === out.length && now.every((e, i) => e === out[i])) return;
   while (favs.children.length > GP.pinN) favs.lastElementChild.remove();
@@ -442,7 +459,7 @@ function renderFavs(list) {
     let host = ''; try { host = new URL(f.url).hostname; } catch {}
     const isBot = /grok\.com$/.test(host) && /\/bot\//.test(f.url), name = f.label || host;
     b.innerHTML = gMode === 'compact' ? `<span class="fic">${esc(GbarMode.initial(name))}</span>` : `<span class="flabel">${esc(gLabel(name))}</span>`;   // no icon of its own: コンパクト shows its first letter
-    b.title = `${f.label}\n${f.url}\nクリック: 選択中のペインで開く\n${MOD}クリック: 新しいペイン ／ ⇧クリック: 別ウィンドウ\n右クリック: メニュー（名前変更・削除）／ ドラッグで並べ替え`;
+    setTip(b, name || 'お気に入り', '今のペインでお気に入りを開きます。', '', `${f.url}・右クリックでメニュー`);
     gTrack(b, f);
     b.onclick = e => mpb.favOpen(f.id, e.shiftKey ? 'window' : (e.metaKey || e.ctrlKey) ? 'new' : 'here');
     b.onauxclick = e => { if (e.button === 1) mpb.favOpen(f.id, 'new'); };
@@ -457,7 +474,7 @@ function renderFavs(list) {
   const heads = secs.map((s, k) => {                         // grok.com's own sections (the user's tabs), in the page's order
     s.items.forEach(b => { els.push(gbotBtn(b, false)); keys.push('b' + b.id); sec.push(k); });
     if (!s.name) return null;
-    const h = mkEl('gsec', gMode === 'compact' ? GbarMode.truncate(s.name, 2) : gLabel(s.name, 12)); h.title = s.name; return h;   // コンパクト: 2 units
+    const h = mkEl('gsec', gMode === 'compact' ? GbarMode.truncate(s.name, 2) : gLabel(s.name, 12)); setTip(h, s.name, 'このグループのBotを表示しています。'); return h;   // コンパクト: 2 units
   });
   GP = { pinN: pins.length, els, keys, sec, heads, sep: mkEl('gsep'), w: -1, ok: false, pages: [], page: 0 };
   gLayout();
@@ -511,9 +528,9 @@ mpb.ready();
 // compact mode: tabs show icon only
 (function(){
   const KEY='mpb-compact';
-  const apply=v=>{document.body.classList.toggle('compact',v);const b=document.getElementById('compact-btn');if(b)b.classList.toggle('active',v);};
+  const apply=v=>{document.body.classList.toggle('compact',v);const b=document.getElementById('compact-btn');if(b){b.classList.toggle('active',v);setTip(b,'コンパクト表示','ペインのタブ表示を切り替えます。',MOD+'⇧C',v?'ON':'OFF');}};
   const b=document.createElement('button');
-  b.id='compact-btn';b.className='compact-btn';b.textContent='◫';b.title='コンパクトモード（タブをアイコンだけに）  '+(typeof MOD!=='undefined'?MOD:'⌘')+'⇧C';
+  b.id='compact-btn';b.className='compact-btn';b.textContent='◫';setTip(b,'コンパクト表示','ペインのタブ表示を切り替えます。',MOD+'⇧C');
   const strip=document.getElementById('strip');strip.parentNode.insertBefore(b,strip);
   const toggle=()=>{const v=!document.body.classList.contains('compact');localStorage.setItem(KEY,v?'1':'0');apply(v);};
   b.onclick=toggle;
@@ -547,7 +564,6 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
     if(L&&L.mask) ico.innerHTML='<span class="mico" style="background:'+(L.color||'currentColor')+';-webkit-mask-image:url('+L.mask+');mask-image:url('+L.mask+')"></span>';
     else if(L&&L.img) ico.innerHTML='<img class="gico" alt="" src="'+L.img+'">';
     else ico.innerHTML=ICON[kind];
-    ico.title=NAME[kind];
     let mode=localStorage.getItem(KEY); if(!modes.includes(mode)) mode=seed;
     let last=null, det=null, src='off', started=false;
     const on=()=>src!=='off'&&src!=='info';   // a gauge that reads numbers right now
@@ -574,8 +590,10 @@ window.addEventListener('blur', () => { document.body.classList.remove('splittin
       const c=on()?calc():null, u=btn.querySelector('.uval');
       btn.hidden=src==='off';
       btn.className='pill usage mode-'+mode+(src==='info'?' info':c?' lv-'+level(mode,c.pct):' err')+(c&&last&&last.stale?' stale':'')+(on()&&login()?' needlogin':'');
-      if(!c){u.textContent=kind==='claude'&&last&&last.relogin&&last.needLogin?'Terminalで /login が必要':'--';return;}
-      u.textContent=fmt(c.v);
+      if(!c) u.textContent=kind==='claude'&&last&&last.relogin&&last.needLogin?'Terminalで /login が必要':'--';
+      else u.textContent=fmt(c.v);
+      setTip(btn, NAME[kind]+'の使用量', src==='info'?'確認方法を表示します。':login()?'接続やログインを確認します。':'使用状況を確認し、表示を切り替えます。', '',
+        c ? `${mode==='used'?'使用済み':mode==='today'?'本日の残り':'残り'}: ${u.textContent}${mode==='today'?'':'%'}${last&&last.stale?'・前回の値':''}` : src==='info'?'詳細を表示できます。':login()?'ログインが必要です。':'現在の値を取得できていません。');
     };
     const load=async force=>{
       if(!on()) return;

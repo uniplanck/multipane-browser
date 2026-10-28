@@ -104,7 +104,7 @@ const fn = name => { const i = main.indexOf(`function ${name}(`); if (i < 0) ret
 const count = (s, re) => (s.match(re) || []).length;
 t('main.js: the only loadURL is inside appLoad, after its check', count(main, /\.loadURL\(/g) === 1 && /const code = NAV\.appLoad\(url\);\s*if \(code\) \{[^}]*return; \}\s*wc\.loadURL\(url\)/.test(fn('appLoad')));
 t('main.js: the only shell.openExternal is inside openExt, with the parsed URL after its check', count(main, /shell\.openExternal\(/g) === 1 && /const r = NAV\.external\(url, \{ gesture \}\);\s*if \(r\.code\)[^\n]*return; \}[\s\S]*shell\.openExternal\(r\.href\)/.test(fn('openExt')));
-t('main.js: loadFile only for the bundled pages (index / overlay / new tab)', [...main.matchAll(/\.loadFile\(([^)]*\))?/g)].map(m => main.slice(m.index, m.index + 60)).every(s => /loadFile\((NEWTAB_FILE|path\.join\(__dirname, '(index|overlay)\.html'\))\)/.test(s))
+t('main.js: loadFile only for bundled pages (index / overlay / tooltip / new tab)', [...main.matchAll(/\.loadFile\(([^)]*\))?/g)].map(m => main.slice(m.index, m.index + 60)).every(s => /loadFile\((NEWTAB_FILE|path\.join\(__dirname, '(index|overlay|tooltip)\.html'\))\)/.test(s))
   && /const NEWTAB_FILE = path\.join\(__dirname, 'newtab\.html'\);/.test(main));
 t('main.js: no hand-made host / scheme tests for links any more (AUTH_HOST, isGrokHost regex, protocol list)', !/AUTH_HOST|const isGrokHost|\(\^\|\\\.\)grok\\\.com\$|\^\(https\?\|mailto/.test(main));
 t('main.js: every window-open handler is decided by the policy (panes / popup: linkOpen; child windows: windowOpen child; probe / UI: deny)', (() => {
@@ -129,6 +129,8 @@ t('main.js: the click / key comes from the browser (input-event), not from the p
 t('main.js: a new / restored pane and the address bar refuse what appLoad refuses (new pane -> new tab; address bar -> nothing)', /url: paneStart\(normalize\(spec\.url\)\)/.test(fn('addPane')) && /if \(paneStart\(u\) !== u\) \{ navBlocked\([^}]*return; \}[^\n]*\n\s*guardRun\(/.test(fn('openIn')));
 t('main.js: the link menu opens only what the policy allows (explicit choice)', /enabled: panes\.length < MAX && !NAV\.appLoad\(params\.linkURL\)/.test(main) && /openExt\(params\.linkURL, 'link menu', true\)/.test(main) && /openExt\(paneUrl\(p\), 'pane menu'\)/.test(main));
 t('main.js: refusals record a fixed code only', /diag\.rec\('nav\.block', code, \{ p: p && p\.id \}, 60000\);/.test(fn('navBlocked')) && !/dlog\([^\n]*\burl\b/.test(fn('navBlocked')));
-t('main.js: the sandbox / isolation of every page main creates is unchanged (+ the usage reader / login window)', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 9 &&!/sandbox: false|nodeIntegration: true|contextIsolation: false|webSecurity: false|allowRunningInsecureContent/.test(main));
+t('main.js: every page, including the tooltip, keeps sandbox and isolation', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 10
+  && /guardUi\(tipWindow\.webContents\)/.test(fn('prepareTip')) && /preload: path\.join\(__dirname, 'tooltip-preload\.js'\), contextIsolation: true, nodeIntegration: false, sandbox: true/.test(fn('prepareTip'))
+  && !/sandbox: false|nodeIntegration: true|contextIsolation: false|webSecurity: false|allowRunningInsecureContent/.test(main));
 
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

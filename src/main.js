@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const CPU = require('./cpu-meter');
+const { placeTooltip } = require('./tooltip-layout');
 
 // dev/test hook: MPB_SWITCHES="name=value;name2" appends Chromium switches before the app is ready
 for (const sw of String(process.env.MPB_SWITCHES || '').split(';').filter(Boolean)) { const i = sw.indexOf('='); i < 0 ? app.commandLine.appendSwitch(sw) : app.commandLine.appendSwitch(sw.slice(0, i), sw.slice(i + 1)); }
@@ -643,6 +644,50 @@ setInterval(() => {
 // ======================= one app window =======================
 function makeWindow(spec = {}, { restore = false } = {}) {
 let win, overlay, overlayOpen = false, overlayMode = '';
+let tipWindow = null, tipReady = null, tipSeq = 0, tipCurrent = null;
+// Pane WebContentsViews cover the chrome DOM below their 30px headers. A tiny,
+// transparent child window stays above them without moving views; native mouse
+// passthrough and a non-focusable window preserve pane and overlay input.
+function hideTip() {
+  tipSeq++; tipCurrent = null;
+  if (tipWindow && !tipWindow.isDestroyed()) tipWindow.hide();
+}
+function dismissTip() {
+  hideTip();
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('tip-dismiss');
+}
+function prepareTip() {
+  if (!win || win.isDestroyed() || !win.isVisible() || !win.isFocused() || overlayOpen) return;
+  if (!tipWindow || tipWindow.isDestroyed()) {
+    tipWindow = new BrowserWindow({ parent: win, show: false, frame: false, transparent: true, focusable: false,
+      skipTaskbar: true, excludedFromShownWindowsMenu: true, resizable: false, movable: false, hasShadow: false, backgroundColor: '#00000000',
+      webPreferences: { preload: path.join(__dirname, 'tooltip-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    tipWindow.setIgnoreMouseEvents(true);
+    guardUi(tipWindow.webContents);
+    const created = tipWindow;
+    tipReady = created.loadFile(path.join(__dirname, 'tooltip.html')).then(() => true, () => {
+      if (!created.isDestroyed()) created.destroy();
+      return false;
+    });
+  }
+}
+function showTip(p) {
+  if (!win || win.isDestroyed() || !win.isVisible() || !win.isFocused() || overlayOpen) return;
+  tipCurrent = p;
+  const seq = ++tipSeq;
+  prepareTip();
+  const child = tipWindow;
+  tipReady.then(ready => {
+    if (!ready || seq !== tipSeq || child.isDestroyed() || win.isDestroyed() || !win.isVisible() || !win.isFocused() || overlayOpen) return;
+    const content = win.getContentBounds();
+    const avoid = popOpen && overlay ? overlay.getBounds() : null;
+    const r = placeTooltip(p.rect, p.size, { width: content.width, height: content.height }, p.preferSide, avoid);
+    child.setBounds({ x: content.x + r.x, y: content.y + r.y, width: r.width, height: r.height });
+    const entering = !child.isVisible();
+    child.webContents.send('tip-display', { ...p.tip, entering });
+    if (entering) child.showInactive();
+  });
+}
 let queueNote = '';                        // (#01) why the last choice from the 対応キュー was not carried out (shown in the open list until the next one)
 let queueNow = [];                         // (#01) the list the last sendState built
 let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane not on screen yet (pane-navigation.js mayFocus / holds)
@@ -1924,6 +1969,9 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
   });
   wc.on('focus', () => paneGotFocus(p));
   wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown' && !p.sleeping) focusPane(panes.indexOf(p)); });   // native input, never a fix's synthetic click
+  wc.on('before-mouse-event', (e, m) => {
+    if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
+  });
   wc.on('before-input-event', (e, input) => {
     if (navHolds(p, input)) { if (!handleKey(input, p)) diag.rec('nav', 'HELD', { p: p.id }, 60000); e.preventDefault(); return; }   // (#51) meant for the pane being woken: not typed here
     if (input.type === 'keyDown' && !input.meta && !input.control) { clearUnread(p); p.inputRev++; } if (handleKey(input, p)) e.preventDefault();   // a key typed: the input revision moves (#11)
@@ -2083,6 +2131,7 @@ function handleKey(input, pane) {
   const k = input.key.toLowerCase();
   const mod = isMac ? input.meta : input.control;
   if (k === 'escape' && !mod && !input.alt && !input.shift) {
+    dismissTip(); // Escape may arrive in the focused pane rather than the chrome document.
     if (dock) { dockEnd('ESC'); return true; }                // (dock) a header drag: cancelled, nothing changes
     if (overlayOpen) { closeOverlay(); return true; }
     if (pane?.pcMax) return false;                         // Esc closes the page's computer view first (the pane then returns to normal)
@@ -2177,6 +2226,7 @@ function hideApprove() {
 }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
+  dismissTip();
   if (overlayOpen && overlayMode === 'update-first' && mode !== 'update-first') updateChoice(true);
   dockEnd('OVERLAY');                                          // (dock) a header drag ends (the views come back) before anything is shown over them
   popOpen = false; clearTimeout(popTimer);
@@ -2559,10 +2609,11 @@ function popShow(rect) {
   if (rect && typeof rect === 'object') { popKind = [...UC.WEB, 'antigravity'].includes(rect.kind) ? rect.kind : 'grok'; popSel = String(rect.sel || '').slice(0, 120); }
   clearTimeout(popTimer); popRect = rect && typeof rect === 'object' ? { right: Number(rect.right) || 0, bottom: Number(rect.bottom) || 0 } : popRect;
   if (!popOpen) { popOpen = true; overlay.setBounds(popBounds(360)); bringOverlayToFront(); overlay.setVisible(true); }
+  if (tipCurrent) showTip(tipCurrent); // keep the usage popover unobscured, including fast tooltip switches
   overlay.webContents.send('usage-pop', popKind === 'grok' ? { kind: 'grok', ...usageDetail() } : popKind === 'antigravity' ? { kind: popKind, src: UC.source(settings, popKind) }
     : { kind: popKind, sel: popSel, ...(AIU.peek(popKind) || { ok: false, err: 'まだ取得していません', buckets: [] }) });
 }
-function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) overlay.setVisible(false); }
+function popHide() { clearTimeout(popTimer); if (!popOpen) return; popOpen = false; if (!overlayOpen) { overlay.setVisible(false); if (tipCurrent) showTip(tipCurrent); } }
 function popLater(ms = 350) { clearTimeout(popTimer); popTimer = setTimeout(popHide, ms); }
 function chipMenu(id) {
   const p = byId(id); if (!p) return;
@@ -2584,6 +2635,9 @@ function chipMenu(id) {
 const ui = {}, paneIpc = {};
 const on = (ch, fn) => { ui[ch] = fn; registerUi(ch); };
 const paneOn = (ch, fn) => { paneIpc[ch] = fn; registerPane(ch); };
+on('tip-show', showTip);
+on('tip-prepare', prepareTip);
+on('tip-hide', hideTip);
 on('navigate', (id, url) => { const p = byId(id); if (p) openIn(p, url); });
 on('back', id => goHist(byId(id), -1));
 on('forward', id => goHist(byId(id), 1));
@@ -2615,7 +2669,7 @@ on('usage-pop-show', r => popShow(r));
 on('usage-win-menu', (kind, sel) => usageWinMenu(String(kind), String(sel || '')));
 on('usage-pop-keep', () => clearTimeout(popTimer));
 on('usage-pop-leave', () => popLater());
-on('usage-pop-size', h => { if (popOpen && !overlayOpen) overlay.setBounds(popBounds(Number(h))); });
+on('usage-pop-size', h => { if (popOpen && !overlayOpen) { overlay.setBounds(popBounds(Number(h))); if (tipCurrent) showTip(tipCurrent); } });
 on('ws-menu', () => wsMenu());
 on('approve-open', () => openApprove());
 on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
@@ -2755,13 +2809,17 @@ if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximi
 win.loadFile(path.join(__dirname, 'index.html'));
 win.once('ready-to-show', () => { win.show(); updateFirstWhenReady(ctx); });
 win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
-win.on('resize', () => relayout());
+win.on('resize', () => { dismissTip(); relayout(); });
+win.on('move', dismissTip);
 win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });
 win.on('blur', () => dockEnd('BLUR'));                       // (dock) another app / window in front: a header drag ends, the views come back
+win.on('blur', dismissTip);
 win.webContents.on('render-process-gone', () => dockEnd('GONE'));   // (dock) the window's own page is gone: no dragend will come
+win.webContents.on('render-process-gone', hideTip);
 win.on('close', () => {
   dockEnd('WINDOW');
+  hideTip();
   snapshot();
   lq.cancel(t => t.win === ctx, 'WINDOW');                   // (#31) this window's loads / check: the slots go back once its views / check window are gone
   try { approveOpen = false; destroyApprove(); } catch {}
