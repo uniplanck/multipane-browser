@@ -384,7 +384,7 @@ mpb.onState(onS);
 // 表示モード (gbar-mode.js; main keeps it): a right-click on the Grok button takes the next one, 通常 → セミコンパクト → コンパクト → 通常
 const favs = $('#favs'), gbtn = $('#fav-star'), gnote = $('#gbar-note');
 let G = null, gRev = 0, favKey = '', gMode = 'normal';
-let gItems = [];                                            // includes pins and detached pages; state changes never rebuild the bar
+let gItems = [], gSections = [], gFocusHead = null;         // includes pins and detached pages; state changes never rebuild the bar
 function gTrack(el, item) { gItems.push({ el, id: GbarPresence.botId(item.url), detail: el.dataset.tipDetail }); }
 function gPresence() {
   const { openIds, focusedId } = GbarPresence.match(S ? S.panes || [] : [], S && S.focusedId);
@@ -394,6 +394,14 @@ function gPresence() {
     el.dataset.tipDetail = (active ? '今のペインで開いています・' : open ? 'ペインで開いています・' : '') + detail;
     el.setAttribute('aria-label', [el.dataset.tip, el.dataset.tipDesc, el.dataset.tipDetail].filter(Boolean).join('。'));
     el.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+  const panes = S ? S.panes || [] : [];
+  gSections.forEach(({ el, ids, count }) => {
+    const open = [...ids].some(id => openIds.has(id)), active = !!focusedId && ids.has(focusedId);
+    const unread = panes.some(p => p && (p.needsReply || p.unread || p.unopened) && ids.has(GbarPresence.botId(p.url)));
+    el.classList.toggle('gopen', open); el.classList.toggle('gactive', active); el.classList.toggle('gunread', unread);
+    el.dataset.tipDetail = [`${count}件のBot`, open && 'ペインで開いています', unread && '未読あり'].filter(Boolean).join('・');
+    el.setAttribute('aria-label', [el.dataset.tip, el.dataset.tipDesc, el.dataset.tipDetail].filter(Boolean).join('。'));
   });
 }
 const openWhere = e => e.shiftKey ? 'window' : (e.metaKey || e.altKey) ? 'here' : 'new';
@@ -520,12 +528,14 @@ new ResizeObserver(() => gLayout()).observe(favs);
 function renderFavs(list) {
   const key = JSON.stringify(list) + '|' + gRev;
   if (key === favKey) { gPresence(); return; }                // onState: navigation / open / close / focus, without remeasuring or changing page
+  const focusHead = gFocusHead && document.activeElement === gFocusHead.el ? gFocusHead : null;
+  gFocusHead = null;
   favKey = key;
   const pins = G ? G.pins : [], secs = G ? G.sections : [];
   $('#fav-hint').style.display = list.length || pins.length || secs.length ? 'none' : '';
   favs.classList.toggle('gm-semi', gMode === 'semi'); favs.classList.toggle('gm-compact', gMode === 'compact');   // (表示モード) before anything is measured
   favs.innerHTML = '';
-  gItems = [];
+  gItems = []; gSections = [];
   pins.forEach(b => favs.appendChild(gbotBtn(b, true)));
   const els = [], keys = [], sec = [];                       // the paged items: favorites (no section), then each section's Bots
   list.forEach(f => {
@@ -547,12 +557,32 @@ function renderFavs(list) {
     els.push(b); keys.push('f' + f.id); sec.push(null);
   });
   const heads = secs.map((s, k) => {                         // grok.com's own sections (the user's tabs), in the page's order
-    s.items.forEach(b => { els.push(gbotBtn(b, false)); keys.push('b' + b.id); sec.push(k); });
+    if (!s.name || !s.collapsed) s.items.forEach(b => { els.push(gbotBtn(b, false)); keys.push('b' + b.id); sec.push(k); });
     if (!s.name) return null;
-    const h = mkEl('gsec', gMode === 'compact' ? GbarMode.truncate(s.name, 2) : gLabel(s.name, 12)); setTip(h, s.name, 'このグループのBotを表示しています。'); return h;   // コンパクト: 2 units
+    const h = document.createElement('button'); h.type = 'button'; h.className = 'gsec' + (s.collapsed ? ' gcollapsed' : '');
+    h.textContent = (gMode === 'compact' ? GbarMode.truncate(s.name, 2) : gLabel(s.name, 12)) + (s.collapsed ? ` ${s.items.length}` : '');
+    h.appendChild(mkEl('gsec-chevron', s.collapsed ? '▸' : '▾'));
+    h.setAttribute('aria-expanded', s.collapsed ? 'false' : 'true');
+    setTip(h, s.name, s.collapsed ? 'クリックでこのグループのBotを表示します。' : 'クリックでこのグループのBotを折りたたみます。', '', `${s.items.length}件のBot`);
+    h.onclick = e => {
+      e.stopPropagation(); if (e.button === 2 || e.ctrlKey) return;
+      gAnchor = s.collapsed && s.items.length ? 'b' + s.items[0].id : 's' + k + ':' + s.name;
+      gFocusHead = { el: h, k, name: s.name }; mpb.gbarSecToggle(s.name);
+    };
+    h.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); };
+    h.draggable = false; h.ondragstart = e => { e.preventDefault(); e.stopPropagation(); };
+    if (s.collapsed) {
+      gSections.push({ el: h, ids: new Set(s.items.map(b => GbarPresence.botId(b.url)).filter(Boolean)), count: s.items.length });
+      els.push(h); keys.push('s' + k + ':' + s.name); sec.push(k); return null;
+    }
+    return h;
   });
   GP = { pinN: pins.length, els, keys, sec, heads, sep: mkEl('gsep'), w: -1, ok: false, pages: [], page: 0 };
   gLayout();
+  if (focusHead && secs[focusHead.k]?.name === focusHead.name) {
+    const h = heads[focusHead.k] || els[sec.indexOf(focusHead.k)];
+    if (h && favs.contains(h)) h.focus({ preventScroll: true });
+  }
   gPresence();
 }
 // drop a link / URL text onto the favorites bar to add it

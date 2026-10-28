@@ -2,7 +2,8 @@
 // draws one page (renderer.js), the test requires it. Loaded by index.html as a plain script before renderer.js (no require there).
 //   ws: each item's width (px). avail: the width for one page's elements and the 次へ button. btn: the button's width.
 //   o.gap: the space between two elements; o.sec: each item's section (its index; null = none, e.g. the favorites); o.head: each section's
-//   heading width (0 = no heading); o.sep: the separator's width (0 = none); o.lead: something (the pins) stands before the page.
+//   heading width (0 = no heading); o.sep: the separator's width (0 = none); o.lead: something (the pins) stands before the page. A collapsed
+//   section supplies its heading as one item in ws, with its section index in o.sec and 0 in o.head, so it occupies one slot without duplication.
 // An item needs in front of it the separator (the first section item after the pins / an item without a section) and its section's heading
 // (the first item of its section, or of a page: every page says which section it shows). Everything fits: one page, no button. Else every page
 // leaves room for the button and holds at least one item (one too wide for the bar is cut by it).

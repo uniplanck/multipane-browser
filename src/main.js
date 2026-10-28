@@ -276,6 +276,7 @@ function moveFavorite(a, b) {
 // 表示モード (gbar-mode.js, settings.gbarMode: 通常 / セミコンパクト / コンパクト; a right-click on the Grok button takes the next one, all windows)
 const GB = require('./grok-bots');
 const GM = require('./gbar-mode');
+const GS = require('./gbar-sections');
 let grok = GB.empty();
 let gbRun = false, gbNote = '', gbNoteTimer = null;          // a read running / its last outcome, shown a moment in the bar
 // ---- 新規ペインはGrok (new-pane.js): an empty new pane opens https://grok.com/ and its sidebar is opened once on its first page (makeWindow:
@@ -283,10 +284,11 @@ let gbRun = false, gbNote = '', gbNoteTimer = null;          // a read running /
 // read starts none while it runs, and reads nothing while one holds it)
 const NEWP = require('./new-pane');
 let sbLock = null;
-const gbView = () => ({ ...GB.view(grok), busy: gbRun, note: gbNote, mode: GM.normMode(settings.gbarMode) });
+const gbView = () => { const v = GB.view(grok); return { ...v, sections: v.sections.map(s => ({ ...s, collapsed: !!s.name && !GS.open(settings.gbarSecOpen, s.name) })), busy: gbRun, note: gbNote, mode: GM.normMode(settings.gbarMode) }; };
 function gbPush(c) { const v = gbView(); (c ? [c] : ctxs).forEach(k => { try { if (!k.win.isDestroyed()) k.win.webContents.send('gbar', v); } catch {} }); }
 function gbChanged() { save(); gbPush(); }
 function gbModeNext() { settings.gbarMode = GM.nextMode(settings.gbarMode); save(); gbPush(); }   // 表示モード: kept in panes.json, every bar redrawn
+function gbSecToggle(name) { settings.gbarSecOpen = GS.toggle(settings.gbarSecOpen, name); save(); gbPush(); }
 function gbSay(text, ms) { gbNote = text; clearTimeout(gbNoteTimer); if (text) gbNoteTimer = setTimeout(() => { gbNote = ''; gbPush(); }, ms); gbPush(); }
 const gbJs = (wc, code, ms = 5000) => Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(GB.WORLD, [{ code }])), sleep(ms).then(() => null)]).catch(() => null);
 // The hidden window: grok.com only (a move anywhere else is stopped and ends the read: a sign-in page = AUTH), no window.open, muted, the
@@ -2445,6 +2447,7 @@ function runAction(a) {
   switch (a.type) {
     case 'focus': { const i = panes.findIndex(p => p.id === a.id); closeOverlay(); focusPane(i); break; }
     case 'queue-open': queueOpen(); break;                   // (#01) the bar's 対応 n / the palette
+    case 'gbar-sec-toggle': gbSecToggle(a.name); break;
     case 'queue-pick': queuePick(a); break;
     case 'layout': closeOverlay(); applyPreset(a.layout); break;
     case 'open-new': closeOverlay(); newPane(String(a.url || '')); break;
@@ -2804,6 +2807,7 @@ on('fav-move', (a, b) => moveFavorite(a, b));
 on('fav-add', (url, label) => addFavorite(String(url || ''), String(label || '')));
 on('gbar-refresh', () => grokRefresh());                     // (Grok bar) the Grok button; a read already running: nothing new
 on('gbar-mode', () => gbModeNext());                         // (Grok bar) a right-click on the Grok button: the next 表示モード
+on('gbar-sec-toggle', name => gbSecToggle(name));
 on('gbot-open', (id, where) => openGrokBot(id, where));
 on('gbot-menu', id => gbotMenu(id));
 on('gbot-move', (a, b) => { const g = GB.movePin(grok, a, b); if (g !== grok) { grok = g; gbChanged(); } });

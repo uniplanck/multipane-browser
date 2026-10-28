@@ -11,6 +11,7 @@ const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
 const AS = require('./approve-setting');
 const TL = require('./tooltip-list');
+const GS = require('./gbar-sections');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -79,6 +80,7 @@ const OVERLAY = ['overlay'], CHROME = ['chrome'], UI = ['chrome', 'overlay'], PA
 const inPane = (x, w) => w.pane(x.id), inFav = (x, w) => w.fav(x.id), inWs = (x, w) => w.ws(x.name);
 const ACTIONS = {
   'next-unread': { roles: UI },
+  'gbar-sec-toggle': { roles: CHROME, shape: x => Object.keys(x).length === 2 && GS.nameOk(x.name) },
   // 対応キュー (#01): open the list (bar / palette); a choice = the pane id + the conversation it was listed for. No target check here on purpose:
   // a pane closed / moved meanwhile is refused by main itself (attention-queue.js stale), which then says why in the list
   'queue-open': { roles: UI },
@@ -157,6 +159,7 @@ const CHANNELS = {
   // nothing comes from the page), open / menu of a listed Bot, a pin dragged onto another pin
   'gbar-refresh': { roles: CHROME },
   'gbar-mode': { roles: CHROME },
+  'gbar-sec-toggle': { roles: CHROME, shape: a => a.length === 1 && GS.nameOk(a[0]) },
   'gbot-open': { roles: CHROME, shape: a => gid(a[0]) && where(a[1]), target: (a, w) => w.gbot(a[0]) },
   'gbot-menu': { roles: CHROME, shape: a => gid(a[0]), target: (a, w) => w.gbot(a[0]) },
   'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },

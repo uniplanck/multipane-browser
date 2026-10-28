@@ -22,6 +22,7 @@ const DL = require('./dock-layout');
 const GB = require('./grok-bots');
 const UC = require('./usage-config');
 const GM = require('./gbar-mode');
+const GS = require('./gbar-sections');
 const AS = require('./approve-setting');
 const { DRAFT } = require('./pane-rules');
 const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake'];
@@ -80,6 +81,7 @@ function validate(doc) {
     BOOL_FLAGS.forEach(k => { if (doc.settings[k] !== undefined && typeof doc.settings[k] !== 'boolean') e.push(`settings.${k}: not a boolean`); });
     if (doc.settings.usageProv !== undefined && !UC.valid(doc.settings.usageProv)) e.push('settings.usageProv: not a clean provider list');
     if (doc.settings.gbarMode !== undefined && !GM.isMode(doc.settings.gbarMode)) e.push('settings.gbarMode: not a mode');
+    if (doc.settings.gbarSecOpen !== undefined && !GS.valid(doc.settings.gbarSecOpen)) e.push('settings.gbarSecOpen: not a clean section list');
     if (doc.settings.approveUrl !== undefined && (!AS.validUrl(doc.settings.approveUrl) || AS.normalizeUrl(doc.settings.approveUrl) !== doc.settings.approveUrl)) e.push('settings.approveUrl: not a normalized Bot URL');
     if (doc.settings.approveLabel !== undefined && (!AS.validLabel(doc.settings.approveLabel) || doc.settings.approveLabel !== doc.settings.approveLabel.trim())) e.push('settings.approveLabel: not a clean label');
   }
@@ -148,6 +150,9 @@ function migrate(raw) {
   }
   if (isObj(settings) && settings.gbarMode !== undefined && !GM.isMode(settings.gbarMode)) {   // (表示モード) unknown: back to 通常
     settings = { ...settings, gbarMode: 'normal' }; fixes.push('settings.gbarMode: not a mode, set to normal');
+  }
+  if (isObj(settings) && settings.gbarSecOpen !== undefined && !GS.valid(settings.gbarSecOpen)) {
+    settings = { ...settings, gbarSecOpen: GS.clean(settings.gbarSecOpen) }; fixes.push('settings.gbarSecOpen: repaired');
   }
   if (isObj(settings)) {
     for (const key of ['approveUrl', 'approveLabel']) {

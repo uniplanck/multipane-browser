@@ -49,6 +49,7 @@ const SAMPLE = {
   'aiusage:get': ['chrome', ['claude', true]], 'claude:auth-dialog': ['chrome', []], 'usage-connect': ['chrome', ['kimi']], 'usage-open': ['overlay', ['antigravity']],
   'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]], 'pane:sel': ['pane', [true]],
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
+  'gbar-sec-toggle': ['chrome', ['待機']],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
 for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode']) SAMPLE[ch] = ['chrome', []];
@@ -104,7 +105,7 @@ t('Grok bar: open / menu / move / rename name a listed Bot by its grok.com id; w
   && chk('gbot-menu', 'chrome', ['b3']) === 'E_TARGET' && chk('gbot-move', 'chrome', ['b1', 'b3']) === 'E_TARGET' && chk('gbot-move', 'chrome', ['b1']) === 'E_PAYLOAD'
   && chk('overlay-run', 'overlay', [{ type: 'gbot-rename', id: 'b3', value: 'x' }]) === 'E_TARGET' && chk('overlay-run', 'overlay', [{ type: 'gbot-rename', id: 'b1', value: 5 }]) === 'E_PAYLOAD'
   && chk('overlay-run', 'chrome', [{ type: 'gbot-rename', id: 'b1', value: 'x' }]) === 'E_ROLE'
-  && ['gbar-refresh', 'gbar-mode', 'gbot-open', 'gbot-menu', 'gbot-move'].every(ch => ['overlay', 'pane', 'probe'].every(w => chk(ch, w, SAMPLE[ch][1]) === 'E_ROLE')));
+  && ['gbar-refresh', 'gbar-mode', 'gbar-sec-toggle', 'gbot-open', 'gbot-menu', 'gbot-move'].every(ch => ['overlay', 'pane', 'probe'].every(w => chk(ch, w, SAMPLE[ch][1]) === 'E_ROLE')));
 t('coarse pane signals from any site and the newtab page', ['pane:typing', 'pane:interact', 'pane:mouseup', 'pane:msgmode-off', 'pane:pc-closed'].every(ch => chk(ch, 'web') === null && chk(ch, 'newtab') === null) && chk('pane:draft', 'newtab', [false]) === null && chk('pane:editing', 'web', [true]) === null);
 // how Chromium and Node escape a packaged path can differ: compare as paths
 { const f = '/Applications/Multi Pane ブラウザ (1).app/Contents/Resources/app.asar/src/index.html';
@@ -175,9 +176,11 @@ const RUNS = [
   { type: 'queue-open' }, { type: 'queue-pick', id: 3, ref: 'bot:abc' }, { type: 'queue-pick', id: 1, ref: '' },
   { type: 'gbot-rename', id: 'b1', value: '新しい名前' }, { type: 'gbot-rename', id: 'b-2', value: '' },
 ];
+const CHROME_RUNS = [{ type: 'gbar-sec-toggle', name: '待機' }];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
-t('every action type has a sample', Object.keys(P.ACTIONS).every(k => RUNS.some(a => a.type === k)));
-t('chrome bar: next-unread / queue-open only', run('chrome', { type: 'next-unread' }) === null && run('chrome', { type: 'queue-open' }) === null
+t('every action type has a sample', Object.keys(P.ACTIONS).every(k => [...RUNS, ...CHROME_RUNS].some(a => a.type === k)));
+t('chrome bar: next-unread / queue-open / section toggle only', run('chrome', { type: 'next-unread' }) === null && run('chrome', { type: 'queue-open' }) === null
+  && CHROME_RUNS.every(a => run('chrome', a) === null && run('overlay', a) === 'E_ROLE')
   && RUNS.filter(a => a.type !== 'next-unread' && a.type !== 'queue-open').every(a => run('chrome', a) === 'E_ROLE'));
 t('対応キュー (#01): a choice is a pane id + a bounded conversation ref; a pane closed / in another window is left to main (it says why)',
   run('overlay', { type: 'queue-pick', id: 7, ref: 'bot:x' }) === null && run('overlay', { type: 'queue-pick', id: 1, ref: 'x'.repeat(P.URL_MAX) }) === null
@@ -311,7 +314,7 @@ const CALLS = [
   ['chrome', 'renamePane', 1], ['chrome', 'chipMenu', 2], ['chrome', 'syncReset'], ['chrome', 'syncCols', false], ['chrome', 'syncCols', true],
   ['chrome', 'splitStart', 'c', 1, undefined], ['chrome', 'splitStart', 'c', 2, 1], ['chrome', 'splitStart', 'r', 1, undefined], ['chrome', 'splitReset', 'c', undefined], ['chrome', 'splitReset', 'c', 0], ['chrome', 'splitEnd'],
   ['chrome', 'favOpen', 1, 'here'], ['chrome', 'favOpen', 2, 'new'], ['chrome', 'favOpen', 1, 'window'], ['chrome', 'favMenu', 1], ['chrome', 'favMove', 2, 1], ['chrome', 'favAdd', 'https://example.com/', ''],
-  ['chrome', 'gbarRefresh'], ['chrome', 'gbarMode'], ['chrome', 'gbotOpen', 'b1', 'here'], ['chrome', 'gbotOpen', 'b-2', 'new'], ['chrome', 'gbotOpen', 'b1', 'window'], ['chrome', 'gbotMenu', 'b1'], ['chrome', 'gbotMove', 'b-2', 'b1'],
+  ['chrome', 'gbarRefresh'], ['chrome', 'gbarMode'], ['chrome', 'gbarSecToggle', '待機'], ['chrome', 'gbotOpen', 'b1', 'here'], ['chrome', 'gbotOpen', 'b-2', 'new'], ['chrome', 'gbotOpen', 'b1', 'window'], ['chrome', 'gbotMenu', 'b1'], ['chrome', 'gbotMove', 'b-2', 'b1'],
   ['chrome', 'ready'], ['chrome', 'usage', true], ['chrome', 'usage', undefined], ['chrome', 'usageDetail'], ['chrome', 'aiUsage', 'codex', false], ['chrome', 'aiUsage', 'claude', true], ['chrome', 'claudeAuthDialog'],
   ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
   ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'], ['chrome', 'usageWinMenu', 'kimi', 'month-credit'],

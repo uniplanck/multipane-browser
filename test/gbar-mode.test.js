@@ -101,7 +101,7 @@ t('nextMode / normMode: anything else is 通常 (none / old / broken: the next i
 // ---- wiring: main keeps the mode, the page only asks for the next one ----
 const main = read('main.js'), ren = read('renderer.js'), P = require('../src/ipc-policy');
 t('main.js: requires gbar-mode; the bar message carries the mode (normalised)', /const GM = require\('\.\/gbar-mode'\);/.test(main)
-  && /const gbView = \(\) => \(\{ \.\.\.GB\.view\(grok\), busy: gbRun, note: gbNote, mode: GM\.normMode\(settings\.gbarMode\) \}\);/.test(main));
+  && /const gbView = \(\) => \{ const v = GB\.view\(grok\); return \{ \.\.\.v, .*busy: gbRun, note: gbNote, mode: GM\.normMode\(settings\.gbarMode\) \}; \};/.test(main));
 t('main.js: gbar-mode -> gbModeNext (a top-level function, the handler inside the window code like the other bar channels)', (() => {
   const mw = main.indexOf('\nfunction makeWindow('), fn = main.indexOf('\nfunction gbModeNext() {'), h = main.search(/^on\('gbar-mode', \(\) => gbModeNext\(\)\);/m);
   return mw > 0 && fn > 0 && fn < mw && h > mw; })());
@@ -112,7 +112,7 @@ t('main.js: gbar-mode -> gbModeNext (a top-level function, the handler inside th
   t('main.js gbModeNext (run): normal -> semi -> compact -> normal -> semi, saved and pushed to every window each time', !!m && J(seq) === J(['semi', 'compact', 'normal', 'semi']) && box.saves === 4 && box.pushes === 4 && box.arg === undefined);
   ctx.settings.gbarMode = 'bogus'; vm.runInContext('gbModeNext()', ctx);
   t('main.js gbModeNext: from an unknown value (never written by main) the next is セミコンパクト', ctx.settings.gbarMode === 'semi'); }
-{ const m = main.match(/const gbView = \(\) => [^\n]*;/), ctx = vm.createContext({ GM, GB: { view: () => ({ pins: [], sections: [] }) }, grok: {}, settings: {}, gbRun: false, gbNote: '' });
+{ const m = main.match(/const gbView = \(\) => [^\n]*;/), ctx = vm.createContext({ GM, GS: require('../src/gbar-sections'), GB: { view: () => ({ pins: [], sections: [] }) }, grok: {}, settings: {}, gbRun: false, gbNote: '' });
   vm.runInContext(m[0].replace('const gbView', 'var gbView'), ctx);
   const mode = v => { ctx.settings = v === undefined ? {} : { gbarMode: v }; return vm.runInContext('gbView().mode', ctx); };
   t('main.js gbView (run): none / unknown -> normal, each mode as set', mode(undefined) === 'normal' && mode('x') === 'normal' && GM.MODES.every(x => mode(x) === x)); }
@@ -210,7 +210,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   t('vm 通常: no mode class; labels as before (Bots 10 columns, favorites 6, headings 12); group frame; the Grok button says right-click → セミコンパクト',
     favs.className === '' && allItems().every(({ e, key }) => labelOf(e) === shortLabel(key[0] === 'f' ? FAVNAME[key] : NAME[key], key[0] === 'f' ? 6 : 10))
     && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => !e.children.some(c => has(c, 'gmark')) && has(e, 'grp') === GROUP.has(key))
-    && J(GP().heads.map(h => h && h.textContent)) === J([shortLabel('仕事の依頼', 12), shortLabel('Dev tools', 12), null]) && /右クリックで表示を切替（通常 → セミコンパクト）$/.test(gbtn.dataset.tipDetail));
+    && J(GP().heads.map(h => h && h.textContent)) === J([shortLabel('仕事の依頼', 12) + '▾', shortLabel('Dev tools', 12) + '▾', null]) && /右クリックで表示を切替（通常 → セミコンパクト）$/.test(gbtn.dataset.tipDetail));
   const pinW = { normal: GP().pinW }, pages = { normal: pageN() };
   t(`vm 通常: pins first (with names), the rest in pages that fit (${pages.normal} pages), 次へ at the end`, pinsShown().every((e, i) => has(e, 'gpin') && labelOf(e) === shortLabel(PINS[i].name, 10))
     && pages.normal >= 3 && kids().at(-1) === gNext && everyPage(fits).every(Boolean));
@@ -271,7 +271,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
     && pinsShown().every((e, i) => labelOf(e) === GM.truncate(PINS[i].name)) && allItems().filter(x => x.key[0] === 'b').every(({ e, key }) => !e.children.some(c => has(c, 'gmark')) && has(e, 'grp') === GROUP.has(key)));
   t('vm セミコンパクト: e.g. 議事録まとめ係 -> 議事, Code Reviewer -> Code, ①下書き -> ①下, a ZWJ emoji stays whole; headings cut to 4 units (title: the full name)',
     labelOf(GP().els[GP().keys.indexOf('bw0')]) === '議事' && labelOf(GP().els[GP().keys.indexOf('bd0')]) === 'Code' && labelOf(GP().els[GP().keys.indexOf('bd8')]) === '①下'
-    && labelOf(GP().els[GP().keys.indexOf('bd4')]) === MAN_PC + 'ペ' && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕事', '仕事の依頼'], ['Dev', 'Dev tools'], null]));
+    && labelOf(GP().els[GP().keys.indexOf('bd4')]) === MAN_PC + 'ペ' && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕事▾', '仕事の依頼'], ['Dev▾', 'Dev tools'], null]));
   t(`vm セミコンパクト: pages measured again: fewer pages (${pages.normal} -> ${pages.semi}), the pins narrower (${pinW.normal} -> ${pinW.semi} px), every page fits`,
     pages.semi < pages.normal && pinW.semi < pinW.normal && everyPage(fits).every(Boolean));
   t('vm セミコンパクト: the Grok button says → コンパクト', /右クリックで表示を切替（セミコンパクト → コンパクト）$/.test(gbtn.dataset.tipDetail));
@@ -288,7 +288,7 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
     && pinsShown().every((e, i) => iconOnly(e, PINS[i]) && has(e, 'gpin')));
   t('vm コンパクト: favorites (no icon of their own) show a first-letter badge; headings cut to 2 units',
     J(allItems().filter(x => x.key[0] === 'f').map(({ e }) => e.children.map(c => [c.className, c.textContent]))) === J([[['fic', 'E']], [['fic', 'N']]])
-    && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕', '仕事の依頼'], ['De', 'Dev tools'], null]));
+    && J(GP().heads.map(h => h && [h.textContent, h.dataset.tip])) === J([['仕▾', '仕事の依頼'], ['De▾', 'Dev tools'], null]));
   t(`vm コンパクト: all fits in one page now (no 次へ), the pins narrower again (${pinW.compact} px)`, pages.compact === 1 && !kids().includes(gNext) && pinW.compact < pinW.semi && fits()
     && kids().length === GP().pinN + 27 + 1 + 2);           // pins + 2 favorites + 25 Bots, the separator, the 2 named headings
   t('vm コンパクト: group frames / no gmark, including pins', groupFrames());
