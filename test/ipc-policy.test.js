@@ -50,7 +50,7 @@ const SAMPLE = {
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
-for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode']) SAMPLE[ch] = ['chrome', []];
+for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode']) SAMPLE[ch] = ['chrome', []];
 for (const ch of ['pane:pc-opened', 'pane:img-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
 
 // ---- allowed ----
@@ -298,7 +298,7 @@ t('preload: a channel name as argument is just data', (() => { const n = UP.sent
 // ---- what renderer.js (chrome) and overlay.js (overlay) send today, through the real preload ----
 const CALLS = [
   ['chrome', 'layout', '3x2'], ['chrome', 'add'], ['chrome', 'reopenClosed'], ['chrome', 'reloadAll'], ['chrome', 'wsMenu'], ['chrome', 'palette'], ['chrome', 'run', { type: 'next-unread' }], ['chrome', 'run', { type: 'queue-open' }],
-  ['chrome', 'approveOpen'], ['chrome', 'approveInline', { x: 700, y: 5, width: 28, height: 28 }], ['chrome', 'approveInlineAnchor', { x: 700, y: 5, width: 28, height: 28 }],
+  ['chrome', 'approveOpen'], ['chrome', 'approveKeepAwakeToggle'], ['chrome', 'approveInline', { x: 700, y: 5, width: 28, height: 28 }], ['chrome', 'approveInlineAnchor', { x: 700, y: 5, width: 28, height: 28 }],
   ['chrome', 'recoveryOpen'], ['chrome', 'saveRetry'], ['chrome', 'focusOther', 2, 7], ['chrome', 'wakePane', 1], ['chrome', 'loadCancel', 1], ['chrome', 'probeResume'],
   ['chrome', 'back', 1], ['chrome', 'forward', 1], ['chrome', 'reload', 1], ['chrome', 'maximize', 1], ['chrome', 'paneMenu', 1], ['chrome', 'sleepToggle', 1], ['chrome', 'close', 1],
   ['chrome', 'focusPane', 2], ['chrome', 'navigate', 1, 'grok.com/bot/abc'], ['chrome', 'navigate', 1, ''], ['chrome', 'swap', 1, 3], ['chrome', 'copyPaneUrl', 1], ['chrome', 'activatePane', 3],

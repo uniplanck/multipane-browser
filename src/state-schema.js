@@ -24,7 +24,7 @@ const UC = require('./usage-config');
 const GM = require('./gbar-mode');
 const AS = require('./approve-setting');
 const { DRAFT } = require('./pane-rules');
-const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts'];
+const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake'];
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 

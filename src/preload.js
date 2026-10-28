@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('mpb', {
   reloadAll: () => send('reload-all'), reopenClosed: () => send('reopen-closed'),
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id), loadCancel: id => send('load-cancel', id),
   probeResume: () => send('probe-resume'),
-  approveOpen: rect => send('approve-open', rect), approveInline: rect => send('approve-inline-open', rect),
+  approveOpen: rect => send('approve-open', rect), approveInline: rect => send('approve-inline-open', rect), approveKeepAwakeToggle: () => send('approve-keep-awake-toggle'),
   approveInlineAnchor: rect => send('approve-inline-anchor', rect), focusOther: (wid, pid) => send('focus-other', wid, pid),
   saveRetry: () => send('save-retry'), recoveryOpen: () => send('recovery-open'),
   onMem: cb => listen('mem', (_, data) => cb(data)), onOthers: cb => listen('others', (_, l) => cb(l)),

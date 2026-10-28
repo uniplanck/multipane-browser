@@ -139,6 +139,7 @@ const CHANNELS = {
   'dock-end': { roles: CHROME },
   add: { roles: CHROME }, 'reopen-closed': { roles: CHROME }, 'reload-all': { roles: CHROME }, 'ws-menu': { roles: CHROME },
   'approve-open': { roles: CHROME, shape: a => a.length <= 1 && opt(a[0], approveRect) },
+  'approve-keep-awake-toggle': { roles: CHROME, shape: a => a.length === 0 },
   'approve-inline-open': { roles: CHROME, shape: a => a.length === 1 && approveRect(a[0]) },
   'approve-inline-anchor': { roles: CHROME, shape: a => a.length === 1 && approveRect(a[0]) },
   palette: { roles: CHROME }, ready: { roles: CHROME }, 'save-retry': { roles: CHROME }, 'recovery-open': { roles: CHROME },

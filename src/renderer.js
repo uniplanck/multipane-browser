@@ -45,9 +45,32 @@ function renderApproveButton(a) {
   $('#approve-label').textContent = a.label;
   $('#approve-label').hidden = !a.label;
   $('#approve-btn').classList.toggle('icon-only', !a.label);
-  setTip($('#approve-btn'), name, a.configured ? (a.label ? `${a.label}を別の画面で開きます。` : '設定したBotを別の画面で開きます。') : '右クリックまたはクリックでBotのリンクを設定します。');
+  $('#approve-btn').classList.toggle('keep-awake', a.keepAwake === true);
+  setTip($('#approve-btn'), name, a.configured ? (a.label ? `${a.label}を別の画面で開きます。` : '設定したBotを別の画面で開きます。') : '右クリックまたはクリックでBotのリンクを設定します。', '',
+    `現在: ${a.keepAwake === true ? '常時起動' : '自動スリープ'}・長押しで切り替えます。`);
 }
-$('#approve-btn').onclick = () => mpb.approveOpen(approveButtonRect());
+const approveBtn = $('#approve-btn');
+let approveHold = GbarLongPress.idle(), approveFeedback = null;
+const clearApproveFeedback = () => { if (approveFeedback) approveFeedback.cancel(); approveFeedback = null; };
+const cancelApproveHold = e => { approveHold = GbarLongPress.cancel(approveHold, e); if (!approveHold.press) clearApproveFeedback(); };
+approveBtn.onpointerdown = e => {
+  clearApproveFeedback(); approveHold = GbarLongPress.begin(e);
+  if (approveHold.press) approveFeedback = approveBtn.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
+};
+approveBtn.onpointermove = e => { approveHold = GbarLongPress.move(approveHold, e); if (!approveHold.press) clearApproveFeedback(); };
+approveBtn.onpointerleave = approveBtn.onpointercancel = cancelApproveHold;
+approveBtn.addEventListener('dragstart', () => cancelApproveHold());
+approveBtn.onpointerup = e => {
+  const result = GbarLongPress.release(approveHold, e); approveHold = result.state;
+  if (!approveHold.press) clearApproveFeedback();
+  if (result.openHere) mpb.approveKeepAwakeToggle();
+};
+approveBtn.onclick = e => {
+  const result = GbarLongPress.click(approveHold, e); approveHold = result.state;
+  clearApproveFeedback();
+  if (result.suppress) { e.preventDefault(); e.stopPropagation(); return; }
+  mpb.approveOpen(approveButtonRect());
+};
 $('#approve-btn').oncontextmenu = e => { e.preventDefault(); mpb.approveInline(approveButtonRect()); };
 mpb.onApproveAnchorRequest(() => mpb.approveInlineAnchor(approveButtonRect()));
 let approveSavedTimer;

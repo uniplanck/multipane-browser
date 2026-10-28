@@ -445,7 +445,7 @@ ipcOn('focus-other', (r, wid, pid) => {
 const DEFAULT_APPROVE_URL = 'https://grok.com/bot/c3d3eb49-6bb6-4fed-b4ee-995046412ea9';
 const DEFAULT_APPROVE_LABEL = 'Tibo';
 const AS = require('./approve-setting');
-const APPROVE_KEEP_MS = 5 * 60000;                                                   // keep the hidden popup page this long for a fast reopen, then free its memory
+const APPROVE_KEEP_MS = require('./sleep-rules').SLEEP_WAIT_MS;                       // hidden popup is closest to a waiting pane; use its default idle time
 const approveEffective = () => AS.effective(settings, process.env.MULTIPANE_APPROVE_URL, DEFAULT_APPROVE_URL, DEFAULT_APPROVE_LABEL);
 function setApproveSettings(value) {
   if (value) {
@@ -458,6 +458,12 @@ function setApproveSettings(value) {
   ctxs.forEach(c => c.approveChanged());
   broadcast();
   return true;
+}
+function toggleApproveKeepAwake() {
+  settings.approveKeepAwake = settings.approveKeepAwake !== true;
+  save();
+  ctxs.forEach(c => c.syncApproveSleep());
+  broadcast();
 }
 
 // ---- links opened from page content (bot output, citations, attachments, popups) ----
@@ -1020,7 +1026,7 @@ function sendState(cs = cells()) {
     platform: process.platform, dark: nativeTheme.shouldUseDarkColors, colors: COLORS,
     canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
     usage: UC.view(settings),                                // 使用量表示: which gauges show and where each one's numbers come from
-    approve: (() => { const a = approveEffective(); return { label: a.label, configured: !!a.url, source: a.source }; })(),
+    approve: (() => { const a = approveEffective(); return { label: a.label, configured: !!a.url, source: a.source, keepAwake: settings.approveKeepAwake === true }; })(),
     panes: panes.map((p, i) => {
       const wc = p.view.webContents, lt = lqView(p), rv = RP.view(p.rcv);   // its load in the queue (#31): waiting (with its place) / running; (#32) recovery
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -2287,10 +2293,16 @@ function approveChanged() {
   win.contentView.removeChildView(approve); win.contentView.addChildView(approve);
   approve.setBounds(r); approve.setVisible(true); approve.webContents.focus();
 }
+function syncApproveSleep() {
+  clearTimeout(approveTimer); approveTimer = null;
+  if (settings.approveKeepAwake !== true && !approveOpen && approve && !approve.webContents.isDestroyed()) {
+    approveTimer = setTimeout(() => { approveTimer = null; if (settings.approveKeepAwake !== true && !approveOpen) destroyApprove(); }, APPROVE_KEEP_MS);
+  }
+}
 function hideApprove() {
   approveOpen = false;
   try { approve?.setVisible(false); } catch {}
-  clearTimeout(approveTimer); approveTimer = setTimeout(destroyApprove, APPROVE_KEEP_MS);
+  syncApproveSleep();
 }
 function openOverlay(mode, extra = {}) {
   if (!overlay) return;
@@ -2763,6 +2775,7 @@ on('usage-pop-leave', () => popLater());
 on('usage-pop-size', h => { if (popOpen && !overlayOpen) { overlay.setBounds(popBounds(Number(h))); if (tipCurrent) showTip(tipCurrent); } });
 on('ws-menu', () => wsMenu());
 on('approve-open', rect => openApprove(rect));
+on('approve-keep-awake-toggle', () => toggleApproveKeepAwake());
 on('approve-inline-open', rect => openApproveInline(rect));
 on('approve-inline-anchor', rect => {
   if (approveAnchorPending) openApproveInline(rect);
@@ -2879,7 +2892,7 @@ function snapshot() {
 
 const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get overlayOpen() { return overlayOpen; }, get overlayMode() { return overlayMode; }, get panes() { return panes; },
   draftConfig() { panes.forEach(p => { if (!p.view.webContents.isDestroyed()) p.view.webContents.send('mpb:draft-config', draftsEnabled()); }); },
-  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, paneMenu, applyPreset,
+  reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, syncApproveSleep, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },

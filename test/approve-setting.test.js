@@ -15,9 +15,9 @@ assert(AS.grokPage(bot) && AS.grokPage('https://grok.com/') && AS.grokPage('http
 for (const input of ['about:blank', 'http://grok.com/', 'https://grok.com.evil.com/', 'https://sub.grok.com/', 'https://grok.com:444/', 'https://user@grok.com/', 'https://x.com/']) assert(!AS.grokPage(input));
 assert(AS.validLabel('  Bot  ') && AS.validLabel('') && AS.validLabel('猫'.repeat(20)) && AS.validLabel('😀'.repeat(20)));
 assert(!AS.validLabel('猫'.repeat(21)) && !AS.validLabel('A\nB') && !AS.validLabel('\u0085') && !AS.validLabel(4));
-assert.strictEqual(AS.label('  名前  ', 'Tibo'), '名前');
-assert.strictEqual(AS.label('  ', 'Tibo'), '');
-assert.strictEqual(AS.label(undefined, 'Tibo'), 'Tibo');
+assert.strictEqual(AS.label('  名前  ', 'Example Bot'), '名前');
+assert.strictEqual(AS.label('  ', 'Example Bot'), '');
+assert.strictEqual(AS.label(undefined, 'Example Bot'), 'Example Bot');
 assert(AS.validUrl('') && AS.validUrl('   ') && AS.validUrl(bot));
 for (const input of [null, 'invalid', 'https://evil.com/bot/a', '\n', bot + '\n', 'x'.repeat(AS.URL_MAX + 1)]) assert(!AS.validUrl(input));
 assert.strictEqual(AS.paneLabel(`  ${'😀'.repeat(21)}\n  `), '😀'.repeat(20));
@@ -43,14 +43,14 @@ assert.strictEqual(AS.paneLabel(`  ${'😀'.repeat(21)}\n  `), '😀'.repeat(20)
     assert.strictEqual(AS.httpsImage(value), '');
 }
 
-let effective = AS.effective({ approveUrl: `${bot}/?q=a`, approveLabel: '  名前  ' }, other, def, 'Tibo');
+let effective = AS.effective({ approveUrl: `${bot}/?q=a`, approveLabel: '  名前  ' }, other, def, 'Example Bot');
 assert.deepStrictEqual(effective, { url: bot, label: '名前', source: 'setting' });
-assert.deepStrictEqual(AS.effective({ approveUrl: 'invalid', approveLabel: '' }, `${other}#hash`, def, 'Tibo'), { url: other, label: '', source: 'environment' });
-assert.deepStrictEqual(AS.effective({ approveUrl: '', approveLabel: '' }, other, def, 'Tibo'), { url: '', label: '', source: 'setting' });
-assert.deepStrictEqual(AS.effective({ approveUrl: '', approveLabel: '名前' }, other, def, 'Tibo'), { url: '', label: '名前', source: 'setting' });
-assert.deepStrictEqual(AS.effective({ approveLabel: '' }, other, def, 'Tibo'), { url: other, label: '', source: 'environment' });
-assert.deepStrictEqual(AS.effective({ approveUrl: bot }, other, def, 'Tibo'), { url: bot, label: 'Tibo', source: 'setting' });
-assert.deepStrictEqual(AS.effective({}, 'invalid', def, 'Tibo'), { url: def, label: 'Tibo', source: 'default' });
+assert.deepStrictEqual(AS.effective({ approveUrl: 'invalid', approveLabel: '' }, `${other}#hash`, def, 'Example Bot'), { url: other, label: '', source: 'environment' });
+assert.deepStrictEqual(AS.effective({ approveUrl: '', approveLabel: '' }, other, def, 'Example Bot'), { url: '', label: '', source: 'setting' });
+assert.deepStrictEqual(AS.effective({ approveUrl: '', approveLabel: '名前' }, other, def, 'Example Bot'), { url: '', label: '名前', source: 'setting' });
+assert.deepStrictEqual(AS.effective({ approveLabel: '' }, other, def, 'Example Bot'), { url: other, label: '', source: 'environment' });
+assert.deepStrictEqual(AS.effective({ approveUrl: bot }, other, def, 'Example Bot'), { url: bot, label: 'Example Bot', source: 'setting' });
+assert.deepStrictEqual(AS.effective({}, 'invalid', def, 'Example Bot'), { url: def, label: 'Example Bot', source: 'default' });
 assert.deepStrictEqual(AS.effective({}, 'invalid', '', 'Helper'), { url: '', label: 'Helper', source: 'unset' });
 assert.strictEqual(AS.effective({}, other, '', 'Helper').url, other);
 assert.strictEqual(AS.effective({ approveUrl: bot }, other, '', 'Helper').url, bot);
@@ -112,7 +112,7 @@ const openCode = segment(main, 'function openApprove(rect) {', 'function openApp
 const changeCode = segment(main, 'function approveChanged() {', 'function hideApprove() {');
 const destroyCode = segment(main, 'function destroyApprove() {', 'function openApprove(rect) {');
 {
-  const events = [], settings = {}, ctx = { AS, settings, DEFAULT_APPROVE_LABEL: 'Tibo', save: () => events.push('save'),
+  const events = [], settings = {}, ctx = { AS, settings, DEFAULT_APPROVE_LABEL: 'Example Bot', save: () => events.push('save'),
     ctxs: [{ approveChanged: () => events.push('window1') }, { approveChanged: () => events.push('window2') }], broadcast: () => events.push('broadcast') };
   const code = segment(main, 'function setApproveSettings(value) {', '// ---- links opened from page content');
   vm.runInNewContext(`${code}\nsetApproveSettings({url:'${bot}/?q=x',label:'  名前  '});`, ctx);
@@ -281,12 +281,13 @@ assert(read('src/style.css').includes('#approve-btn.icon-only'));
 
 // The chrome uses its actual button rectangle for click, right-click and anchor requests.
 {
-  const calls = [], label = {}, classes = {}, button = { getBoundingClientRect: () => anchor, classList: { toggle: (k, v) => { classes[k] = v; } } };
-  const ctx = { $: sel => sel === '#approve-btn' ? button : label, setTip: (_, name, desc) => calls.push({ name, desc }),
+  const calls = [], label = {}, classes = {}, button = { getBoundingClientRect: () => anchor, classList: { toggle: (k, v) => { classes[k] = v; } },
+    addEventListener() {}, animate: () => ({ cancel() {} }) };
+  const ctx = { $: sel => sel === '#approve-btn' ? button : label, setTip: (_, name, desc) => calls.push({ name, desc }), GbarLongPress: require('../src/gbar-long-press'),
     mpb: { approveOpen: r => calls.push({ action: 'open', rect: r }), approveInline: r => calls.push({ action: 'inline', rect: r }),
       approveInlineAnchor: r => calls.push({ action: 'anchor', rect: r }), onApproveAnchorRequest: cb => { ctx.request = cb; } } };
   vm.runInNewContext(segment(renderer, 'function approveButtonRect() {', 'let approveSavedTimer;'), ctx);
-  button.onclick(); assert.strictEqual(calls[0].action, 'open'); assert.strictEqual(JSON.stringify(calls[0].rect), JSON.stringify(anchor));
+  button.onclick({ detail: 0 }); assert.strictEqual(calls[0].action, 'open'); assert.strictEqual(JSON.stringify(calls[0].rect), JSON.stringify(anchor));
   let prevented = false; button.oncontextmenu({ preventDefault: () => { prevented = true; } });
   assert(prevented && calls[1].action === 'inline'); assert.strictEqual(JSON.stringify(calls[1].rect), JSON.stringify(anchor));
   ctx.request(); assert.strictEqual(calls[2].action, 'anchor');
@@ -295,8 +296,8 @@ assert(read('src/style.css').includes('#approve-btn.icon-only'));
   assert.deepStrictEqual(calls[3], { name: '右上ボタンのBot', desc: '設定したBotを別の画面で開きます。' });
   ctx.renderApproveButton({ configured: false, label: '' });
   assert(calls[4].desc.includes('右クリックまたはクリック') && label.hidden);
-  ctx.renderApproveButton({ configured: true, label: 'Tibo' });
-  assert.strictEqual(label.textContent, 'Tibo'); assert.strictEqual(label.hidden, false); assert.strictEqual(classes['icon-only'], false);
+  ctx.renderApproveButton({ configured: true, label: 'Example Bot' });
+  assert.strictEqual(label.textContent, 'Example Bot'); assert.strictEqual(label.hidden, false); assert.strictEqual(classes['icon-only'], false);
 }
 
 // The actual overlay handlers render escaped effective values, validate both editors and accept blank fields.
@@ -327,10 +328,10 @@ assert(read('src/style.css').includes('#approve-btn.icon-only'));
   fields['#approve-url'].value = bot;
   fields['#approve-name'].value = 'Bot'; handlers.submit({ preventDefault() {} });
   assert.strictEqual(calls[1].type, 'approve-save'); assert.strictEqual(calls[1].url, bot);
-  ctx.mode = 'approve-inline'; ctx.ctx.bots = [{ id: 'abc-XYZ_123', url: bot, name: 'Tibo', icon: 'https://cdn.example/a.png' },
+  ctx.mode = 'approve-inline'; ctx.ctx.bots = [{ id: 'abc-XYZ_123', url: bot, name: 'Example Bot', icon: 'https://cdn.example/a.png' },
     { id: 'other', url: other, name: '<Bot>', icon: '' }];
-  ctx.renderApproveSettings({ mode: 'approve-inline', bots: ctx.ctx.bots, approve: { url: bot, label: 'Tibo', source: 'default' } });
-  assert(panel.innerHTML.includes(`value="${bot}"`) && panel.innerHTML.includes('value="Tibo"'));
+  ctx.renderApproveSettings({ mode: 'approve-inline', bots: ctx.ctx.bots, approve: { url: bot, label: 'Example Bot', source: 'default' } });
+  assert(panel.innerHTML.includes(`value="${bot}"`) && panel.innerHTML.includes('value="Example Bot"'));
   assert(panel.innerHTML.includes('Botのリンク') && panel.innerHTML.includes('キャンセル'));
   assert(panel.innerHTML.includes('Botを選択（すぐに反映）') && panel.innerHTML.includes('data-approve-pick="other"'));
   assert(panel.innerHTML.includes('&lt;Bot&gt;') && panel.innerHTML.includes('https://cdn.example/a.png') && panel.innerHTML.includes('aria-pressed="true"'));
