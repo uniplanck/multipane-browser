@@ -2,6 +2,40 @@
 // it observes the DOM from the isolated world; draft text goes only to main's private draft store. Restore only types, never sends.
 const { ipcRenderer, webFrame } = require('electron');
 
+// Cover the new document canvas until its own styles have painted. Normal user-origin CSS yields to the page's author styles.
+// paneBackgroundCss / paneBackgroundShouldRemove are hoisted from the shared block built into this sandboxed preload.
+try {
+  if (process.isMainFrame !== false && window.top === window && (/^https?:$/.test(location.protocol) || (location.protocol === 'about:' && location.pathname === 'blank'))) {
+    const bgKey = webFrame.insertCSS(paneBackgroundCss(window.matchMedia('(prefers-color-scheme: dark)').matches), { cssOrigin: 'user' });
+    try {
+      let loaded = false, frames = 0, removed = false;
+      const finish = timedOut => {
+        try {
+          if (removed || !paneBackgroundShouldRemove(loaded, frames, timedOut)) return;
+          removed = true;
+          try { clearTimeout(safety); } catch {}
+          try { webFrame.removeInsertedCSS(bgKey); } catch {}
+        } catch {}
+      };
+      const safety = setTimeout(() => finish(true), 15000);
+      const afterLoad = () => {
+        try {
+          loaded = true;
+          requestAnimationFrame(() => {
+            try {
+              if (removed) return;
+              frames++;
+              requestAnimationFrame(() => { try { frames++; finish(false); } catch {} });
+            } catch {}
+          });
+        } catch {}
+      };
+      if (document.readyState === 'complete') afterLoad();
+      else window.addEventListener('load', afterLoad, { once: true });
+    } catch { try { webFrame.removeInsertedCSS(bgKey); } catch {} }
+  }
+} catch {}
+
 let lastLen = -1, timer = null;
 
 // ---------- grok.com chat message counting ----------

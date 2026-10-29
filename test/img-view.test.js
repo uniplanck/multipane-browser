@@ -32,7 +32,9 @@ t('preload: another site / a subdomain / a look-alike host -> nothing', ['exampl
 { const tp = read('pane-preload.template.js'), i = tp.indexOf('---- 画像ビューアの拡大'), sec = tp.slice(i, tp.indexOf('---- per-pane zoom'));
   t('template: the source of it (the built preload is generated from it); CSS only - no size computed in JS, no resize / observer', i > 0 && /const IMG_VIEW_CSS = /.test(sec)
     && /webFrame\.insertCSS\(IMG_VIEW_CSS\)/.test(sec) && !/getBoundingClientRect|ResizeObserver|MutationObserver|addEventListener\('resize'|\.style\./.test(sec));
-  t('template: never taken out again by the cloud PC code (pcStop removes its own key only)', /webFrame\.removeInsertedCSS\(pcCss\)/.test(tp) && (tp.match(/removeInsertedCSS/g) || []).length === 1); }
+  const removedKeys = [...tp.matchAll(/webFrame\.removeInsertedCSS\(([^)]*)\)/g)].map(m => m[1].trim());
+  t('template: never taken out again by the cloud PC code (pcStop removes its own key only)', removedKeys.filter(k => k === 'pcCss').length === 1
+    && removedKeys.every(k => k === 'pcCss' || k === 'bgKey') && !/removeInsertedCSS/.test(sec)); }
 
 // ---- the CSS text ----
 const RULES = [...CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), decl: m[2] }));

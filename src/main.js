@@ -726,6 +726,11 @@ let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane no
 let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null, maxMode = null;
+function updateViewBackgrounds() {
+  const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
+  for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
+  try { if (approve && !approve.webContents.isDestroyed()) approve.setBackgroundColor(color); } catch {}
+}
 let keyboardFocus = null;                                  // last accepted keyboard owner in this window (including chrome / overlay)
 const rememberKeyboard = wc => wc.on('focus', () => { keyboardFocus = wc; });
 let lastBounds = spec.window?.bounds || null;
@@ -2900,7 +2905,7 @@ function snapshot() {
 }
 
 
-const ctx = { snapshot, ui, paneIpc, get win() { return win; }, get overlay() { return overlay; }, get overlayOpen() { return overlayOpen; }, get overlayMode() { return overlayMode; }, get panes() { return panes; },
+const ctx = { snapshot, ui, paneIpc, updateViewBackgrounds, get win() { return win; }, get overlay() { return overlay; }, get overlayOpen() { return overlayOpen; }, get overlayMode() { return overlayMode; }, get panes() { return panes; },
   draftConfig() { panes.forEach(p => { if (!p.view.webContents.isDestroyed()) p.view.webContents.send('mpb:draft-config', draftsEnabled()); }); },
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, syncApproveSleep, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
@@ -3271,7 +3276,7 @@ function startup() {
   if (process.env.MPB_FAVS) favorites = process.env.MPB_FAVS.split(',').map(s => { const [label, url] = s.split('='); return { id: nextFavId++, url, label }; });
   if (process.env.MPB_THEME) settings.theme = process.env.MPB_THEME;
   nativeTheme.themeSource = ['dark', 'light'].includes(settings.theme) ? settings.theme : 'system';
-  nativeTheme.on('updated', broadcast);
+  nativeTheme.on('updated', () => { ctxs.forEach(c => c.updateViewBackgrounds()); broadcast(); });
   wins.forEach(w => makeWindow(w, { restore: true }));
   { const saved = wins.reduce((a, w) => a + (Array.isArray(w.panes) ? w.panes.slice(0, MAX).filter(s => s && s.snap).length : 0), 0);   // (#22) counts only
     const rs = ctxs.flatMap(c => c.panes).filter(p => p.restored), old = rs.filter(p => p.restored.age !== 'fresh').length;

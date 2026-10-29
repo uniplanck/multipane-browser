@@ -3,6 +3,11 @@
 // into src/pane-preload.js at build time: after editing, run `npm run build:preload` (`npm run check:preload` verifies).
 // Inside the block: plain declarations only (it runs in the page's isolated world) - no require / module / process / Node APIs.
 // SHARED-BEGIN
+// The preload calls these hoisted functions at document start, before the rest of this shared block runs.
+function paneBackgroundCss(dark) {
+  return dark ? ':root{background-color:#1c1c1e;color-scheme:dark}' : ':root{background-color:#ffffff;color-scheme:light}';
+}
+function paneBackgroundShouldRemove(loaded, frames, timedOut) { return timedOut === true || (loaded === true && frames >= 2); }
 // Closing markers of the latest bot message. Text is whitespace-stripped (incl. full-width space); heavy bars -> '-'; bold/backticks/brackets are dropped.
 //   waiting (green) : 🟢 ━━ 《 待機中 》 ━━ 🟢   (+ 待機中30/60 follow-ups; old wordings 入力待機中 / 入力待ち / 出力待ち and the ◆ variants still count)
 //   done (purple)   : 🟣 ━━ ［ 終　了 ］ ━━ 🟣   (nothing left to do / phase finished)
@@ -204,4 +209,4 @@ const msgKey = c => [c.user, c.bot, c.botSince, c.waiting, c.working, c.done, c.
   c.snap ? Object.keys(SNAP).filter(k => k !== 'stable').map(k => c.snap[k]).join(',') + ',' + c.snap.cid : ''].join('/');
 // SHARED-END
 const COMPOSER_JS = `(${composerState})()`;
-module.exports = { QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerState, composerDraft, composerFill, DRAFT, COMPOSER_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };
+module.exports = { paneBackgroundCss, paneBackgroundShouldRemove, QUOTE_MAX, markerOf, clipQuote, requestQuote, requestQuoteSrc, looksAsking, composerState, composerDraft, composerFill, DRAFT, COMPOSER_JS, SNAP, snapOk, snapUsable, snapIssue, readConversation, msgKey };
