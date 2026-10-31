@@ -222,7 +222,7 @@ function ipcSender(e) {                                    // who sent it, from 
   let reg = null, frame = null;
   try { const r = wcReg.get(e.sender.id); if (r && r.wc === e.sender && !e.sender.isDestroyed()) reg = r; } catch {}
   try { const f = e.senderFrame; if (f && !f.isDestroyed()) frame = { top: f.parent === null, detached: f.detached, url: f.url, origin: f.origin }; } catch {}
-  return { reg, sender: { role: reg ? reg.role : null, frame } };
+  return { reg, sender: { role: reg ? reg.role : null, frame, origin: reg ? reg.origin : undefined } };   // origin: the sidebar's, as main created it
 }
 const ipcWorld = r => ({
   owned: !!r && ctxs.includes(r.ctx) && !r.ctx.win.isDestroyed() && (!r.pane || r.ctx.panes.includes(r.pane)),
@@ -561,6 +561,45 @@ function guardUi(wc) {                                       // the window's own
   wc.on('will-navigate', e => { e.preventDefault(); navBlocked(NAV.navigate(e.url, { ui: true }).code, 'ui navigate'); });
   wc.setWindowOpenHandler(() => { navBlocked('E_UI', 'ui window.open'); return { action: 'deny' }; });
 }
+// ---- 進捗サイドバー (sidebar-rules.js): one optional page (settings.sidebarUrl: https, or http on localhost; none by default) docked left of the
+// panes in every window - settings.sidebarOpen / sidebarWidth are one shared setting, like the rest of the bar. Each window has its own view
+// (makeWindow: side*) in its own partition (persist:xg-sidebar: storage the only permission, no download, nothing shared with the panes' login)
+// with its own preload (sidebar-preload.js: window.xgBotsSidebar.focusBot(name) -> 'sidebar:focus-bot', its only IPC). It stays on its URL's
+// origin (routes / hash inside it as usual); a link elsewhere goes to the default browser after a click, window.open never opens a window.
+// Not a pane: never in panes[] (no input guard / sleep / unread / queue / counts / snapshot / Grok bar / closed panes / recovery).
+// Closed: hidden, destroyed SR.KEEP_MS later (opened again in time: the same page). Nothing polls.
+const SR = require('./sidebar-rules');
+let sideSesReady = false;
+function sideSes() {                                         // its partition, set up once: Chrome's UA, storage only (as the background check), no download
+  const ses = require('electron').session.fromPartition(SR.PARTITION);
+  if (sideSesReady) return ses;
+  sideSesReady = true;
+  ses.setUserAgent(chromeUA());
+  const role = 'probe';
+  ses.setPermissionRequestHandler((wc, perm, cb, d = {}) => cb(!PERM.decide(perm, { role, origin: d.requestingUrl, main: d.isMainFrame, top: wc && !wc.isDestroyed() ? wc.getURL() : '' })));
+  ses.setPermissionCheckHandler((wc, perm, origin, d = {}) => !PERM.decide(perm, { role, origin, main: d.isMainFrame, top: wc && !wc.isDestroyed() ? wc.getURL() : '', embedding: d.embeddingOrigin }));
+  ses.on('will-download', e => e.preventDefault());
+  return ses;
+}
+function sidebarSet(patch) { Object.assign(settings, patch); save(); ctxs.forEach(c => c.sideSync()); buildMenu(); }   // every window follows
+function setSidebarUrl(value) {                              // '' = none (closed); a URL is opened right away
+  if (!SR.validUrl(value)) return false;
+  const url = SR.normalizeUrl(value);
+  if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
+  sidebarSet({ sidebarOpen: !!url });
+  return true;
+}
+// a Bot's name from the sidebar page, right after the user's click / key in it (a page's own timer never moves the keyboard; nothing while a prompt is
+// over it): the first pane of that name (the user's name for it before the names read from the page, before the strip's title; the sender's
+// window first), focused exactly as a click on its strip chip (asleep: woken). None: nothing. The name is never logged
+ipcOn('sidebar:focus-bot', (r, name) => { if (recentGesture(r.wc) && !r.ctx.overlayOpen) sidebarFocusBot(r.ctx, name); else dlog('sidebar', 'focus-bot: not right after a click / key in it'); });
+function sidebarFocusBot(from, name) {
+  const wins = [from, ...ctxs.filter(c => c !== from)].filter(c => ctxs.includes(c) && !c.win.isDestroyed());
+  const hit = SR.findBot(name, wins.flatMap(c => c.botNames().map(b => ({ key: { c, id: b.id }, tiers: b.tiers }))));
+  if (!hit) { dlog('sidebar', 'focus-bot: no pane of that name'); return; }
+  if (hit.c !== from) { if (hit.c.win.isMinimized()) hit.c.win.restore(); hit.c.win.show(); hit.c.win.focus(); }   // as a chip of another window
+  hit.c.focusPaneById(hit.id);
+}
 
 // ---- background check of sleeping panes (new bot message while asleep => "unopened") ----
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
@@ -726,10 +765,12 @@ let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane no
 let activeWs = null;                     // name of the saved layout currently loaded / last saved in this window
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null, maxMode = null;
+let side = null, sideUrl = '', sideTimer = null, sideDrag = null;   // 進捗サイドバー: this window's view, the URL it shows, its destroy timer, an edge drag
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
   for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
   try { if (approve && !approve.webContents.isDestroyed()) approve.setBackgroundColor(color); } catch {}
+  try { if (side && !side.webContents.isDestroyed()) side.setBackgroundColor(color); } catch {}
 }
 let keyboardFocus = null;                                  // last accepted keyboard owner in this window (including chrome / overlay)
 const rememberKeyboard = wc => wc.on('focus', () => { keyboardFocus = wc; });
@@ -784,7 +825,11 @@ function applyGrid(g, extra = []) {
 const rowsSave = () => { const st = getStacks(); return { rows: [...getRows()], ...(DL.isFlat(st) ? {} : { stacks: st.map(s => [...s]) }) }; };   // stacks only when a cell stacks
 const sameArr = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const splitKey = () => { const l = getStacks(); return `${Math.max(1, ...l.map(s => s.length))}x${Math.max(1, l.length)}`; };
-const areaNow = () => { const [w, h] = win.getContentSize(); return { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP }; };
+const areaFull = () => { const [w, h] = win.getContentSize(); return { x: GAP, y: TOPBAR + GAP, w: w - 2 * GAP, h: h - TOPBAR - GAP - BOTTOM_GAP }; };
+// (進捗サイドバー) open: its view at the left of the area, the drag strip over the gap, the panes (every layout / split / maximize / half / dock
+// path goes through areaNow) right of it; closed: the whole area, exactly as before
+const sideLay = () => { const v = SR.view(settings); return SR.layout(areaFull(), v.open ? v.width : 0, GAP); };
+const areaNow = () => sideLay().panes;
 function cells(grid = false) {                         // grid: the rows' layout even while a pane is maximized (#51 keyboard moves)
   const n = panes.length; if (!n) return [];
   const area = areaNow();
@@ -865,7 +910,7 @@ function splitStart(axis, i, row) {
     splitMove({ x: sp.x - cb.x, y: sp.y - cb.y });
   }, 16);
 }
-function splitEnd() { if (!splitDrag) return; clearInterval(splitDrag.timer); splitDrag = null; save(); }
+function splitEnd() { sideResizeEnd(); if (!splitDrag) return; clearInterval(splitDrag.timer); splitDrag = null; save(); }   // (進捗サイドバー) its edge drag ends the same way
 function splitReset(axis, row) {
   const g = lastGeom; if (!g) return; const key = `${g.cols}x${g.rows}`;
   if (axis === 'c' && !g.sync && Number.isInteger(row) && settings.splits[key]?.rc) {          // unsynced: double-click resets just that row
@@ -908,6 +953,7 @@ function relayout(animate = false) {
       if (step >= N) clearInterval(animTimer);
     }, 18);
   }
+  sidePlace();
   if (overlayOpen) overlay.setBounds({ x: 0, y: 0, width: win.getContentSize()[0], height: win.getContentSize()[1] });
   if (approveOpen && approve) { const r = approveRect(); approve.setBounds(r); overlay.webContents.send('approve-rect', r); }
   sendState(cs);
@@ -1039,6 +1085,7 @@ function sendState(cs = cells()) {
     canReopen: CP.canReopen(closedStack, panes.length, MAX), globalZoom: gZoom(), syncCols: settings.syncCols !== false, canSync: getRows().length >= 2, splitters: splitters(), sleepGlobal: settings.sleepWaiting !== false, workspaces: Object.keys(workspaces), activeWs: workspaces[activeWs] ? activeWs : null, favorites, windowCount: ctxs.length, store: storeState(), chkHold: probeAuthHold,
     usage: UC.view(settings),                                // 使用量表示: which gauges show and where each one's numbers come from
     approve: (() => { const a = approveEffective(); return { label: a.label, configured: !!a.url, source: a.source, keepAwake: settings.approveKeepAwake === true }; })(),
+    sidebar: (() => { const v = SR.view(settings); return { configured: v.configured, open: v.open, handle: sideLay().handle }; })(),   // 進捗サイドバー: the button, its edge
     panes: panes.map((p, i) => {
       const wc = p.view.webContents, lt = lqView(p), rv = RP.view(p.rcv);   // its load in the queue (#31): waiting (with its place) / running; (#32) recovery
       return { id: p.id, index: i, url: paneUrl(p), title: displayTitle(p), name: p.name || '', color: p.color || 'none',
@@ -2332,7 +2379,7 @@ function openOverlay(mode, extra = {}) {
   if (!updateMode) sendState();
   overlay.webContents.focus();
   if (updateMode) { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
-  if (mode === 'approve-settings' || mode === 'approve-inline') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
+  if (mode === 'approve-settings' || mode === 'approve-inline' || mode === 'sidebar-settings') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
   Promise.resolve().then(() => clipboard.readText()).catch(() => '').then(t => {   // sync or async depending on Electron version
     if (!overlayOpen || overlayMode !== mode) return;         // an older palette / popup must not replace a newer settings screen
     const clip = String(t || '').trim();
@@ -2352,6 +2399,110 @@ function closeOverlay() {
   if (wasUpdate) { keyboardFocus = win.webContents; win.webContents.focus(); return; }
   keyboardFocus = panes[focused]?.view.webContents;
   panes[focused]?.view.webContents.focus();
+}
+// ---- 進捗サイドバー: this window's view of settings.sidebarUrl (global part: sideSes / sidebarSet / sidebarFocusBot) ----
+// the setting changed / the window is new: open -> the view (made once per URL; a renderer gone: a new one), shown by relayout; closed -> hidden,
+// destroyed SR.KEEP_MS later; another URL / none -> the old page goes at once
+function sideSync() {
+  if (!win || win.isDestroyed()) return;
+  const v = SR.view(settings);
+  if (side && sideUrl !== v.url) destroySide();
+  if (v.open) { clearTimeout(sideTimer); sideTimer = null; ensureSide(v.url); }
+  else if (side && !sideTimer) {
+    if (side.webContents.isFocused()) { keyboardFocus = panes[focused]?.view.webContents || win.webContents; keyboardFocus.focus(); }   // the keyboard leaves the hidden page
+    side.setVisible(false);
+    sideTimer = setTimeout(() => { sideTimer = null; if (!SR.view(settings).open) destroySide(); }, SR.KEEP_MS);
+  }
+  relayout();
+}
+function sidePlace() { if (!side) return; const r = SR.view(settings).open ? sideLay().side : null; side.setVisible(!!r); if (r) side.setBounds(r); }   // a window too narrow: none
+function ensureSide(url) {
+  if (side && !side.webContents.isDestroyed() && !side.webContents.isCrashed() && sideUrl === url) return side;
+  destroySide();
+  const v = side = new WebContentsView({ webPreferences: { session: sideSes(), preload: path.join(__dirname, 'sidebar-preload.js'),
+    contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, spellcheck: false } });
+  sideUrl = url;
+  v.setBorderRadius?.(RADIUS);
+  v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
+  const wc = v.webContents;
+  regWc(wc, 'sidebar', { ctx, origin: SR.originOf(url) });  // its one IPC (focusBot) only from this origin (ipc-policy.js)
+  rememberKeyboard(wc);
+  trackGesture(wc);
+  // a new window: never; an http(s) link right after a click -> the default browser. A move off the URL's origin (link / script / redirect): not in
+  // the sidebar (a link the user clicked: the default browser)
+  wc.setWindowOpenHandler(d => { if (SR.httpUrl(d.url) && recentGesture(wc)) openExt(d.url, 'sidebar window.open', true); else navBlocked('E_URL', 'sidebar window.open', wc); return { action: 'deny' }; });
+  wc.on('will-navigate', (e, url0) => {
+    if (e.isMainFrame === false) return;
+    const u = typeof url0 === 'string' ? url0 : e.url;
+    if (SR.navOk(u, url)) return;
+    e.preventDefault();
+    if (SR.httpUrl(u) && recentGesture(wc)) openExt(u, 'sidebar link', true); else navBlocked('E_URL', 'sidebar navigate', wc);
+  });
+  wc.on('will-redirect', (e, url0, inPlace, isMain0) => {
+    if ((typeof e.isMainFrame === 'boolean' ? e.isMainFrame : isMain0) !== true) return;
+    if (!SR.navOk(typeof url0 === 'string' ? url0 : e.url, url)) { e.preventDefault(); navBlocked('E_URL', 'sidebar redirect', wc); }
+  });
+  wc.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });   // the app's keys as in the bar / overlay
+  wc.on('before-mouse-event', (e, m) => {
+    if (m.type === 'mouseUp') splitEnd();                   // a splitter / edge drag released over the page
+    if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
+  });
+  wc.on('context-menu', (e, params) => sideMenu(wc, params));
+  win.contentView.addChildView(v);
+  if (overlayOpen || popOpen) bringOverlayToFront();         // below the overlay / popover / 承認Bot popup, as the panes
+  appLoad(wc, url);
+  return v;
+}
+function destroySide() {
+  clearTimeout(sideTimer); sideTimer = null; sideResizeEnd(false);
+  const v = side; if (!v) return;
+  side = null; sideUrl = '';
+  const wc = v.webContents;
+  if (keyboardFocus === wc) keyboardFocus = null;
+  unregWc(r => r.wc === wc);
+  try { if (!win.isDestroyed()) win.contentView.removeChildView(v); } catch {}
+  try { if (!wc.isDestroyed()) wc.close(); } catch {}
+}
+function sideMenu(wc, params) {
+  if (wc.isDestroyed() || side?.webContents !== wc) return;
+  const items = [];
+  if (params.selectionText) items.push({ label: 'コピー', click: () => wc.copy() });
+  if (params.isEditable) items.push({ label: '切り取り', click: () => wc.cut() }, { label: '貼り付け', click: () => wc.paste() });
+  if (params.linkURL && SR.httpUrl(params.linkURL)) items.push({ label: 'リンクをブラウザで開く', click: () => openExt(params.linkURL, 'sidebar link menu', true) });
+  if (items.length) items.push({ type: 'separator' });
+  items.push({ label: '再読み込み', click: () => { if (!wc.isDestroyed()) wc.reload(); } },
+    { label: '進捗サイドバーのURLを設定…', click: () => openSidebarSettings() },
+    { label: '進捗サイドバーを閉じる', click: () => sidebarSet({ sidebarOpen: false }) });
+  Menu.buildFromTemplate(items).popup({ window: win });
+}
+function sideToggle() { const v = SR.view(settings); if (!v.configured) openSidebarSettings(); else sidebarSet({ sidebarOpen: !v.open }); }   // no URL: the setting
+function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url } }); }
+// a drag of its edge (the strip over the gap): main follows the cursor as for the splitters; released (split-end / the page's mouse-up / 60 s): saved,
+// every window takes the width. A double-click: back to SR.DEFAULT_WIDTH
+function sideResizeStart() {
+  if (!side || !sideLay().side) return;
+  sideResizeEnd(false);
+  const d = sideDrag = { t0: Date.now(), timer: null };
+  d.timer = setInterval(() => {
+    if (sideDrag !== d || win.isDestroyed() || Date.now() - d.t0 > 60000) return sideResizeEnd();
+    const sp = screen.getCursorScreenPoint(), cb = win.getContentBounds();
+    const w = SR.clampWidth(SR.dragWidth(sp.x - cb.x, areaFull(), GAP));
+    if (w !== settings.sidebarWidth) { settings.sidebarWidth = w; relayout(); }
+  }, 16);
+}
+function sideResizeEnd(keep = true) {
+  const d = sideDrag; if (!d) return;
+  clearInterval(d.timer); sideDrag = null;
+  if (keep) { save(); ctxs.forEach(c => { if (c !== ctx) c.sideSync(); }); }
+}
+function sideResizeReset() { sidebarSet({ sidebarWidth: SR.DEFAULT_WIDTH }); }
+// (進捗サイドバー) each pane's names for a Bot's name from the sidebar page (sidebarFocusBot): the user's / the Bot's as the app read it (the Grok
+// bar's name and alias, the page's heading, the sleep screen's) / the title the strip shows (not for an empty pane)
+function botNames() {
+  return panes.map(p => {
+    const u = paneUrl(p), b = grok.bots.find(x => x.id === GB.botId(u)), sn = p.sleepSnap || {};
+    return { id: p.id, tiers: [[p.name || ''], [b ? GB.nameOf(grok, b) : '', b ? b.name : '', sn.name || '', p.pageH1 || '', p.pageHdr || ''], [u ? displayTitle(p) : '']] };
+  });
 }
 function approvePaneItem(p) {
   return { label: 'このBotを右上ボタンにする', enabled: !!AS.normalizeUrl(paneUrl(p)), click: () => {
@@ -2476,6 +2627,7 @@ function runAction(a) {
       break;
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
+    case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none)
     case 'ws-overwrite': closeOverlay(); overwriteWorkspace(String(a.name || ''), !!a.confirm); break;
     case 'ws-load': closeOverlay(); loadWorkspace(a.name); break;
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
@@ -2795,6 +2947,9 @@ on('approve-inline-anchor', rect => {
   if (approveAnchorPending) openApproveInline(rect);
   else if (overlayOpen && overlayMode === 'approve-inline') overlay.webContents.send('approve-inline-anchor', rect);
 });
+on('sidebar-toggle', () => sideToggle());                   // 進捗サイドバー: the bar's button, a drag / double-click of its edge
+on('sidebar-resize-start', () => sideResizeStart());
+on('sidebar-resize-reset', () => sideResizeReset());
 on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
 on('sync-cols', v => syncColsApply(!!v));
 on('sync-reset', () => syncReset());
@@ -2910,6 +3065,7 @@ const ctx = { snapshot, ui, paneIpc, updateViewBackgrounds, get win() { return w
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, syncApproveSleep, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
+  sideSync, botNames, openSidebarSettings,                   // 進捗サイドバー
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   inView, openPane(p) { const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); },   // (#61) notification click: this very pane, not marked read
@@ -2947,6 +3103,7 @@ win.on('close', () => {
   snapshot();
   lq.cancel(t => t.win === ctx, 'WINDOW');                   // (#31) this window's loads / check: the slots go back once its views / check window are gone
   try { approveOpen = false; destroyApprove(); } catch {}
+  try { destroySide(); } catch {}
   if (quitting) return;
   if (ctxs.length === 1) { if (!quitting) saveNow(); return; }            // last window: remember it
   const i = ctxs.indexOf(ctx); if (i >= 0) ctxs.splice(i, 1);  // other windows are forgotten when closed
@@ -2977,7 +3134,7 @@ lq.batch(() => {
   stackLens = DL.read(spec.stacks);                                       // (dock) saved stacked cells (validated against those rows)
   setFocused(Math.min(spec.focused || 0, panes.length - 1));
 });
-relayout();
+sideSync();                                                  // (進捗サイドバー) its view when it is open, then relayout()
 broadcast();
 return ctx;
 }
@@ -3120,6 +3277,7 @@ function buildMenu() {
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),
       { label: 'クラウドPCを開いたら自動で最大化', type: 'checkbox', checked: settings.autoPc !== false, click: m => { settings.autoPc = m.checked; save(); } },
+      { label: '進捗サイドバーを表示（URLは 設定 > 進捗サイドバーのURLを設定…）', type: 'checkbox', enabled: SR.view(settings).configured, checked: SR.view(settings).open, click: m => sidebarSet({ sidebarOpen: m.checked }) },
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, 'ペインズーム 拡大（このペインだけ・個別になります）'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, 'ペインズーム 縮小'),
       acc('CmdOrCtrl+0', () => { const k = cur(); k?.resetPaneZoom(k.focusedPane); }, 'ペインズーム リセット（個別のペインのみ）'),
@@ -3142,6 +3300,7 @@ function buildMenu() {
       `${k}（横${PRESETS[k][0]}×縦${PRESETS[k][1]}）`, { type: 'radio', checked: c?.layout === k })) },
     { label: '設定', submenu: [
       { label: '右上ボタンのBotを設定…', click: () => cur()?.openApproveSettings() },
+      { label: '進捗サイドバーのURLを設定…', click: () => cur()?.openSidebarSettings() },
       { label: 'アップデート', submenu: [
         { label: updateStatus(), enabled: false },
         { label: '今すぐ確認・更新…', click: () => { updateOpen(); updateCheck(false); } },
@@ -3393,7 +3552,7 @@ async function fetchUsage() {
   if (usageBusy) return usageCache;
   usageBusy = true;
   try {
-    const wc = require('electron').webContents.getAllWebContents().find(w => !w.isDestroyed() && /^https:\/\/grok\.com\//.test(w.getURL()));
+    const wc = require('electron').webContents.getAllWebContents().find(w => !w.isDestroyed() && wcReg.get(w.id)?.role !== 'sidebar' && /^https:\/\/grok\.com\//.test(w.getURL()));   // never the 進捗サイドバー (another session)
     if (!wc) throw new Error('no grok pane');
     const bytes = await wc.executeJavaScriptInIsolatedWorld(1002, [{ code: `(async()=>{const q=await fetch('https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig',{method:'POST',credentials:'include',headers:{'content-type':'application/grpc-web+proto','x-grpc-web':'1'},body:new Uint8Array(5)});if(!q.ok)return 'HTTP '+q.status;return Array.from(new Uint8Array(await q.arrayBuffer()));})()` }]);
     if (!Array.isArray(bytes)) throw new Error(String(bytes));

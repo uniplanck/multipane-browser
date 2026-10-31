@@ -122,7 +122,7 @@ t('main.js: both actions in runAction; ⌘J / next-unread unchanged', /case 'que
 t('main.js: the overlay mode is kept for the check and cleared on close', /overlayOpen = true; overlayMode = mode;/.test(main) && /overlayOpen = false; overlayMode = '';/.test(fnBody(main, 'closeOverlay')));
 t('ipc-policy: queue-open from the bar / overlay, queue-pick from the overlay only', J(IPC.ACTIONS['queue-open'].roles) === J(['chrome', 'overlay']) && !IPC.ACTIONS['queue-pick'].roles && !IPC.ACTIONS['queue-pick'].target);
 t('overlay.js: a choice is sent only by run() (Enter / click), never on a state update / hover / search', /act: \{ type: 'queue-pick', id: it\.id, ref: it\.ref \}/.test(ov)
-  && (ov.match(/mpb\.run\(/g) || []).length === (ov.match(/mpb\.run\(act\)|mpb\.run\(action\)|mpb\.run\(\{ type: '(?:bc-|update-|approve-)/g) || []).length
+  && (ov.match(/mpb\.run\(/g) || []).length === (ov.match(/mpb\.run\(act\)|mpb\.run\(action\)|mpb\.run\(\{ type: '(?:bc-|update-|approve-|sidebar-)/g) || []).length
   && !/mpb\.run/.test(ov.match(/^mpb\.onState\([^\n]*/m)[0]) && !/mpb\.run/.test(ov.match(/^list\.onmousemove[^\n]*/m)[0]) && !/mpb\.run/.test(ov.match(/^q\.oninput[^\n]*/m)[0]));
 t('overlay.js: the selection follows its item across updates', /const was = mode === 'queue' && items\[sel\] \? items\[sel\]\.qk : '';/.test(ov) && /sel = mode === 'queue' \? queueSel\(was\)/.test(ov)
   && /if \(mode === 'palette' \|\| mode === 'queue'\) render\(\);/.test(ov));

@@ -6,14 +6,16 @@
 //        pane    = a web pane (pane-preload: coarse page signals only; the local newtab page is a pane too)
 //        probe   = the hidden background check of a sleeping pane (pane-preload; only its message count is used)
 //        approve = the 承認Bot popup (no preload: may not send anything)
+//        sidebar = the 進捗サイドバー page (sidebar-preload.js: focusBot only), on the origin main created it for (sender.origin, from main's registry)
 const path = require('path');
 const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
 const AS = require('./approve-setting');
 const TL = require('./tooltip-list');
 const GS = require('./gbar-sections');
+const SR = require('./sidebar-rules');
 
-const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve'];
+const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve', 'sidebar'];
 const MAX_PANES = 10;                     // = MAX in main.js
 const URL_MAX = 65536;                    // address bar / palette input (main normalises it)
 const TEXT_MAX = 10000;                   // names / labels / ids from the UI (main cuts names to 60)
@@ -100,6 +102,7 @@ const ACTIONS = {
   'approve-pick': { shape: x => Object.keys(x).length === 2 && typeof x.id === 'string' && /^[A-Za-z0-9_-]+$/.test(x.id)
     && x.id !== '__proto__' && !!AS.normalizeUrl('https://grok.com/bot/' + x.id) },
   'approve-reset': { shape: x => Object.keys(x).length === 1 },
+  'sidebar-save': { shape: x => Object.keys(x).length === 2 && SR.validUrl(x.url) },   // 進捗サイドバーのURL ('' = none); main normalises it again
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },
@@ -164,6 +167,11 @@ const CHANNELS = {
   'gbot-menu': { roles: CHROME, shape: a => gid(a[0]), target: (a, w) => w.gbot(a[0]) },
   'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },
   'focus-other': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.winPane(a[0], a[1]) },   // a chip of a pane in another window
+  // 進捗サイドバー: the bar's button (no URL yet: main opens the setting instead), a drag of its edge (the cursor is read by main; the end is
+  // split-end like the splitters) and a double-click on it (back to the default width). Nothing but the press comes from the page
+  'sidebar-toggle': { roles: CHROME, shape: a => a.length === 0 },
+  'sidebar-resize-start': { roles: CHROME, shape: a => a.length === 0 },
+  'sidebar-resize-reset': { roles: CHROME, shape: a => a.length === 0 },
   // Chrome-only, bounded display data. The tooltip window itself has no IPC send API.
   'tip-show': { roles: CHROME, shape: ([p, ...extra]) => !extra.length && obj(p) && Object.keys(p).length === 4 && obj(p.tip)
     && Object.keys(p.tip).every(k => ['name', 'description', 'key', 'detail', 'dark', 'list'].includes(k))
@@ -204,6 +212,8 @@ const CHANNELS = {
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
   'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
   'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)
+  // ---- the 進捗サイドバー page (sidebar-preload.js; contextBridge window.xgBotsSidebar.focusBot): a Bot's name, nothing else ----
+  'sidebar:focus-bot': { roles: ['sidebar'], shape: a => a.length === 1 && SR.nameOk(a[0]) },
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored
@@ -217,9 +227,11 @@ function docMatches(u, file) {
   }
   return p === file;
 }
-const pageOk = (role, frame, origin) => Object.hasOwn(DOCS, role) ? docMatches(frame.url, DOCS[role]) : !origin || frame.origin === origin;
+// the sidebar: exactly the origin main created its view for (a sound web origin; the page may move inside it, never out of it)
+const pageOk = (role, frame, origin, own) => Object.hasOwn(DOCS, role) ? docMatches(frame.url, DOCS[role])
+  : role === 'sidebar' ? typeof own === 'string' && !!own && SR.originOf(own) === own && frame.origin === own : !origin || frame.origin === origin;
 
-// sender: { role: one of ROLES | null (not registered / destroyed), frame: { top, detached, url, origin } | null (gone) }
+// sender: { role: one of ROLES | null (not registered / destroyed), frame: { top, detached, url, origin } | null (gone), origin?: the sidebar's }
 // world:  { owned: sender's window (and pane) still open, pane(id), fav(id), gbot(id): a Bot of the Grok bar, ws(name), winPane(windowId, paneId) }
 function check(ch, sender, args, world) {
   const c = typeof ch === 'string' && Object.hasOwn(CHANNELS, ch) ? CHANNELS[ch] : null;
@@ -228,7 +240,7 @@ function check(ch, sender, args, world) {
   if (!c.roles.includes(sender.role)) return 'E_ROLE';
   const f = sender.frame;
   if (!f || f.top !== true || f.detached === true) return 'E_FRAME';
-  if (!pageOk(sender.role, f, c.origin)) return 'E_PAGE';
+  if (!pageOk(sender.role, f, c.origin, sender.origin)) return 'E_PAGE';
   if (!world || world.owned !== true) return 'E_OWNER';
   const a = Array.isArray(args) ? args : [];
   try {

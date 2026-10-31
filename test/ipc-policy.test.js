@@ -19,13 +19,14 @@ const SND = {
   web: { role: 'pane', frame: frame('https://example.com/a', 'https://example.com') },
   probe: { role: 'probe', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
   approve: { role: 'approve', frame: frame('https://grok.com/bot/abc', 'https://grok.com') },
+  sidebar: { role: 'sidebar', origin: 'https://example.com', frame: frame('https://example.com/#/p/sidebar', 'https://example.com') },   // 進捗サイドバー (origin: main's registry)
 };
 const as = (who, f) => ({ ...SND[who], frame: { ...SND[who].frame, ...f } });
 // the sender's window: panes 1, 2, 3 / favorites 1, 2 / Grok bar Bots 'b1', 'b-2' / workspace 'A'; another window (id 2) has pane 7
 const world = (o = {}) => ({ owned: true, pane: i => [1, 2, 3].includes(i), fav: i => [1, 2].includes(i), gbot: i => ['b1', 'b-2'].includes(i), ws: n => Object.hasOwn({ A: 1 }, n), winPane: (w, p) => w === 2 && p === 7, ...o });
 const W = world();
 const chk = (ch, who, args = [], w = W) => P.check(ch, typeof who === 'string' ? SND[who] : who, args, w);
-const ROLE_SENDER = { chrome: 'chrome', overlay: 'overlay', pane: 'pane', probe: 'probe', approve: 'approve' };
+const ROLE_SENDER = { chrome: 'chrome', overlay: 'overlay', pane: 'pane', probe: 'probe', approve: 'approve', sidebar: 'sidebar' };
 const CH = Object.keys(P.CHANNELS);
 
 // ---- one valid message per channel, shaped like what the app sends today ----
@@ -50,9 +51,10 @@ const SAMPLE = {
   'pane:msgcount': ['pane', [COUNT]], 'pane:draft': ['pane', [true]], 'pane:editing': ['pane', [false]], 'pane:ime': ['pane', [true]], 'pane:sel': ['pane', [true]],
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
   'gbar-sec-toggle': ['chrome', ['待機']],
+  'sidebar:focus-bot': ['sidebar', ['Grok Bot']],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
-for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode']) SAMPLE[ch] = ['chrome', []];
+for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode', 'sidebar-toggle', 'sidebar-resize-start', 'sidebar-resize-reset']) SAMPLE[ch] = ['chrome', []];
 for (const ch of ['pane:pc-opened', 'pane:img-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
 
 // ---- allowed ----
@@ -61,7 +63,8 @@ t('every sample is allowed', CH.every(ch => chk(ch, SAMPLE[ch][0], SAMPLE[ch][1]
 t('every role in a channel is a known role', CH.every(ch => P.CHANNELS[ch].roles.length && P.CHANNELS[ch].roles.every(r => P.ROLES.includes(r))));
 t('the 承認Bot popup may not send anything', CH.every(ch => !P.CHANNELS[ch].roles.includes('approve')));
 t('a probe may only report its message count', CH.filter(ch => P.CHANNELS[ch].roles.includes('probe')).join() === 'pane:msgcount');
-t('panes / probe get no UI channel, the UI no pane channel', CH.every(ch => ch.startsWith('pane:') ? P.CHANNELS[ch].roles.every(r => r === 'pane' || r === 'probe') : P.CHANNELS[ch].roles.every(r => r === 'chrome' || r === 'overlay')));
+t('panes / probe get no UI channel, the UI no pane channel', CH.every(ch => ch.startsWith('pane:') ? P.CHANNELS[ch].roles.every(r => r === 'pane' || r === 'probe') : ch.startsWith('sidebar:') ? P.CHANNELS[ch].roles.join() === 'sidebar' : P.CHANNELS[ch].roles.every(r => r === 'chrome' || r === 'overlay')));
+t('the 進捗サイドバー may only ask to focus a Bot', CH.filter(ch => P.CHANNELS[ch].roles.includes('sidebar')).join() === 'sidebar:focus-bot');
 
 // ---- sender: unregistered / wrong role ----
 t('unregistered sender (no role) -> E_SENDER on every channel', CH.every(ch => chk(ch, { role: null, frame: SND.chrome.frame }, SAMPLE[ch][1]) === 'E_SENDER'));
@@ -175,6 +178,7 @@ const RUNS = [
   { type: 'update-choice', on: true }, { type: 'update-choice', on: false }, { type: 'update-toggle', on: true }, { type: 'update-toggle', on: false },
   { type: 'queue-open' }, { type: 'queue-pick', id: 3, ref: 'bot:abc' }, { type: 'queue-pick', id: 1, ref: '' },
   { type: 'gbot-rename', id: 'b1', value: '新しい名前' }, { type: 'gbot-rename', id: 'b-2', value: '' },
+  { type: 'sidebar-save', url: 'https://example.com/#/p/sidebar' }, { type: 'sidebar-save', url: '' },
 ];
 const CHROME_RUNS = [{ type: 'gbar-sec-toggle', name: '待機' }];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
@@ -298,8 +302,8 @@ const apiCh = {};                                            // mpb.<name> -> th
   t('preload: nothing returns ipcRenderer (send -> undefined, invoke -> Promise, on* -> undefined)', ret);
   t('preload: every on* registers exactly one listener', lis);
   t('preload: listeners never hand the IPC event / ipcRenderer to the page', evt); }
-t(`preload: every channel it sends is in the policy (${Object.keys(apiCh).length} functions)`, Object.values(apiCh).every(ch => P.CHANNELS[ch] && !ch.startsWith('pane:')));
-t('preload: every UI channel in the policy is reachable from preload.js', CH.filter(ch => !ch.startsWith('pane:')).every(ch => Object.values(apiCh).includes(ch)));
+t(`preload: every channel it sends is in the policy (${Object.keys(apiCh).length} functions)`, Object.values(apiCh).every(ch => P.CHANNELS[ch] && !ch.startsWith('pane:') && !ch.startsWith('sidebar:')));
+t('preload: every UI channel in the policy is reachable from preload.js', CH.filter(ch => !ch.startsWith('pane:') && !ch.startsWith('sidebar:')).every(ch => Object.values(apiCh).includes(ch)));
 t('preload: no generic send / invoke / listen in the API', !Object.keys(api).some(k => /^(send|invoke|on|once|listen|emit|ipc|ipcRenderer|electron)$/i.test(k)));
 t('preload: a channel name as argument is just data', (() => { const n = UP.sent.length; api.reload('pane:msgcount'); api.layout('focus-other'); return UP.sent[n].ch === 'reload' && UP.sent[n + 1].ch === 'layout'; })());
 
@@ -319,6 +323,7 @@ const CALLS = [
   ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
   ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'], ['chrome', 'usageWinMenu', 'kimi', 'month-credit'],
   ['chrome', 'aiUsage', 'kimi', false], ['chrome', 'usagePopShow', { right: 700, bottom: 36, kind: 'antigravity', sel: '' }], ['chrome', 'usagePopShow', { right: 760, bottom: 36, kind: 'kimi', sel: '' }],
+  ['chrome', 'sidebarToggle'], ['chrome', 'sidebarResizeStart'], ['chrome', 'sidebarResizeReset'],
   ['chrome', 'usageConnect', 'claude'], ['chrome', 'usageConnect', 'codex'], ['chrome', 'usageConnect', 'kimi'],
   ['overlay', 'usageOpen', 'claude'], ['overlay', 'usageOpen', 'codex'], ['overlay', 'usageOpen', 'kimi'], ['overlay', 'usageOpen', 'antigravity'],
   ['overlay', 'closeOverlay'], ['overlay', 'usagePopKeep'], ['overlay', 'usagePopLeave'], ['overlay', 'usagePopSize', 242], ['overlay', 'usageMargin', 5], ['overlay', 'usageMargin', NaN], ['overlay', 'usage', false],

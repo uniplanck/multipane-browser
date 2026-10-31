@@ -237,6 +237,11 @@ body.split-c{cursor:col-resize} body.split-r{cursor:row-resize}
 #sync-cols.on{color:#fff;background:var(--accent)}
 #sync-cols.na{opacity:.35;cursor:default}
 #sync-cols.pulse{animation:syncpulse .7s ease-out}
+/* 進捗サイドバー: pressed while open, dimmed (still clickable: opens the URL setting) without a URL */
+#sidebar-btn{display:grid;place-items:center;color:var(--dim)}
+#sidebar-btn:hover{color:var(--text)}
+#sidebar-btn.on{color:#fff;background:var(--accent)}
+#sidebar-btn.na{opacity:.45}
 @keyframes syncpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 80%,transparent);transform:scale(1)}40%{transform:scale(1.18)}100%{box-shadow:0 0 0 9px transparent;transform:scale(1)}}
 
 /* 使用量表示: a gauge not shown (設定 > 使用量表示) / Antigravity (no web usage page: icon and "--" only, the popover explains) */

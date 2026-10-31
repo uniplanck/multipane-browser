@@ -186,7 +186,8 @@ const rankOf = tk => tk.data.rank;
   const ALLOWED = { loadInto: 'its definition', appLoad: 'its definition (#72)', reloadPane: 'the reload / wake task body', fixLoad: 'part of a running load, else its own task', navTo: 'another URL: a task (new tab: local)', goHist: 'inside its task',
     openLink: 'inside its task', addPane: 'a task (new tab: local)', probePane: 'the background check task (own window)', sleepPane: 'about:blank: an unload', ensureApprove: '承認Bot popup (not a pane)',
     linkOpen: '承認Bot popup link (not a pane)', makeWindow: 'the window UI / overlay files', prepareTip: 'the local display-only tooltip window (not a pane)', grokRefresh: 'Grok bar: its own hidden window (not a pane), one read at a time, by the Grok button only',
-    usagePage: '使用量表示: its own hidden window in the provider\'s login partition (not a pane), one read at a time', usageConnect: '使用量表示: the provider\'s login window (not a pane)' };
+    usagePage: '使用量表示: its own hidden window in the provider\'s login partition (not a pane), one read at a time', usageConnect: '使用量表示: the provider\'s login window (not a pane)',
+    ensureSide: '進捗サイドバー: its own view in its own partition (not a pane)', sideMenu: '進捗サイドバー: its 再読み込み menu item (not a pane)' };
   const stray = calls.filter(([, f]) => !Object.hasOwn(ALLOWED, f));
   t(`main: every load call is a queue task or a named exception (${calls.length} calls)`, calls.length >= 12 && stray.length === 0);
   if (stray.length) console.log('   stray:', stray);

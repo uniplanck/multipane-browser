@@ -109,7 +109,8 @@ t('main.js: loadFile only for bundled pages (index / overlay / tooltip / new tab
 t('main.js: no hand-made host / scheme tests for links any more (AUTH_HOST, isGrokHost regex, protocol list)', !/AUTH_HOST|const isGrokHost|\(\^\|\\\.\)grok\\\.com\$|\^\(https\?\|mailto/.test(main));
 t('main.js: every window-open handler is decided by the policy (panes / popup: linkOpen; child windows: windowOpen child; probe / UI: deny)', (() => {
   const h = [...main.matchAll(/setWindowOpenHandler\(([^\n]*)/g)].map(m => m[1]);
-  return h.length === 8 && h.filter(s => s.startsWith('d => linkOpen(wc, d))')).length === 2 && h.some(s => /NAV\.windowOpen\(d\.url, \{ child: true \}\)/.test(s))
+  return h.length === 9 && h.filter(s => s.startsWith('d => linkOpen(wc, d))')).length === 2
+    && h.filter(s => s.startsWith("d => { if (SR.httpUrl(d.url) && recentGesture(wc)) openExt(d.url, 'sidebar window.open', true); else navBlocked(") && s.endsWith("return { action: 'deny' }; });")).length === 1   // 進捗サイドバー: never a window && h.some(s => /NAV\.windowOpen\(d\.url, \{ child: true \}\)/.test(s))
     && h.filter(s => s.startsWith("() => ({ action: 'deny' })")).length === 3 && h.some(s => /navBlocked\('E_UI'/.test(s))   // deny: the background check + the Grok bar's read + the usage reader
     && /wc\.setWindowOpenHandler\(d => \{\s*const r = NAV\.windowOpen\(d\.url, \{ login: true \}\);/.test(fn('usageConnect')); })());   // the usage login window: sign-in popups as child windows
 t('main.js: the usage display\'s login window and hidden reader go through guardNavigation + appLoad, the reader opens no window and has no preload',
@@ -129,7 +130,7 @@ t('main.js: the click / key comes from the browser (input-event), not from the p
 t('main.js: a new / restored pane and the address bar refuse what appLoad refuses (new pane -> new tab; address bar -> nothing)', /url: paneStart\(normalize\(spec\.url\)\)/.test(fn('addPane')) && /if \(paneStart\(u\) !== u\) \{ navBlocked\([^}]*return; \}[^\n]*\n\s*guardRun\(/.test(fn('openIn')));
 t('main.js: the link menu opens only what the policy allows (explicit choice)', /enabled: panes\.length < MAX && !NAV\.appLoad\(params\.linkURL\)/.test(main) && /openExt\(params\.linkURL, 'link menu', true\)/.test(main) && /openExt\(paneUrl\(p\), 'pane menu'\)/.test(main));
 t('main.js: refusals record a fixed code only', /diag\.rec\('nav\.block', code, \{ p: p && p\.id \}, 60000\);/.test(fn('navBlocked')) && !/dlog\([^\n]*\burl\b/.test(fn('navBlocked')));
-t('main.js: every page, including the tooltip, keeps sandbox and isolation', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 10
+t('main.js: every page, including the tooltip, keeps sandbox and isolation', count(main, /contextIsolation: true, nodeIntegration: false, sandbox: true/g) === 11   // + the 進捗サイドバー
   && /guardUi\(tipWindow\.webContents\)/.test(fn('prepareTip')) && /preload: path\.join\(__dirname, 'tooltip-preload\.js'\), contextIsolation: true, nodeIntegration: false, sandbox: true/.test(fn('prepareTip'))
   && !/sandbox: false|nodeIntegration: true|contextIsolation: false|webSecurity: false|allowRunningInsecureContent/.test(main));
 

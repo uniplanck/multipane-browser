@@ -163,7 +163,7 @@ t('the wait: dropped when another pane is focused, settled on relayout / showVie
   /if \(navWait && navWait\.id !== panes\[i\]\.id\) navEnd\('DROP'\);/.test(MAIN) && (MAIN.match(/navSettle\(\);/g) || []).length === 2
   && /wc\.on\('before-mouse-event', onMouse\); w\.off = \(\) => \{ try \{ wc\.off\('before-mouse-event', onMouse\); \} catch \{\} \};/.test(MAIN));
 t('a pane\'s keys: held back before the input revision / read mark (#11), shortcuts still work', /if \(navHolds\(p, input\)\) \{ if \(!handleKey\(input, p\)\) diag\.rec\('nav', 'HELD', \{ p: p\.id \}, 60000\); e\.preventDefault\(\); return; \}[^\n]*\n    if \(input\.type === 'keyDown' && !input\.meta && !input\.control\) \{ clearUnread\(p\); p\.inputRev\+\+; \}/.test(MAIN));
-t('the keys come only through handleKey (window UI / overlay / panes), no new IPC', (MAIN.match(/handleKey\(input\)\) e\.preventDefault\(\)/g) || []).length === 2 && !/navKey|queueNext/.test(fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8')));
+t('the keys come only through handleKey (window UI / overlay / 進捗サイドバー / panes), no new IPC', (MAIN.match(/handleKey\(input\)\) e\.preventDefault\(\)/g) || []).length === 3 && !/navKey|queueNext/.test(fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8')));
 
 console.log(bad ? `\n${bad} failed` : '\nall passed');
 process.exit(bad ? 1 : 0);

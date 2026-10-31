@@ -17,6 +17,8 @@
 // repair; validate() wants booleans and exactly what usage-config clean() keeps. Other settings are not looked at (as before).
 // (Grok bar 表示モード) settings.gbarMode (gbar-mode.js: 'normal' / 'semi' / 'compact'): optional, no new schema (none = 通常). Anything else is
 // repaired to 'normal'; validate() wants one of the modes.
+// (進捗サイドバー) settings.sidebarOpen (boolean), sidebarWidth (220-560) and sidebarUrl (sidebar-rules.js: https / loopback http, normalised):
+// optional, no new schema (none = closed, 300 px, no URL). A non-boolean flag / unusable URL is dropped, a width out of range clamped, as a repair.
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
 const GB = require('./grok-bots');
@@ -24,8 +26,9 @@ const UC = require('./usage-config');
 const GM = require('./gbar-mode');
 const GS = require('./gbar-sections');
 const AS = require('./approve-setting');
+const SR = require('./sidebar-rules');
 const { DRAFT } = require('./pane-rules');
-const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake'];
+const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake', 'sidebarOpen'];
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 
@@ -84,6 +87,8 @@ function validate(doc) {
     if (doc.settings.gbarSecOpen !== undefined && !GS.valid(doc.settings.gbarSecOpen)) e.push('settings.gbarSecOpen: not a clean section list');
     if (doc.settings.approveUrl !== undefined && (!AS.validUrl(doc.settings.approveUrl) || AS.normalizeUrl(doc.settings.approveUrl) !== doc.settings.approveUrl)) e.push('settings.approveUrl: not a normalized Bot URL');
     if (doc.settings.approveLabel !== undefined && (!AS.validLabel(doc.settings.approveLabel) || doc.settings.approveLabel !== doc.settings.approveLabel.trim())) e.push('settings.approveLabel: not a clean label');
+    if (doc.settings.sidebarWidth !== undefined && SR.clampWidth(doc.settings.sidebarWidth) !== doc.settings.sidebarWidth) e.push('settings.sidebarWidth: not a width');
+    if (doc.settings.sidebarUrl !== undefined && (typeof doc.settings.sidebarUrl !== 'string' || (doc.settings.sidebarUrl !== '' && SR.normalizeUrl(doc.settings.sidebarUrl) !== doc.settings.sidebarUrl))) e.push('settings.sidebarUrl: not a normalized URL');
   }
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
   else Object.values(doc.workspaces).forEach((ws, i) => e.push(...groupErrors(ws, `workspaces#${i}`)));
@@ -163,6 +168,14 @@ function migrate(raw) {
       if (value === null) delete settings[key]; else settings[key] = value;
       fixes.push(`settings.${key}: ${value === null ? 'dropped' : 'repaired'}`);
     }
+  }
+  if (isObj(settings) && settings.sidebarWidth !== undefined && SR.clampWidth(settings.sidebarWidth) !== settings.sidebarWidth) {   // (進捗サイドバー) into 220-560 (not a number: 300)
+    settings = { ...settings, sidebarWidth: SR.clampWidth(settings.sidebarWidth) }; fixes.push('settings.sidebarWidth: repaired');
+  }
+  if (isObj(settings) && settings.sidebarUrl !== undefined && settings.sidebarUrl !== '' && SR.normalizeUrl(settings.sidebarUrl) !== settings.sidebarUrl) {   // unusable: no sidebar
+    const url = typeof settings.sidebarUrl === 'string' ? SR.normalizeUrl(settings.sidebarUrl) : '';
+    settings = { ...settings }; if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
+    fixes.push(`settings.sidebarUrl: ${url ? 'repaired' : 'dropped'}`);
   }
   const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings, workspaces };
   const errors = validate(doc);

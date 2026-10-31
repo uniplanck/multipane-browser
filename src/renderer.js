@@ -243,6 +243,13 @@ function syncBtn(s) {
 syncEl.onmousedown = () => { syncHeld = false; clearTimeout(syncHold); if (!S || !S.canSync) return; syncHold = setTimeout(() => { syncHeld = true; mpb.syncReset(); syncEl.classList.add('pulse'); setTimeout(() => syncEl.classList.remove('pulse'), 700); }, 600); };
 syncEl.onmouseup = syncEl.onmouseleave = () => clearTimeout(syncHold);
 syncEl.onclick = () => { if (syncHeld || !S || !S.canSync) return; mpb.syncCols(S.syncCols === false); };
+// 進捗サイドバー: pressed while open; no URL yet -> dimmed, a click opens the setting (main decides either way)
+const sideEl = $('#sidebar-btn');
+function sideBtn(sb) {
+  sideEl.classList.toggle('on', !!sb.open); sideEl.classList.toggle('na', !sb.configured); sideEl.setAttribute('aria-pressed', String(!!sb.open));
+  setTip(sideEl, '進捗サイドバー', sb.configured ? 'タスクの進み具合を横に表示します。' : '設定でサイドバーのURLを入れると使えます。', '', sb.configured ? (sb.open ? '表示中・クリックで閉じます。' : 'クリックで開きます。') : 'クリックでURLを設定します。');
+}
+sideEl.onclick = () => mpb.sidebarToggle();
 function renderSummaryTips(s) {
   const lists = TooltipList.fromState(s, G);
   $('#unread-sum').dataset.tipList = JSON.stringify(lists.unread);
@@ -252,6 +259,7 @@ const onS = s => {
   S = s;
   renderFavs(s.favorites || []);
   if (s.approve) renderApproveButton(s.approve);
+  if (s.sidebar) sideBtn(s.sidebar);
   document.body.classList.toggle('light', !s.dark);
   document.body.classList.toggle('has-max', s.maximizedId != null && s.maxMode === 'full');
   $('#presets').querySelectorAll('button').forEach(b => { const active = b.dataset.k === (s.effLayout || s.layout); b.classList.toggle('active', active); b.dataset.tipDetail = active ? '現在のレイアウト' : ''; });
@@ -313,6 +321,15 @@ const onS = s => {
     e.ondblclick = () => mpb.splitReset(g.axis, g.row);
     sh.appendChild(e);
   });
+  { const g = s.sidebar && s.sidebar.handle;                 // 進捗サイドバー: its edge (the gap right of it), dragged like a splitter
+    if (g) {
+      const e = document.createElement('div'); e.className = 'splitter c side';
+      Object.assign(e.style, { left: g.x + 'px', top: g.y + 'px', width: g.w + 'px', height: g.h + 'px' });
+      setTip(e, 'サイドバーの幅を調整', 'ドラッグで幅を変えます。', '', 'ダブルクリックで元の幅に戻します。');
+      e.onmousedown = ev => { ev.preventDefault(); document.body.classList.add('splitting', 'split-c'); mpb.sidebarResizeStart(); };
+      e.ondblclick = () => mpb.sidebarResizeReset();
+      sh.appendChild(e);
+    } }
 
   // pane cards
   for (const [id, d] of els) if (!ids.includes(id)) { d.classList.add('leaving'); els.delete(id); setTimeout(() => d.remove(), 160); }

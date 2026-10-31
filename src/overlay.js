@@ -133,7 +133,7 @@ list.onclick = e => { const el = e.target.closest('.it'); if (el) run(Number(el.
 $('#scrim').onclick = () => mpb.closeOverlay();
 function apRect(r) { if (!r) return; const e = $('#apshadow'); Object.assign(e.style, { left: r.x + 'px', top: r.y + 'px', width: r.width + 'px', height: r.height + 'px' }); }
 mpb.onApproveRect(apRect);
-addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'approve-settings' || mode === 'approve-inline' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
+addEventListener('keydown', e => { if ((mode === 'approve' || mode === 'approve-settings' || mode === 'approve-inline' || mode === 'sidebar-settings' || mode === 'update' || mode === 'update-first') && e.key === 'Escape') { mpb.closeOverlay(); e.preventDefault(); } });
 addEventListener('resize', () => { if (mode === 'approve-inline') positionApproveInline(); });
 mpb.onApproveInlineAnchor(anchor => { if (mode === 'approve-inline') { ctx.anchor = anchor; positionApproveInline(); } });
 mpb.onState(s => { S = s; document.body.classList.toggle('light', !s.dark); if (mode === 'palette' || mode === 'queue') render(); else if (mode === 'broadcast') renderBc(true);
@@ -144,7 +144,7 @@ mpb.onOverlayOpen(o => {
   $('#box').style.left = ''; $('#box').style.top = '';
   document.body.classList.toggle('approve', mode === 'approve');
   document.body.classList.toggle('update', mode === 'update' || mode === 'update-first');
-  document.body.classList.toggle('approve-settings', mode === 'approve-settings');
+  document.body.classList.toggle('approve-settings', mode === 'approve-settings' || mode === 'sidebar-settings');   // 進捗サイドバー: the same panel
   document.body.classList.toggle('approve-inline', mode === 'approve-inline');
   document.body.classList.toggle('diag', mode === 'diag');
   document.body.classList.toggle('queue', mode === 'queue');
@@ -152,6 +152,7 @@ mpb.onOverlayOpen(o => {
   items = [];                                                // (#01) nothing kept from the previous screen
   if (mode === 'update' || mode === 'update-first') { document.body.classList.toggle('light', !o.dark); renderUpdate(o); return; }
   if (mode === 'approve-settings' || mode === 'approve-inline') { document.body.classList.toggle('light', !o.dark); renderApproveSettings(o); return; }
+  if (mode === 'sidebar-settings') { document.body.classList.toggle('light', !o.dark); renderSidebarSettings(o); return; }
   if (mode === 'approve') { apRect(o.rect); return; }
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
@@ -194,8 +195,25 @@ function renderApproveSettings(o) {
   if (inline) positionApproveInline();
   setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#approve-url')?.focus(); }, 0);
 }
+// 進捗サイドバー: the page shown left of the panes (main checks the URL again; saving one opens the sidebar, an empty one turns it off)
+function renderSidebarSettings(o) {
+  approveSettingsPanel.innerHTML = `<div class="update-head"><span class="update-icon">▤</span><h2>進捗サイドバー</h2></div>
+    <p class="update-copy">ペインの左に表示するページのURLを設定します。https:// で始まるURL（開発用に http://localhost も可）だけ使えます。<br>空欄で保存するとサイドバーを使いません。ページからは <code>window.xgBotsSidebar.focusBot(名前)</code> でそのBotのペインへ移動できます。</p>
+    <form id="sidebar-settings-form" novalidate>
+      <label class="approve-field">ページのURL<input id="sidebar-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://example.com/#/p/sidebar" value="${esc((o.sidebar && o.sidebar.url) || '')}"></label>
+      <div id="approve-error" role="alert" aria-live="polite"></div>
+      <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="cancel">キャンセル</button><button class="approve-reset" type="button" data-sidebar-action="clear">URLを消す</button></div>
+    </form>`;
+  setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#sidebar-url')?.focus(); }, 0);
+}
 approveSettingsPanel.addEventListener('submit', e => {
   e.preventDefault();
+  if (mode === 'sidebar-settings') {
+    const url = approveSettingsPanel.querySelector('#sidebar-url').value;
+    if (!SidebarRules.validUrl(url)) { approveSettingsPanel.querySelector('#approve-error').textContent = 'https:// で始まるURLを入力してください（開発用に http://localhost も使えます）。'; return; }
+    mpb.run({ type: 'sidebar-save', url: url.trim() });
+    return;
+  }
   const url = approveSettingsPanel.querySelector('#approve-url').value, label = approveSettingsPanel.querySelector('#approve-name').value;
   const error = approveSettingsPanel.querySelector('#approve-error');
   if (!ApproveSetting.validUrl(url)) { error.textContent = 'https://grok.com/bot/ で始まるBotのURLを入力してください。'; if (mode === 'approve-inline') positionApproveInline(); return; }
@@ -207,6 +225,7 @@ approveSettingsPanel.addEventListener('input', () => { const error = approveSett
 approveSettingsPanel.addEventListener('click', e => {
   const pick = e.target.closest('[data-approve-pick]');
   if (pick && mode === 'approve-inline') { mpb.run({ type: 'approve-pick', id: pick.dataset.approvePick }); return; }
+  if (mode === 'sidebar-settings' && e.target.closest('[data-sidebar-action="clear"]')) { mpb.run({ type: 'sidebar-save', url: '' }); return; }
   const action = e.target.closest('[data-approve-action]')?.dataset.approveAction;
   if (action === 'reset') mpb.run({ type: 'approve-reset' });
   else if (action === 'cancel') mpb.closeOverlay();

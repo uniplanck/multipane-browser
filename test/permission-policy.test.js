@@ -115,8 +115,9 @@ t('main.js: both the request and the check handler are set, and both ask PERM.de
 // check ('probe': storage only), in usageSes; no other handler
 const fnOf = name => { const i = main.indexOf(`function ${name}(`); if (i < 0) return ''; let d = 0, j = main.indexOf('{', main.indexOf(')', i)); for (; j < main.length; j++) { if (main[j] === '{') d++; else if (main[j] === '}' && --d === 0) break; } return main.slice(i, j + 1); };
 const uses = fnOf('usageSes');
-t('main.js: no other permission decision (no fixed allow list, no other handler)', !/const allowed = new Set|allowed\.has\(/.test(main) && (main.match(/setPermission\w+Handler\(/g) || []).length === 4 && !/setDevicePermissionHandler|setDisplayMediaRequestHandler/.test(main)
-  && (uses.match(/setPermission\w+Handler\(/g) || []).length === 2 && (uses.match(/!PERM\.decide\(perm, \{ role,/g) || []).length === 2 && /const role = 'probe';/.test(uses));
+t('main.js: no other permission decision (no fixed allow list, no other handler)', !/const allowed = new Set|allowed\.has\(/.test(main) && (main.match(/setPermission\w+Handler\(/g) || []).length === 6 && !/setDevicePermissionHandler|setDisplayMediaRequestHandler/.test(main)
+  && [uses, fnOf('sideSes')].every(f => (f.match(/setPermission\w+Handler\(/g) || []).length === 2 && (f.match(/!PERM\.decide\(perm, \{ role,/g) || []).length === 2 && /const role = 'probe';/.test(f)));   // + the 進捗サイドバー's partition: storage only
+t('main.js: the 進捗サイドバー partition: no download, Chrome\'s user agent', /ses\.on\('will-download', e => e\.preventDefault\(\)\);/.test(fnOf('sideSes')) && /ses\.setUserAgent\(chromeUA\(\)\);/.test(fnOf('sideSes')));
 t('main.js: the usage login partitions: no download, Chrome\'s user agent', /ses\.on\('will-download', e => e\.preventDefault\(\)\);/.test(uses) && /ses\.setUserAgent\(chromeUA\(\)\);/.test(uses));
 t('main.js: the role comes from main\'s registry (not registered: a window a page opened; no page: a worker)', /const permRole = wc => \{ if \(!wc\) return 'worker'; try \{ const r = wcReg\.get\(wc\.id\); return r && r\.wc === wc \? r\.role : 'popup'; \} catch \{ return 'popup'; \} \};/.test(ready));
 t('main.js: will-download asks PERM.download (cancels otherwise) and saves under PERM.downloadName in ~/Downloads, never opened by itself', /on\('will-download', \(e, item, wc\) => \{\s*if \(permDenied\('download', PERM\.download\(permRole\(wc\)\), wc\)\) \{ e\.preventDefault\(\); return; \}\s*const dir = app\.getPath\('downloads'\); const name = PERM\.downloadName\(item\.getFilename\(\)\);/.test(ready)
@@ -126,8 +127,9 @@ t('main.js: a refusal records a fixed code only (no origin / URL)', /diag\.rec\(
 // login partitions (usage-web.js PROV: persist:usage-<kind>), opened in usageSes and used only by its login window and its hidden reader
 { const U = require('../src/usage-web');
   const parts = [...main.matchAll(/partition:\s*([^,}]+)/g)].map(m => m[1].trim());
-  t('main.js: the session is the shared default session except the usage login partitions', parts.length === 2 && parts.every(p => p === 'P.partition')
-    && (main.match(/session\.fromPartition\(/g) || []).length === 1 && /session\.fromPartition\(UW\.PROV\[k\]\.partition\)/.test(uses) && !/fromPath\(/.test(main)
+  t('main.js: the session is the shared default session except the usage login partitions and the 進捗サイドバー\'s', parts.length === 2 && parts.every(p => p === 'P.partition')
+    && (main.match(/session\.fromPartition\(/g) || []).length === 2 && /session\.fromPartition\(UW\.PROV\[k\]\.partition\)/.test(uses) && /session\.fromPartition\(SR\.PARTITION\)/.test(fnOf('sideSes')) && !/fromPath\(/.test(main)
+    && /session: sideSes\(\)/.test(fnOf('ensureSide')) && require('../src/sidebar-rules').PARTITION === 'persist:xg-sidebar'
     && ['usageWebReadNow', 'usageConnect'].every(f => /partition: P\.partition/.test(fnOf(f)))
     && Object.values(U.PROV).every(p => /^persist:usage-[a-z]+$/.test(p.partition)) && new Set(Object.values(U.PROV).map(p => p.partition)).size === Object.keys(U.PROV).length); }
 
