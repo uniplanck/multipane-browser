@@ -6,7 +6,7 @@
 //        pane    = a web pane (pane-preload: coarse page signals only; the local newtab page is a pane too)
 //        probe   = the hidden background check of a sleeping pane (pane-preload; only its message count is used)
 //        approve = the 承認Bot popup (no preload: may not send anything)
-//        sidebar = the 進捗サイドバー page (sidebar-preload.js: focusBot only), on the origin main created it for (sender.origin, from main's registry)
+//        sidebar = the 進捗サイドバー page (sidebar-preload.js: focusBot / jump / state / settings), on the origin main created it for (sender.origin, from main's registry)
 const path = require('path');
 const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
@@ -102,7 +102,7 @@ const ACTIONS = {
   'approve-pick': { shape: x => Object.keys(x).length === 2 && typeof x.id === 'string' && /^[A-Za-z0-9_-]+$/.test(x.id)
     && x.id !== '__proto__' && !!AS.normalizeUrl('https://grok.com/bot/' + x.id) },
   'approve-reset': { shape: x => Object.keys(x).length === 1 },
-  'sidebar-save': { shape: x => Object.keys(x).length === 2 && SR.validUrl(x.url) },   // 進捗サイドバーのURL ('' = none); main normalises it again
+  'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again) + 開く前に確認する
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },
@@ -167,9 +167,10 @@ const CHANNELS = {
   'gbot-menu': { roles: CHROME, shape: a => gid(a[0]), target: (a, w) => w.gbot(a[0]) },
   'gbot-move': { roles: CHROME, shape: a => gid(a[0]) && gid(a[1]), target: (a, w) => w.gbot(a[0]) && w.gbot(a[1]) },
   'focus-other': { roles: CHROME, shape: a => id(a[0]) && id(a[1]), target: (a, w) => w.winPane(a[0], a[1]) },   // a chip of a pane in another window
-  // 進捗サイドバー: the bar's button (no URL yet: main opens the setting instead), a drag of its edge (the cursor is read by main; the end is
-  // split-end like the splitters) and a double-click on it (back to the default width). Nothing but the press comes from the page
+  // 進捗サイドバー: the bar's button (no URL yet: main opens the setting instead) / a right-click on it (the setting), a drag of its edge (the cursor
+  // is read by main; the end is split-end like the splitters) and a double-click on it (back to the default width). Nothing but the press comes from the page
   'sidebar-toggle': { roles: CHROME, shape: a => a.length === 0 },
+  'sidebar-settings': { roles: CHROME, shape: a => a.length === 0 },
   'sidebar-resize-start': { roles: CHROME, shape: a => a.length === 0 },
   'sidebar-resize-reset': { roles: CHROME, shape: a => a.length === 0 },
   // Chrome-only, bounded display data. The tooltip window itself has no IPC send API.
@@ -212,8 +213,12 @@ const CHANNELS = {
   'pane:editing': { roles: PANE, shape: a => bool(a[0]) },
   'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
   'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)
-  // ---- the 進捗サイドバー page (sidebar-preload.js; contextBridge window.xgBotsSidebar.focusBot): a Bot's name, nothing else ----
+  // ---- the 進捗サイドバー page (sidebar-preload.js; contextBridge window.xgBotsSidebar): a Bot's name (focusBot), a jump ({ name, agentId?: a UUID,
+  // open?: boolean } - never a URL; ipcHandle: main answers with the result), the state of the panes (ipcHandle, no argument), its settings screen ----
   'sidebar:focus-bot': { roles: ['sidebar'], shape: a => a.length === 1 && SR.nameOk(a[0]) },
+  'sidebar:jump': { roles: ['sidebar'], shape: a => a.length === 1 && SR.jumpOk(a[0]) },
+  'sidebar:get-state': { roles: ['sidebar'], shape: a => a.length === 0 },
+  'sidebar:open-settings': { roles: ['sidebar'], shape: a => a.length === 0 },
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored

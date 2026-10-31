@@ -17,8 +17,9 @@
 // repair; validate() wants booleans and exactly what usage-config clean() keeps. Other settings are not looked at (as before).
 // (Grok bar 表示モード) settings.gbarMode (gbar-mode.js: 'normal' / 'semi' / 'compact'): optional, no new schema (none = 通常). Anything else is
 // repaired to 'normal'; validate() wants one of the modes.
-// (進捗サイドバー) settings.sidebarOpen (boolean), sidebarWidth (220-560) and sidebarUrl (sidebar-rules.js: https / loopback http, normalised):
-// optional, no new schema (none = closed, 300 px, no URL). A non-boolean flag / unusable URL is dropped, a width out of range clamped, as a repair.
+// (進捗サイドバー) settings.sidebarOpen (boolean), sidebarWidth (220-560), sidebarUrl (sidebar-rules.js: https / loopback http, normalised) and
+// sidebarConfirmOpen (boolean: 開く前に確認する): optional, no new schema (none = closed, 300 px, no URL, ask before opening). A non-boolean flag /
+// unusable URL is dropped, a width out of range clamped, as a repair.
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
 const GB = require('./grok-bots');
@@ -28,7 +29,7 @@ const GS = require('./gbar-sections');
 const AS = require('./approve-setting');
 const SR = require('./sidebar-rules');
 const { DRAFT } = require('./pane-rules');
-const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake', 'sidebarOpen'];
+const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake', 'sidebarOpen', 'sidebarConfirmOpen'];
 const SCHEMA_VERSION = 1;
 const MAX_PANES = 10, MAX_FAVS = 100;
 

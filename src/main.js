@@ -564,7 +564,7 @@ function guardUi(wc) {                                       // the window's own
 // ---- 進捗サイドバー (sidebar-rules.js): one optional page (settings.sidebarUrl: https, or http on localhost; none by default) docked left of the
 // panes in every window - settings.sidebarOpen / sidebarWidth are one shared setting, like the rest of the bar. Each window has its own view
 // (makeWindow: side*) in its own partition (persist:xg-sidebar: storage the only permission, no download, nothing shared with the panes' login)
-// with its own preload (sidebar-preload.js: window.xgBotsSidebar.focusBot(name) -> 'sidebar:focus-bot', its only IPC). It stays on its URL's
+// with its own preload (sidebar-preload.js: window.xgBotsSidebar focusBot / jump / onState / getState / openSettings on 'sidebar:*', its only IPC). It stays on its URL's
 // origin (routes / hash inside it as usual); a link elsewhere goes to the default browser after a click, window.open never opens a window.
 // Not a pane: never in panes[] (no input guard / sleep / unread / queue / counts / snapshot / Grok bar / closed panes / recovery).
 // Closed: hidden, destroyed SR.KEEP_MS later (opened again in time: the same page). Nothing polls.
@@ -582,24 +582,60 @@ function sideSes() {                                         // its partition, s
   return ses;
 }
 function sidebarSet(patch) { Object.assign(settings, patch); save(); ctxs.forEach(c => c.sideSync()); buildMenu(); }   // every window follows
-function setSidebarUrl(value) {                              // '' = none (closed); a URL is opened right away
+function setSidebarUrl(value, confirm) {                     // '' = none (closed); a URL is opened right away. confirm: 開く前に確認する (absent: as it is)
   if (!SR.validUrl(value)) return false;
   const url = SR.normalizeUrl(value);
   if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
-  sidebarSet({ sidebarOpen: !!url });
+  if (typeof confirm === 'boolean') settings.sidebarConfirmOpen = confirm;
+  sidebarSet({ sidebarOpen: !!url });                        // -> sideSync / relayout / sendState: the pages get the new confirmOpen (sideStateSoon)
   return true;
 }
 // a Bot's name from the sidebar page, right after the user's click / key in it (a page's own timer never moves the keyboard; nothing while a prompt is
 // over it): the first pane of that name (the user's name for it before the names read from the page, before the strip's title; the sender's
 // window first), focused exactly as a click on its strip chip (asleep: woken). None: nothing. The name is never logged
 ipcOn('sidebar:focus-bot', (r, name) => { if (recentGesture(r.wc) && !r.ctx.overlayOpen) sidebarFocusBot(r.ctx, name); else dlog('sidebar', 'focus-bot: not right after a click / key in it'); });
-function sidebarFocusBot(from, name) {
-  const wins = [from, ...ctxs.filter(c => c !== from)].filter(c => ctxs.includes(c) && !c.win.isDestroyed());
-  const hit = SR.findBot(name, wins.flatMap(c => c.botNames().map(b => ({ key: { c, id: b.id }, tiers: b.tiers }))));
-  if (!hit) { dlog('sidebar', 'focus-bot: no pane of that name'); return; }
+const sideWins = from => [from, ...ctxs.filter(c => c !== from)].filter(c => ctxs.includes(c) && !c.win.isDestroyed());   // the sender's window first
+const sidePanes = from => sideWins(from).flatMap(c => c.botNames().map(b => ({ key: { c, id: b.id }, url: b.url, tiers: b.tiers, active: c === from && b.active })));
+function sideShow(from, hit) {                               // a pane found for the sidebar: shown exactly as a click on its strip chip (asleep: woken)
   if (hit.c !== from) { if (hit.c.win.isMinimized()) hit.c.win.restore(); hit.c.win.show(); hit.c.win.focus(); }   // as a chip of another window
   hit.c.focusPaneById(hit.id);
 }
+function sidebarFocusBot(from, name) {
+  const hit = SR.findBot(name, sidePanes(from));
+  if (!hit) { dlog('sidebar', 'focus-bot: no pane of that name'); return; }
+  sideShow(from, hit);
+}
+// window.xgBotsSidebar.jump({ name, agentId, open }): the same gate as focus-bot ('blocked' otherwise), then SR.jump over every window's panes
+// (the sender's first): a pane on https://grok.com/bot/<agentId>, else the first of that name -> shown as focus-bot does, the keyboard put into
+// its composer (composerFocus) -> 'focused'. None, open: true and an agentId -> a new pane of https://grok.com/bot/<agentId> in the sender's
+// window, as ＋ with that URL (saved like any pane; a full window: none, 'blocked'), its composer once loaded -> 'opened'. None otherwise ->
+// 'nomatch' (an agentId: the page may ask the user, then send open: true) / 'none'. The URL is built here from the UUID; only the result is logged
+ipcHandle('sidebar:jump', (r, req) => ({ result: sidebarJump(r, req) }));
+function sidebarJump(r, req) {
+  if (!recentGesture(r.wc) || r.ctx.overlayOpen) { dlog('sidebar', 'jump: not right after a click / key in it'); return 'blocked'; }
+  const plan = SR.jump(req, sidePanes(r.ctx));
+  if (plan.result === 'focused') { sideShow(r.ctx, plan.key); plan.key.c.composerFocus(plan.key.id); }
+  else if (plan.result === 'opened') {
+    const p = r.ctx.openBot(plan.url);
+    if (!p) { dlog('sidebar', 'jump: the window is full'); return 'blocked'; }
+    r.ctx.composerFocus(p.id);
+  }
+  dlog('sidebar', 'jump', plan.result);
+  return plan.result;
+}
+// what the page is told (window.xgBotsSidebar.onState / getState), to its own sidebar view only: every window's panes (this window's first) as
+// SR.state gives them - the agentId of a grok.com/bot/<uuid> page (nothing else of any URL), a few names of findBot's tiers, whether it is this
+// window's active pane - and settings.sidebarConfirmOpen. Pushed 200 ms after a change (any window's sendState: panes added / closed / renamed /
+// moved / activated, the setting) and when its page has loaded; an unchanged state is not sent again. Nothing polls
+const sideState = from => SR.state(sidePanes(from), SR.confirmOpen(settings));
+ipcHandle('sidebar:get-state', r => sideState(r.ctx));
+let sideStateTimer = null;
+function sideStateSoon() {
+  if (sideStateTimer || !SR.view(settings).configured) return;   // no URL: no sidebar view anywhere (nothing to tell)
+  sideStateTimer = setTimeout(() => { sideStateTimer = null; ctxs.forEach(c => { try { c.sidePush(); } catch {} }); }, 200);
+}
+// its gear (window.xgBotsSidebar.openSettings): the 進捗サイドバー settings screen of that window, with the same gate as focus-bot
+ipcOn('sidebar:open-settings', r => { if (recentGesture(r.wc) && !r.ctx.overlayOpen) r.ctx.openSidebarSettings(); else dlog('sidebar', 'open-settings: not right after a click / key in it'); });
 
 // ---- background check of sleeping panes (new bot message while asleep => "unopened") ----
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
@@ -766,6 +802,7 @@ let activeWs = null;                     // name of the saved layout currently l
 let approve = null, approveOpen = false, approveTimer = null, approvePane = null;
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null, maxMode = null;
 let side = null, sideUrl = '', sideTimer = null, sideDrag = null;   // 進捗サイドバー: this window's view, the URL it shows, its destroy timer, an edge drag
+let sideSent = '';                                           // (進捗サイドバー) the state its page was told last (JSON; '' = none yet)
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
   for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
@@ -1104,6 +1141,7 @@ function sendState(cs = cells()) {
   state.qNote = overlayOpen && overlayMode === 'queue' ? queueNote : '';
   win.webContents.send('state', state);
   scheduleOthers();
+  sideStateSoon();                                           // (進捗サイドバー) its page's view of the panes (onState), 200 ms later
   if (overlayOpen) overlay.webContents.send('state', state);
 }
 // ---- 対応キュー (#01, attention-queue.js): each pane's facts as this state shows them -> the list; p.qSince follows the kind (gone with the item).
@@ -2065,6 +2103,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
   });
   wc.on('focus', () => paneGotFocus(p));
   wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown' && !p.sleeping) focusPane(panes.indexOf(p)); });   // native input, never a fix's synthetic click
+  wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown') p.cmpAt = null; });   // (進捗サイドバー) a click in the page: a jump's keyboard move waiting for it is dropped
   wc.on('before-mouse-event', (e, m) => {
     if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
   });
@@ -2448,6 +2487,7 @@ function ensureSide(url) {
     if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
   });
   wc.on('context-menu', (e, params) => sideMenu(wc, params));
+  wc.on('did-finish-load', () => sidePush(true));            // a (re)loaded page: the state at once (onState / getState)
   win.contentView.addChildView(v);
   if (overlayOpen || popOpen) bringOverlayToFront();         // below the overlay / popover / 承認Bot popup, as the panes
   appLoad(wc, url);
@@ -2456,7 +2496,7 @@ function ensureSide(url) {
 function destroySide() {
   clearTimeout(sideTimer); sideTimer = null; sideResizeEnd(false);
   const v = side; if (!v) return;
-  side = null; sideUrl = '';
+  side = null; sideUrl = ''; sideSent = '';
   const wc = v.webContents;
   if (keyboardFocus === wc) keyboardFocus = null;
   unregWc(r => r.wc === wc);
@@ -2471,12 +2511,62 @@ function sideMenu(wc, params) {
   if (params.linkURL && SR.httpUrl(params.linkURL)) items.push({ label: 'リンクをブラウザで開く', click: () => openExt(params.linkURL, 'sidebar link menu', true) });
   if (items.length) items.push({ type: 'separator' });
   items.push({ label: '再読み込み', click: () => { if (!wc.isDestroyed()) wc.reload(); } },
-    { label: '進捗サイドバーのURLを設定…', click: () => openSidebarSettings() },
+    { label: '進捗サイドバーの設定…', click: () => openSidebarSettings() },
     { label: '進捗サイドバーを閉じる', click: () => sidebarSet({ sidebarOpen: false }) });
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 function sideToggle() { const v = SR.view(settings); if (!v.configured) openSidebarSettings(); else sidebarSet({ sidebarOpen: !v.open }); }   // no URL: the setting
-function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url } }); }
+function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url, confirm: SR.confirmOpen(settings) } }); }
+// the state for its page (sideState: every window's panes, this one's first), sent only when it differs from the last one it got (force: a new page)
+function sidePush(force = false) {
+  const wc = side && side.webContents;
+  if (!wc || wc.isDestroyed() || wc.isCrashed()) return;
+  const st = sideState(ctx), js = JSON.stringify(st);
+  if (!force && js === sideSent) return;
+  sideSent = js;
+  wc.send('sidebar:state', st);
+}
+// (進捗サイドバー) jump: the keyboard into this pane's composer (grok.com pages only: SR.FOCUS_JS in the page's own world SR.WORLD), now or once its
+// page is there (asleep / its load waiting for a slot / loading / a new pane: tried again at each did-stop-loading), within SR.JUMP_WAIT_MS of the jump.
+// Dropped as soon as the user is elsewhere: another pane / the bar / a prompt / the sidebar has the keyboard, a key typed into the pane, a newer
+// jump. One try at a time; no timer polls (the page script itself waits SR.FOCUS_WAIT_MS at most for its composer)
+function composerFocus(id) {
+  const p = byId(id); if (!p) return;
+  const wc = p.view.webContents, at = p.cmpAt = { t0: Date.now(), rev: p.inputRev };
+  let busy = false, again = false;
+  const live = () => p.cmpAt === at && panes.includes(p) && !wc.isDestroyed() && panes[focused] === p && !overlayOpen && p.inputRev === at.rev
+    && keyboardFocus === wc && Date.now() - at.t0 < SR.JUMP_WAIT_MS;
+  const ready = () => { const t = lqView(p); return !p.sleeping && !(t && t.state === 'wait') && !wc.isLoading() && SR.composerPage(wc.getURL()); };   // a load still settling: its page is there
+  const onStop = () => { tryNow(); };
+  const timer = setTimeout(() => end('TIMEOUT'), SR.JUMP_WAIT_MS);
+  function end(code) {
+    clearTimeout(timer);
+    try { wc.removeListener('did-stop-loading', onStop); } catch {}
+    if (p.cmpAt !== at) return;
+    p.cmpAt = null; dlog(`pane${p.id}`, 'composer focus', code);
+  }
+  async function tryNow() {
+    if (!live()) return end('DROP');
+    if (!ready()) return;                                    // not there yet: its next did-stop-loading
+    if (busy) { again = true; return; }
+    busy = true;
+    if (windowActive() && !wc.isFocused()) wc.focus();       // never fronts a window (another window: sideShow did)
+    const r = await Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(SR.WORLD, [{ code: SR.FOCUS_JS }])), sleep(SR.FOCUS_WAIT_MS + 1000).then(() => null)]).catch(() => null);
+    busy = false;
+    if (r === 'focused' && p.cmpAt === at && !wc.isDestroyed() && !wc.isLoading()) return end('OK');
+    if (again) { again = false; tryNow(); }
+  }
+  wc.on('did-stop-loading', onStop);
+  tryNow();
+}
+// (進捗サイドバー) jump with open: true: a new pane of that Bot, as ＋ with its URL (newPane: saved like any pane, focused with the keyboard); a full
+// window: none (never replaces a pane)
+function openBot(url) {
+  if (panes.length >= MAX) return null;
+  const p = newPane(url);
+  if (p) focusPane(panes.indexOf(p), { clear: false });
+  return p;
+}
 // a drag of its edge (the strip over the gap): main follows the cursor as for the splitters; released (split-end / the page's mouse-up / 60 s): saved,
 // every window takes the width. A double-click: back to SR.DEFAULT_WIDTH
 function sideResizeStart() {
@@ -2499,9 +2589,10 @@ function sideResizeReset() { sidebarSet({ sidebarWidth: SR.DEFAULT_WIDTH }); }
 // (進捗サイドバー) each pane's names for a Bot's name from the sidebar page (sidebarFocusBot): the user's / the Bot's as the app read it (the Grok
 // bar's name and alias, the page's heading, the sleep screen's) / the title the strip shows (not for an empty pane)
 function botNames() {
-  return panes.map(p => {
+  return panes.map((p, i) => {
     const u = paneUrl(p), b = grok.bots.find(x => x.id === GB.botId(u)), sn = p.sleepSnap || {};
-    return { id: p.id, tiers: [[p.name || ''], [b ? GB.nameOf(grok, b) : '', b ? b.name : '', sn.name || '', p.pageH1 || '', p.pageHdr || ''], [u ? displayTitle(p) : '']] };
+    return { id: p.id, url: u, active: i === focused,          // url: for SR.jump / SR.state (only a Bot's agentId of it ever reaches the page)
+      tiers: [[p.name || ''], [b ? GB.nameOf(grok, b) : '', b ? b.name : '', sn.name || '', p.pageH1 || '', p.pageHdr || ''], [u ? displayTitle(p) : '']] };
   });
 }
 function approvePaneItem(p) {
@@ -2627,7 +2718,7 @@ function runAction(a) {
       break;
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
-    case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none)
+    case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
     case 'ws-overwrite': closeOverlay(); overwriteWorkspace(String(a.name || ''), !!a.confirm); break;
     case 'ws-load': closeOverlay(); loadWorkspace(a.name); break;
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
@@ -2947,7 +3038,8 @@ on('approve-inline-anchor', rect => {
   if (approveAnchorPending) openApproveInline(rect);
   else if (overlayOpen && overlayMode === 'approve-inline') overlay.webContents.send('approve-inline-anchor', rect);
 });
-on('sidebar-toggle', () => sideToggle());                   // 進捗サイドバー: the bar's button, a drag / double-click of its edge
+on('sidebar-toggle', () => sideToggle());                   // 進捗サイドバー: the bar's button (a right-click: its settings), a drag / double-click of its edge
+on('sidebar-settings', () => openSidebarSettings());
 on('sidebar-resize-start', () => sideResizeStart());
 on('sidebar-resize-reset', () => sideResizeReset());
 on('split-start', (axis, i, row) => splitStart(String(axis), Number(i), row == null ? undefined : Number(row)));
@@ -3065,7 +3157,7 @@ const ctx = { snapshot, ui, paneIpc, updateViewBackgrounds, get win() { return w
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, syncApproveSleep, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
-  sideSync, botNames, openSidebarSettings,                   // 進捗サイドバー
+  sideSync, botNames, openSidebarSettings, sidePush, composerFocus, openBot,   // 進捗サイドバー
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   inView, openPane(p) { const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); },   // (#61) notification click: this very pane, not marked read
@@ -3277,7 +3369,7 @@ function buildMenu() {
       acc('CmdOrCtrl+\\', () => cur()?.toggleMaximize(), 'ペインを最大化 / 元に戻す'),
       acc('CmdOrCtrl+Shift+P', () => cur()?.togglePc(), 'クラウドPC（Botのコンピュータ画面）を最大化 / 元に戻す'),
       { label: 'クラウドPCを開いたら自動で最大化', type: 'checkbox', checked: settings.autoPc !== false, click: m => { settings.autoPc = m.checked; save(); } },
-      { label: '進捗サイドバーを表示（URLは 設定 > 進捗サイドバーのURLを設定…）', type: 'checkbox', enabled: SR.view(settings).configured, checked: SR.view(settings).open, click: m => sidebarSet({ sidebarOpen: m.checked }) },
+      { label: '進捗サイドバーを表示（URLは 設定 > 進捗サイドバーの設定…）', type: 'checkbox', enabled: SR.view(settings).configured, checked: SR.view(settings).open, click: m => sidebarSet({ sidebarOpen: m.checked }) },
       acc('CmdOrCtrl+=', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) + 0.1); }, 'ペインズーム 拡大（このペインだけ・個別になります）'),
       acc('CmdOrCtrl+-', () => { const k = cur(); k?.setZoom(k.focusedPane, (k.focusedPane?.zoom || 1) - 0.1); }, 'ペインズーム 縮小'),
       acc('CmdOrCtrl+0', () => { const k = cur(); k?.resetPaneZoom(k.focusedPane); }, 'ペインズーム リセット（個別のペインのみ）'),
@@ -3300,7 +3392,7 @@ function buildMenu() {
       `${k}（横${PRESETS[k][0]}×縦${PRESETS[k][1]}）`, { type: 'radio', checked: c?.layout === k })) },
     { label: '設定', submenu: [
       { label: '右上ボタンのBotを設定…', click: () => cur()?.openApproveSettings() },
-      { label: '進捗サイドバーのURLを設定…', click: () => cur()?.openSidebarSettings() },
+      { label: '進捗サイドバーの設定…', click: () => cur()?.openSidebarSettings() },
       { label: 'アップデート', submenu: [
         { label: updateStatus(), enabled: false },
         { label: '今すぐ確認・更新…', click: () => { updateOpen(); updateCheck(false); } },

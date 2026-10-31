@@ -52,9 +52,10 @@ const SAMPLE = {
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
   'gbar-sec-toggle': ['chrome', ['待機']],
   'sidebar:focus-bot': ['sidebar', ['Grok Bot']],
+  'sidebar:jump': ['sidebar', [{ name: 'Grok Bot', agentId: '0f8c2c1e-1234-4abc-9def-0123456789ab', open: true }]], 'sidebar:get-state': ['sidebar', []], 'sidebar:open-settings': ['sidebar', []],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
-for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode', 'sidebar-toggle', 'sidebar-resize-start', 'sidebar-resize-reset']) SAMPLE[ch] = ['chrome', []];
+for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode', 'sidebar-toggle', 'sidebar-settings', 'sidebar-resize-start', 'sidebar-resize-reset']) SAMPLE[ch] = ['chrome', []];
 for (const ch of ['pane:pc-opened', 'pane:img-opened', 'pane:pc-closed', 'pane:msgmode-off', 'pane:mutation', 'pane:interact', 'pane:mouseup', 'pane:typing']) SAMPLE[ch] = ['pane', []];
 
 // ---- allowed ----
@@ -64,7 +65,7 @@ t('every role in a channel is a known role', CH.every(ch => P.CHANNELS[ch].roles
 t('the 承認Bot popup may not send anything', CH.every(ch => !P.CHANNELS[ch].roles.includes('approve')));
 t('a probe may only report its message count', CH.filter(ch => P.CHANNELS[ch].roles.includes('probe')).join() === 'pane:msgcount');
 t('panes / probe get no UI channel, the UI no pane channel', CH.every(ch => ch.startsWith('pane:') ? P.CHANNELS[ch].roles.every(r => r === 'pane' || r === 'probe') : ch.startsWith('sidebar:') ? P.CHANNELS[ch].roles.join() === 'sidebar' : P.CHANNELS[ch].roles.every(r => r === 'chrome' || r === 'overlay')));
-t('the 進捗サイドバー may only ask to focus a Bot', CH.filter(ch => P.CHANNELS[ch].roles.includes('sidebar')).join() === 'sidebar:focus-bot');
+t('the 進捗サイドバー may only focus / jump to a Bot, read the panes\' state and open its settings', CH.filter(ch => P.CHANNELS[ch].roles.includes('sidebar')).join() === 'sidebar:focus-bot,sidebar:jump,sidebar:get-state,sidebar:open-settings');
 
 // ---- sender: unregistered / wrong role ----
 t('unregistered sender (no role) -> E_SENDER on every channel', CH.every(ch => chk(ch, { role: null, frame: SND.chrome.frame }, SAMPLE[ch][1]) === 'E_SENDER'));
@@ -179,6 +180,7 @@ const RUNS = [
   { type: 'queue-open' }, { type: 'queue-pick', id: 3, ref: 'bot:abc' }, { type: 'queue-pick', id: 1, ref: '' },
   { type: 'gbot-rename', id: 'b1', value: '新しい名前' }, { type: 'gbot-rename', id: 'b-2', value: '' },
   { type: 'sidebar-save', url: 'https://example.com/#/p/sidebar' }, { type: 'sidebar-save', url: '' },
+  { type: 'sidebar-save', url: 'https://example.com/#/p/sidebar', confirm: false }, { type: 'sidebar-save', url: '', confirm: true },
 ];
 const CHROME_RUNS = [{ type: 'gbar-sec-toggle', name: '待機' }];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));
@@ -323,7 +325,7 @@ const CALLS = [
   ['chrome', 'usagePopLeave'], ['chrome', 'usagePopShow', { right: 812.5, bottom: 36, kind: 'grok', sel: '' }], ['chrome', 'usagePopShow', { right: 900, bottom: 36.25, kind: 'claude', sel: 'five_hour' }],
   ['chrome', 'usageWinMenu', 'codex', ''], ['chrome', 'usageWinMenu', 'claude', 'seven_day'], ['chrome', 'usageWinMenu', 'kimi', 'month-credit'],
   ['chrome', 'aiUsage', 'kimi', false], ['chrome', 'usagePopShow', { right: 700, bottom: 36, kind: 'antigravity', sel: '' }], ['chrome', 'usagePopShow', { right: 760, bottom: 36, kind: 'kimi', sel: '' }],
-  ['chrome', 'sidebarToggle'], ['chrome', 'sidebarResizeStart'], ['chrome', 'sidebarResizeReset'],
+  ['chrome', 'sidebarToggle'], ['chrome', 'sidebarSettings'], ['chrome', 'sidebarResizeStart'], ['chrome', 'sidebarResizeReset'],
   ['chrome', 'usageConnect', 'claude'], ['chrome', 'usageConnect', 'codex'], ['chrome', 'usageConnect', 'kimi'],
   ['overlay', 'usageOpen', 'claude'], ['overlay', 'usageOpen', 'codex'], ['overlay', 'usageOpen', 'kimi'], ['overlay', 'usageOpen', 'antigravity'],
   ['overlay', 'closeOverlay'], ['overlay', 'usagePopKeep'], ['overlay', 'usagePopLeave'], ['overlay', 'usagePopSize', 242], ['overlay', 'usageMargin', 5], ['overlay', 'usageMargin', NaN], ['overlay', 'usage', false],

@@ -243,13 +243,14 @@ function syncBtn(s) {
 syncEl.onmousedown = () => { syncHeld = false; clearTimeout(syncHold); if (!S || !S.canSync) return; syncHold = setTimeout(() => { syncHeld = true; mpb.syncReset(); syncEl.classList.add('pulse'); setTimeout(() => syncEl.classList.remove('pulse'), 700); }, 600); };
 syncEl.onmouseup = syncEl.onmouseleave = () => clearTimeout(syncHold);
 syncEl.onclick = () => { if (syncHeld || !S || !S.canSync) return; mpb.syncCols(S.syncCols === false); };
-// 進捗サイドバー: pressed while open; no URL yet -> dimmed, a click opens the setting (main decides either way)
+// 進捗サイドバー: pressed while open; no URL yet -> dimmed, a click opens the setting (main decides either way); a right-click: the settings screen
 const sideEl = $('#sidebar-btn');
 function sideBtn(sb) {
   sideEl.classList.toggle('on', !!sb.open); sideEl.classList.toggle('na', !sb.configured); sideEl.setAttribute('aria-pressed', String(!!sb.open));
-  setTip(sideEl, '進捗サイドバー', sb.configured ? 'タスクの進み具合を横に表示します。' : '設定でサイドバーのURLを入れると使えます。', '', sb.configured ? (sb.open ? '表示中・クリックで閉じます。' : 'クリックで開きます。') : 'クリックでURLを設定します。');
+  setTip(sideEl, '進捗サイドバー', sb.configured ? 'タスクの進み具合を横に表示します。' : '設定でサイドバーのURLを入れると使えます。', '', sb.configured ? (sb.open ? '表示中・クリックで閉じます。右クリックで設定。' : 'クリックで開きます。右クリックで設定。') : 'クリックでURLを設定します。');
 }
 sideEl.onclick = () => mpb.sidebarToggle();
+sideEl.oncontextmenu = e => { e.preventDefault(); mpb.sidebarSettings(); };
 function renderSummaryTips(s) {
   const lists = TooltipList.fromState(s, G);
   $('#unread-sum').dataset.tipList = JSON.stringify(lists.unread);

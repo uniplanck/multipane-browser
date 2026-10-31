@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('mpb', {
   gbotMove: (a, b) => send('gbot-move', a, b), onGbar: cb => listen('gbar', (_, v) => cb(v)),
   renamePane: id => send('rename-pane', id),
   chipMenu: id => send('chip-menu', id), wsMenu: () => send('ws-menu'),
-  sidebarToggle: () => send('sidebar-toggle'), sidebarResizeStart: () => send('sidebar-resize-start'), sidebarResizeReset: () => send('sidebar-resize-reset'),   // 進捗サイドバー
+  sidebarToggle: () => send('sidebar-toggle'), sidebarSettings: () => send('sidebar-settings'), sidebarResizeStart: () => send('sidebar-resize-start'), sidebarResizeReset: () => send('sidebar-resize-reset'),   // 進捗サイドバー
   splitStart: (a, i, row) => send('split-start', a, i, row), syncCols: v => send('sync-cols', v), syncReset: () => send('sync-reset'), splitEnd: () => send('split-end'), splitReset: (a, row) => send('split-reset', a, row),
   reloadAll: () => send('reload-all'), reopenClosed: () => send('reopen-closed'),
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id), loadCancel: id => send('load-cancel', id),
