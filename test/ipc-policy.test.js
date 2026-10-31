@@ -52,7 +52,7 @@ const SAMPLE = {
   'gbot-open': ['chrome', ['b1', 'here']], 'gbot-menu': ['chrome', ['b-2']], 'gbot-move': ['chrome', ['b-2', 'b1']], 'pane:img-closed': ['pane', [true]],
   'gbar-sec-toggle': ['chrome', ['待機']],
   'sidebar:focus-bot': ['sidebar', ['Grok Bot']],
-  'sidebar:jump': ['sidebar', [{ name: 'Grok Bot', agentId: '0f8c2c1e-1234-4abc-9def-0123456789ab', open: true }]], 'sidebar:get-state': ['sidebar', []], 'sidebar:open-settings': ['sidebar', []],
+  'sidebar:jump': ['sidebar', [{ name: 'Grok Bot', agentId: 'dddddddd-dddd-dddd-dddd-dddddddddddd', open: true }]], 'sidebar:get-state': ['sidebar', []], 'sidebar:open-settings': ['sidebar', []],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
 for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode', 'sidebar-toggle', 'sidebar-settings', 'sidebar-resize-start', 'sidebar-resize-reset']) SAMPLE[ch] = ['chrome', []];

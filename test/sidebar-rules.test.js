@@ -80,7 +80,7 @@ t('nameOk: a non-empty string up to 80 characters without control characters', S
   t('findBot: odd entries are skipped, not fatal', SR.findBot('writer', [null, { key: 8 }, { key: 7, tiers: 'x' }, ...P]) === 4); }
 
 // ---- jump: agentId / name -> the pane, or the URL of a new one ----
-const A1 = '0f8c2c1e-1234-4abc-9def-0123456789ab', A2 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', BOT = id => 'https://grok.com/bot/' + id;
+const A1 = 'dddddddd-dddd-dddd-dddd-dddddddddddd', A2 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', BOT = id => 'https://grok.com/bot/' + id;
 t('agentOk: a lowercase UUID only', SR.agentOk(A1) && SR.agentOk(A2) && !SR.agentOk(A1.toUpperCase()) && !SR.agentOk(A1 + 'x') && !SR.agentOk(A1.slice(1))
   && !SR.agentOk('abc') && !SR.agentOk('') && !SR.agentOk(5) && !SR.agentOk(null) && !SR.agentOk(` ${A1}`) && !SR.agentOk(A1.replace(/-/g, '')) && !SR.agentOk('g' + A1.slice(1)));
 t('agentOf: the UUID of a grok.com/bot/<uuid> page (query / hash / trailing slash ok, lowercased), else \'\'', SR.agentOf(BOT(A1)) === A1 && SR.agentOf(BOT(A1) + '/') === A1
@@ -100,9 +100,9 @@ t('jumpOk: { name, agentId?, open? } only (no URL, no other key)', [{ name: 'Bot
   const J1 = r => J(SR.jump(r, P));
   t('jump: a pane on that agentId first (any window, even when another pane has the name)', J1({ name: 'Research Bot', agentId: A1 }) === J({ result: 'focused', key: 'w2-1' }));
   t('jump: the agentId wins over a wrong name; open: true never opens when found', J1({ name: 'nobody', agentId: A2 }) === J({ result: 'focused', key: 'w1-2' }) && J1({ name: 'nobody', agentId: A2, open: true }) === J({ result: 'focused', key: 'w1-2' }));
-  t('jump: no pane of that agentId -> findBot by name (the user\'s name first)', J1({ name: 'research_bot', agentId: 'cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee' }) === J({ result: 'focused', key: 'w2-2' }) && J1({ name: 'Writer' }) === J({ result: 'focused', key: 'w1-2' }));
+  t('jump: no pane of that agentId -> findBot by name (the user\'s name first)', J1({ name: 'research_bot', agentId: 'cccccccc-cccc-cccc-cccc-cccccccccccc' }) === J({ result: 'focused', key: 'w2-2' }) && J1({ name: 'Writer' }) === J({ result: 'focused', key: 'w1-2' }));
   t('jump: the sender\'s window first (the order given) for the same agentId', SR.jump({ name: 'x', agentId: A1 }, [{ key: 'a', url: BOT(A1) + '?c=1', tiers: [] }, { key: 'b', url: BOT(A1), tiers: [] }]).key === 'a');
-  const NEW = 'cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const NEW = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
   t('jump: none + an agentId -> nomatch (the page may ask)', J1({ name: 'nobody', agentId: NEW }) === J({ result: 'nomatch' }) && J1({ name: 'nobody', agentId: NEW, open: false }) === J({ result: 'nomatch' }));
   t('jump: none + an agentId + open: true -> opened with the URL built from the UUID', J1({ name: 'nobody', agentId: NEW, open: true }) === J({ result: 'opened', url: BOT(NEW) }));
   t('jump: none and no (valid) agentId -> none, never opened', J1({ name: 'nobody' }) === J({ result: 'none' }) && J1({ name: 'nobody', open: true }) === J({ result: 'none' })

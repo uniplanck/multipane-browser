@@ -16,7 +16,7 @@ const as = (s, f, o) => ({ ...s, ...o, frame: { ...s.frame, ...f } });
 const W = { owned: true, pane: i => [1, 2].includes(i), fav: () => false, gbot: () => false, ws: () => false, winPane: () => false };
 const chk = (ch, who, args, w = W) => P.check(ch, who, args, w);
 const CH = 'sidebar:focus-bot', JUMP = 'sidebar:jump', GET = 'sidebar:get-state', OPEN = 'sidebar:open-settings', SIDE_CH = [CH, JUMP, GET, OPEN];
-const A1 = '0f8c2c1e-1234-4abc-9def-0123456789ab';
+const A1 = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 
 t('sidebar is a known role', P.ROLES.includes('sidebar'));
 t('focus-bot: a name from the sidebar\'s own page -> allowed', chk(CH, SIDE, ['Grok Bot']) === null && chk(CH, SIDE, ['x'.repeat(80)]) === null && chk(CH, SIDE, ['作業 A']) === null);
@@ -113,7 +113,7 @@ const tests = [];                                           // async checks, awa
   t('preload: every channel it sends is in the policy for the sidebar only', chans.filter(([f]) => f !== 'on').every(([, ch]) => SIDE_CH.includes(ch) && P.CHANNELS[ch].roles.join() === 'sidebar')
     && J(SIDE_CH.slice().sort()) === J([...new Set(chans.filter(([f]) => f !== 'on').map(([, ch]) => ch))].sort()));
   t('preload: its UUID pattern / results = sidebar-rules.js', (() => { const m = code.match(/const AGENT = (\/.*\/);/), re = m && vm.runInNewContext(m[1]);
-    return !!re && re.source === /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.source && [A1, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'abc', A1.toUpperCase(), ''].every(v => re.test(v) === SRL.agentOk(v)); })()
+    return !!re && re.source === /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.source && [A1, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'abc', A1.toUpperCase(), ''].every(v => re.test(v) === SRL.agentOk(v)); })()
     && code.includes(`const RESULTS = ${J(SRL.RESULTS).replace(/"/g, "'").replace(/,/g, ', ')};`)); }
 
 // ---- main.js: the view, its registration and its limits ----
