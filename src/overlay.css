@@ -72,6 +72,41 @@ body.upop #upop{display:block}
 #upop .g{color:#30d158}
 #upop .ulink{display:inline-block;margin:2px 0 4px;padding:0;border:0;background:none;color:var(--accent,#0a84ff);font:inherit;font-size:11.5px;cursor:pointer;text-decoration:underline}
 
+/* NaoAIへの指示: the Spotlight-like box. main shows this page on the box's rect only (no dim; the margin around the box = outside: a click closes) */
+#ins{display:none}
+body.instruct #scrim,body.instruct #box,body.instruct #apshadow{display:none}
+body.instruct #ins{display:flex;position:fixed;inset:0;align-items:center;justify-content:center;padding:12px 20px}
+body.upop #ins{display:none}
+.ins-box{width:100%;background:var(--panel);backdrop-filter:blur(30px) saturate(180%);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 18px 50px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.25);overflow:hidden;animation:inspop .14s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes inspop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
+.ins-head{display:flex;align-items:center;gap:8px;min-width:0;padding:11px 16px 0;font-size:12px;white-space:nowrap;overflow:hidden}
+#ins-tid{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);background:var(--ctl);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+#ins-bot{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;background:rgba(10,132,255,.16);color:#0a84ff;border-radius:9px;padding:1px 8px;font-weight:600;font-size:11px}
+#ins-bot[hidden]{display:none}
+#ins-task{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.ins-in{display:flex;align-items:flex-start;gap:10px;padding:10px 12px 10px 16px}
+.ins-icon{flex:none;color:var(--dim);font-size:19px;line-height:30px}
+#ins-text{flex:1;min-width:0;height:30px;max-height:180px;resize:none;overflow-y:auto;border:0;outline:0;background:transparent;color:var(--text);font:19px/1.45 var(--font);padding:2px 0}
+#ins-text::placeholder{color:var(--dim)}
+#ins-send{flex:none;align-self:flex-end;margin-bottom:1px;border:0;border-radius:8px;background:var(--sel);color:#fff;font:600 13px var(--font);padding:6px 14px}
+#ins-send:disabled{opacity:.4}
+.ins-foot{display:flex;align-items:center;gap:10px;min-height:30px;padding:6px 16px 8px;border-top:1px solid var(--line);color:var(--dim);font-size:11px;white-space:nowrap}
+.ins-foot .sp{flex:1}
+#ins-note{min-width:0;overflow:hidden;text-overflow:ellipsis}
+#ins-note.k-err{color:#ff6b6b}
+#ins-note.k-warn{color:#ff9f0a}
+#ins-settings{flex:none;border:1px solid var(--line);background:var(--ctl);color:var(--text);border-radius:6px;padding:2px 9px;font:11.5px var(--font)}
+#ins-settings[hidden]{display:none}
+#ins-count{font-variant-numeric:tabular-nums}
+/* NaoAIへの指示（webhook） in the 進捗サイドバー settings: what is set is told by its host only; the fields are always empty */
+.hook-sec{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+.hook-sec h3{margin:0 0 8px;font-size:14px;font-weight:650}
+#hook-status{font-size:12.5px;margin:0 0 4px}
+#hook-status b{font-weight:650}
+#hook-error{min-height:1.4em;color:#ff6b6b;font-size:12px;line-height:1.4}
+#hook-error.ok{color:#30d158}
+
 /* 承認Bot popup: the page view sits on top of this dim backdrop; this only draws the dim + the drop shadow behind it */
 #apshadow{display:none;position:fixed;border-radius:14px;box-shadow:0 28px 80px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.35);background:#000}
 body.approve #apshadow{display:block}

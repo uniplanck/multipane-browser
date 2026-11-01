@@ -52,4 +52,6 @@ contextBridge.exposeInMainWorld('mpb', {
   onFocusUrl: cb => listen('focus-url', (_, id) => cb(id)),
   onOverlayOpen: cb => listen('overlay-open', (_, o) => cb(o)),
   onBroadcast: cb => listen('bc-state', (_, v) => cb(v)),      // (#12) main's view of the broadcast preview / batch
+  onInstruct: cb => listen('instruct-state', (_, v) => cb(v)),   // NaoAIへの指示: the box's send (sending / the result line)
+  onInstructHook: cb => listen('instruct-hook', (_, v) => cb(v)),   // ...the webhook setting after a save / removal ({ configured, host, available, code? } only)
 });

@@ -50,7 +50,7 @@ t('the sidebar is not part of a window / workspace / pane spec (one shared setti
   const handlers = {}, timers = [], focus = [], calls = [];
   const fields = { '#sidebar-url': { value: '', focus: () => focus.push('url') }, '#sidebar-confirm': { checked: true }, '#approve-error': { textContent: '' } };
   const panel = { innerHTML: '', querySelector: sel => fields[sel] || null, querySelectorAll: () => [], addEventListener: (type, fn) => { handlers[type] = fn; } };
-  const ctx = { $: () => panel, ApproveSetting: require('../src/approve-setting'), SidebarRules: SR, mode: 'sidebar-settings', ctx: {}, setTimeout: f => timers.push(f),
+  const ctx = { $: () => panel, ApproveSetting: require('../src/approve-setting'), SidebarRules: SR, InstructRules: require('../src/instruct-rules'), mode: 'sidebar-settings', ctx: {}, setTimeout: f => timers.push(f),
     mpb: { run: x => calls.push(x), closeOverlay: () => calls.push('close'), onApprovePicked() {} },
     esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) };
   vm.runInNewContext(ov.slice(a, b), ctx);

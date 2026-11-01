@@ -309,7 +309,7 @@ assert(read('src/style.css').includes('#approve-btn.icon-only'));
   const panel = { innerHTML: '', querySelector: sel => fields[sel] || { focus() {} }, querySelectorAll: () => rows,
     addEventListener: (type, fn) => { handlers[type] = fn; } };
   const box = { style: {}, getBoundingClientRect: () => ({ width: 340, height: 220 }) };
-  const calls = [], ctx = { $: sel => sel === '#box' ? box : panel, ApproveSetting: AS, mode: 'approve-settings', ctx: { anchor }, innerWidth: 1000, innerHeight: 700,
+  const calls = [], ctx = { $: sel => sel === '#box' ? box : panel, ApproveSetting: AS, InstructRules: require('../src/instruct-rules'), mode: 'approve-settings', ctx: { anchor }, innerWidth: 1000, innerHeight: 700,
     mpb: { run: a => calls.push(a), closeOverlay: () => calls.push('close'), onApprovePicked: cb => { ctx.picked = cb; } },
     esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])), setTimeout: f => timers.push(f) };
   const code = segment(overlay, "const updatePanel = $('#update-panel');", 'function renderUpdate(o) {');

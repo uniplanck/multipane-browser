@@ -127,8 +127,10 @@ t('main.js: a refusal records a fixed code only (no origin / URL)', /diag\.rec\(
 // login partitions (usage-web.js PROV: persist:usage-<kind>), opened in usageSes and used only by its login window and its hidden reader
 { const U = require('../src/usage-web');
   const parts = [...main.matchAll(/partition:\s*([^,}]+)/g)].map(m => m[1].trim());
-  t('main.js: the session is the shared default session except the usage login partitions and the 進捗サイドバー\'s', parts.length === 2 && parts.every(p => p === 'P.partition')
-    && (main.match(/session\.fromPartition\(/g) || []).length === 2 && /session\.fromPartition\(UW\.PROV\[k\]\.partition\)/.test(uses) && /session\.fromPartition\(SR\.PARTITION\)/.test(fnOf('sideSes')) && !/fromPath\(/.test(main)
+  t('main.js: the session is the shared default session except the usage login partitions, the 進捗サイドバー\'s and NaoAIへの指示\'s POST (no page)', parts.length === 2 && parts.every(p => p === 'P.partition')
+    && (main.match(/session\.fromPartition\(/g) || []).length === 3 && /session\.fromPartition\(UW\.PROV\[k\]\.partition\)/.test(uses) && /session\.fromPartition\(SR\.PARTITION\)/.test(fnOf('sideSes')) && !/fromPath\(/.test(main)
+    && /session\.fromPartition\(SI\.PARTITION, \{ cache: false \}\)/.test(fnOf('instructSession')) && require('../src/instruct-rules').PARTITION === 'xg-instruct'   // in memory only, used for its fetch only
+    && /const insFetch = \(url, opts\) => instructSession\(\)\.fetch\(url, opts\);/.test(main) && (main.match(/instructSession\(\)/g) || []).length === 2   // its definition + the fetch
     && /session: sideSes\(\)/.test(fnOf('ensureSide')) && require('../src/sidebar-rules').PARTITION === 'persist:xg-sidebar'
     && ['usageWebReadNow', 'usageConnect'].every(f => /partition: P\.partition/.test(fnOf(f)))
     && Object.values(U.PROV).every(p => /^persist:usage-[a-z]+$/.test(p.partition)) && new Set(Object.values(U.PROV).map(p => p.partition)).size === Object.keys(U.PROV).length); }

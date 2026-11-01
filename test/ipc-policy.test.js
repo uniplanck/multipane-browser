@@ -53,6 +53,7 @@ const SAMPLE = {
   'gbar-sec-toggle': ['chrome', ['待機']],
   'sidebar:focus-bot': ['sidebar', ['Grok Bot']],
   'sidebar:jump': ['sidebar', [{ name: 'Grok Bot', agentId: 'dddddddd-dddd-dddd-dddd-dddddddddddd', open: true }]], 'sidebar:get-state': ['sidebar', []], 'sidebar:open-settings': ['sidebar', []],
+  'sidebar:instruct': ['sidebar', [{ tid: 'T-1', task: '作業', bot: 'Bot', state: '待機', memo: 'メモ' }]],
 };
 for (const ch of ['back', 'forward', 'copy-pane-url', 'reload', 'close', 'focus-pane', 'activate-pane', 'maximize', 'sleep-toggle', 'wake-pane', 'sleep-now', 'load-cancel', 'pane-menu', 'chip-menu', 'rename-pane']) SAMPLE[ch] = ['chrome', [1]];
 for (const ch of ['add', 'reopen-closed', 'reload-all', 'ws-menu', 'approve-open', 'approve-keep-awake-toggle', 'palette', 'ready', 'save-retry', 'recovery-open', 'sync-reset', 'split-end', 'probe-resume', 'gbar-refresh', 'gbar-mode', 'sidebar-toggle', 'sidebar-settings', 'sidebar-resize-start', 'sidebar-resize-reset']) SAMPLE[ch] = ['chrome', []];
@@ -65,7 +66,7 @@ t('every role in a channel is a known role', CH.every(ch => P.CHANNELS[ch].roles
 t('the 承認Bot popup may not send anything', CH.every(ch => !P.CHANNELS[ch].roles.includes('approve')));
 t('a probe may only report its message count', CH.filter(ch => P.CHANNELS[ch].roles.includes('probe')).join() === 'pane:msgcount');
 t('panes / probe get no UI channel, the UI no pane channel', CH.every(ch => ch.startsWith('pane:') ? P.CHANNELS[ch].roles.every(r => r === 'pane' || r === 'probe') : ch.startsWith('sidebar:') ? P.CHANNELS[ch].roles.join() === 'sidebar' : P.CHANNELS[ch].roles.every(r => r === 'chrome' || r === 'overlay')));
-t('the 進捗サイドバー may only focus / jump to a Bot, read the panes\' state and open its settings', CH.filter(ch => P.CHANNELS[ch].roles.includes('sidebar')).join() === 'sidebar:focus-bot,sidebar:jump,sidebar:get-state,sidebar:open-settings');
+t('the 進捗サイドバー may only focus / jump to a Bot, read the panes\' state, open its settings and open the NaoAIへの指示 box', CH.filter(ch => P.CHANNELS[ch].roles.includes('sidebar')).join() === 'sidebar:focus-bot,sidebar:jump,sidebar:get-state,sidebar:open-settings,sidebar:instruct');
 
 // ---- sender: unregistered / wrong role ----
 t('unregistered sender (no role) -> E_SENDER on every channel', CH.every(ch => chk(ch, { role: null, frame: SND.chrome.frame }, SAMPLE[ch][1]) === 'E_SENDER'));
@@ -181,6 +182,8 @@ const RUNS = [
   { type: 'gbot-rename', id: 'b1', value: '新しい名前' }, { type: 'gbot-rename', id: 'b-2', value: '' },
   { type: 'sidebar-save', url: 'https://example.com/#/p/sidebar' }, { type: 'sidebar-save', url: '' },
   { type: 'sidebar-save', url: 'https://example.com/#/p/sidebar', confirm: false }, { type: 'sidebar-save', url: '', confirm: true },
+  { type: 'instruct-send', no: 1, text: '確認してください' }, { type: 'instruct-draft', no: 1, text: '' }, { type: 'instruct-settings' },
+  { type: 'instruct-hook-save', url: 'https://hooks.cursor.com/routine', key: 'k'.repeat(8) }, { type: 'instruct-hook-clear' },
 ];
 const CHROME_RUNS = [{ type: 'gbar-sec-toggle', name: '待機' }];
 t('every action from the overlay is allowed', RUNS.every(a => run('overlay', a) === null));

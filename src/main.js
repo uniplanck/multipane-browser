@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, nativeTheme, screen, clipboard, shell, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, nativeTheme, screen, clipboard, shell, dialog, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -81,7 +81,7 @@ const QUIT_FLUSH_MS = 3000;                                // a normal quit wait
 let store = null;                                          // created in startup()
 const { createDraftStore } = require('./draft-store');
 const { DRAFT, composerFill } = require('./pane-rules');
-const { randomUUID } = require('crypto');
+const { randomUUID, randomBytes } = require('crypto');
 let draftStore = null;
 const draftIds = new Set();
 function draftId(value) { const id = DRAFT.id(value) && !draftIds.has(value) ? value : randomUUID(); draftIds.add(id); return id; }
@@ -640,6 +640,62 @@ function sidebarKick(why) { ctxs.forEach(c => { try { c.sideKick(why); } catch {
 // its gear (window.xgBotsSidebar.openSettings): the 進捗サイドバー settings screen of that window, with the same gate as focus-bot
 ipcOn('sidebar:open-settings', r => { if (recentGesture(r.wc) && !r.ctx.overlayOpen) r.ctx.openSidebarSettings(); else dlog('sidebar', 'open-settings: not right after a click / key in it'); });
 
+// ---- NaoAIへの指示 (instruct-rules.js / instruct-webhook.js): a right-click on a row of the 進捗サイドバー page -> window.xgBotsSidebar.instruct({ tid,
+// task, bot, state, memo }) -> a Spotlight-like box in the centre of that window (makeWindow: openInstruct - the overlay in mode 'instruct' on the
+// box's rect only, so the sidebar / panes around it stay clickable: a click there closes it, a right-click on another row gives it that row). Its
+// text goes as JSON to the one webhook the user set (instructPost: main builds the body; the page never sees the URL / key, the overlay only
+// { configured, host, available }). The setting: 進捗サイドバーの設定 > NaoAIへの指示（webhook）, encrypted by safeStorage into its own file
+// (userData/instruct-webhook.json, 0600; never panes.json). Drafts: per tid, in memory until the app quits. Logs: result codes / HTTP status only -
+// never the text, the row, the URL or the key.
+// Scripted setup from a main-process debugger (the same checks and encryption as the settings screen; no page can call it):
+//   process.mainModule.exports.instructWebhook.set({ url: 'https://hooks.cursor.com/routine', key: '…' })  -> { ok, code?, configured, host, available }
+//   process.mainModule.exports.instructWebhook.status()                                                       -> { configured, host, available }
+//   process.mainModule.exports.instructWebhook.clear()                                                        -> the file removed
+const SI = require('./instruct-rules');
+const IW = require('./instruct-webhook');
+let hookStore = null;
+const hooks = () => hookStore || (hookStore = IW.createStore({ file: path.join(app.getPath('userData'), 'instruct-webhook.json'), safe: safeStorage, fs }));
+const hookView = () => SI.hookView(hooks().status());       // all a renderer learns of the setting
+const hookReply = r => ({ ...SI.hookView(r), code: r.ok ? '' : IW.ERR.includes(r.code) ? r.code : 'WRITE' });   // a save / removal -> the settings screen
+const instructWebhook = Object.freeze({
+  set: v => { const r = hooks().set(v); dlog('instruct', 'webhook set', r.ok ? 'OK' : r.code); return r; },
+  status: () => hooks().status(),
+  clear: () => { const r = hooks().clear(); dlog('instruct', 'webhook removed', r.ok ? 'OK' : r.code); return r; },
+});
+if (typeof module !== 'undefined' && module.exports) module.exports.instructWebhook = instructWebhook;
+const insDrafts = new Map();                                 // tid -> the box's text not sent yet (SI.draftSet: memory only, DRAFTS_MAX)
+const insBoxes = new Map();                                  // box number -> its tid (a draft that arrives after the box got another row still lands right)
+let insNo = 0;
+// the same gate as jump (right after a click / key in the sidebar - a right-click's mouse-down is one; no other prompt over it: the box itself may
+// be open and gets the new row), then the fields cleaned / cut (SI.request; unusable -> 'bad'). One box at a time: another window's closes
+ipcHandle('sidebar:instruct', (r, req) => ({ result: sidebarInstruct(r, req) }));
+function sidebarInstruct(r, req) {
+  if (!recentGesture(r.wc) || (r.ctx.overlayOpen && r.ctx.overlayMode !== 'instruct')) { dlog('sidebar', 'instruct: not right after a click / key in it'); return 'blocked'; }
+  const task = SI.request(req);
+  if (!task) { dlog('sidebar', 'instruct: unusable fields'); return 'bad'; }
+  ctxs.forEach(c => { if (c !== r.ctx) { try { c.closeInstruct(); } catch {} } });
+  const no = ++insNo;
+  insBoxes.set(no, task.tid); while (insBoxes.size > SI.DRAFTS_MAX) insBoxes.delete(insBoxes.keys().next().value);
+  r.ctx.openInstruct(no, task, insDrafts.get(task.tid) || '');
+  dlog('sidebar', 'instruct: box open');
+  return 'open';
+}
+const instructDraft = (no, text) => { const tid = insBoxes.get(no); if (tid) SI.draftSet(insDrafts, tid, text); };
+// the POST (instruct-webhook.js post): the setting read here, the body built here (SI.payload: a new messageId, the time now), its own memory-only
+// session (no cookie / cache of the panes or the sidebar), 15 s at most -> { ok, status } | { ok: false, code, status? }
+let insSesReady = null;
+function instructSession() { return insSesReady || (insSesReady = require('electron').session.fromPartition(SI.PARTITION, { cache: false })); }   // in memory only (no 'persist:')
+const insFetch = (url, opts) => instructSession().fetch(url, opts);
+async function instructPost(task, text) {
+  const hook = hooks().secret();
+  if (!hook) return { ok: false, code: hook === false ? 'READ' : 'UNSET' };
+  const body = SI.payload({ id: SI.messageId(randomBytes(12)), instruction: text, task, now: new Date() });
+  if (!body) return { ok: false, code: 'TEXT' };
+  const r = await IW.post({ url: hook.url, key: hook.key, body, fetch: insFetch, timeoutMs: SI.TIMEOUT_MS });
+  dlog('instruct', r.ok ? 'sent' : 'not sent', r.code || '', r.status || '');
+  return r;
+}
+
 // ---- background check of sleeping panes (new bot message while asleep => "unopened") ----
 const SLEEP_CHECK_MS = Number(process.env.MPB_CHECK_SEC) > 0 ? Number(process.env.MPB_CHECK_SEC) * 1000 : 5 * 60 * 1000;   // per sleeping pane
 const PROBE_MAX_MS = 30000;                                  // give up on one check after this long
@@ -798,6 +854,30 @@ function showTip(p) {
     if (entering) child.showInactive();
   });
 }
+// NaoAIへの指示: the result of a send at the bottom centre of this window for SI.TOAST_MS (toast.html: display-only like the tooltip - a transparent
+// child window that takes no mouse / keyboard and is shown inactive; the text is SI.toastText: never the URL / key)
+function showToast(m) {
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return;
+  if (!toastWin || toastWin.isDestroyed()) {
+    toastWin = new BrowserWindow({ parent: win, show: false, frame: false, transparent: true, focusable: false,
+      skipTaskbar: true, excludedFromShownWindowsMenu: true, resizable: false, movable: false, hasShadow: false, backgroundColor: '#00000000',
+      webPreferences: { preload: path.join(__dirname, 'toast-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    toastWin.setIgnoreMouseEvents(true);
+    guardUi(toastWin.webContents);
+    const created = toastWin;
+    toastReady = created.loadFile(path.join(__dirname, 'toast.html')).then(() => true, () => { if (!created.isDestroyed()) created.destroy(); return false; });
+  }
+  const child = toastWin;
+  toastReady.then(ok => {
+    if (!ok || child.isDestroyed() || win.isDestroyed()) return;
+    const c = win.getContentBounds(), r = SI.toastRect(c.width, c.height);
+    child.setBounds({ x: c.x + r.x, y: c.y + r.y, width: r.width, height: r.height });
+    child.webContents.send('toast-display', { text: m.text, kind: m.kind, dark: nativeTheme.shouldUseDarkColors });
+    if (!child.isVisible()) child.showInactive();
+    clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, SI.TOAST_MS);
+  });
+}
+function hideToast() { clearTimeout(toastTimer); toastTimer = null; if (toastWin && !toastWin.isDestroyed() && toastWin.isVisible()) toastWin.hide(); }
 let queueNote = '';                        // (#01) why the last choice from the 対応キュー was not carried out (shown in the open list until the next one)
 let queueNow = [];                         // (#01) the list the last sendState built
 let navWait = null, navSeq = 0;            // (#51) a keyboard move to a pane not on screen yet (pane-navigation.js mayFocus / holds)
@@ -807,6 +887,8 @@ let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2'
 let side = null, sideUrl = '', sideTimer = null, sideDrag = null;   // 進捗サイドバー: this window's view, the URL it shows, its destroy timer, an edge drag
 let sideSent = '';                                           // (進捗サイドバー) the state its page was told last (JSON; '' = none yet)
 let sideFail = SR.retryRec(), sideRetryTimer = null;        // (進捗サイドバー) its page's failed loads (SR.retryStep: in a row, nothing loaded since), the retry planned
+let ins = null;                                              // NaoAIへの指示: this window's box while the overlay shows it ({ no, task, sending })
+let toastWin = null, toastReady = null, toastTimer = null;   // NaoAIへの指示: the result toast (a display-only child window, made on first use)
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
   for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
@@ -995,7 +1077,7 @@ function relayout(animate = false) {
     }, 18);
   }
   sidePlace();
-  if (overlayOpen) overlay.setBounds({ x: 0, y: 0, width: win.getContentSize()[0], height: win.getContentSize()[1] });
+  if (overlayOpen) overlay.setBounds(overlayMode === 'instruct' ? insRect() : { x: 0, y: 0, width: win.getContentSize()[0], height: win.getContentSize()[1] });   // NaoAIへの指示: the box's rect only
   if (approveOpen && approve) { const r = approveRect(); approve.setBounds(r); overlay.webContents.send('approve-rect', r); }
   sendState(cs);
   navSettle();                                               // (#51) a keyboard move waiting for its pane to be shown (woken)
@@ -2414,15 +2496,16 @@ function openOverlay(mode, extra = {}) {
   dockEnd('OVERLAY');                                          // (dock) a header drag ends (the views come back) before anything is shown over them
   popOpen = false; clearTimeout(popTimer);
   overlayOpen = true; overlayMode = mode;
+  if (mode !== 'instruct') ins = null;                       // NaoAIへの指示: another screen replaces the box (its draft is kept)
   const [w, h] = win.getContentSize();
-  overlay.setBounds({ x: 0, y: 0, width: w, height: h });
+  overlay.setBounds(mode === 'instruct' ? insRect() : { x: 0, y: 0, width: w, height: h });   // NaoAIへの指示: only the box's rect (the rest stays clickable)
   bringOverlayToFront();
   overlay.setVisible(true);
   const updateMode = mode === 'update' || mode === 'update-first';
   if (!updateMode) sendState();
   overlay.webContents.focus();
   if (updateMode) { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
-  if (mode === 'approve-settings' || mode === 'approve-inline' || mode === 'sidebar-settings') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
+  if (mode === 'approve-settings' || mode === 'approve-inline' || mode === 'sidebar-settings' || mode === 'instruct') { overlay.webContents.send('overlay-open', { mode, ...extra, dark: nativeTheme.shouldUseDarkColors }); return; }
   Promise.resolve().then(() => clipboard.readText()).catch(() => '').then(t => {   // sync or async depending on Electron version
     if (!overlayOpen || overlayMode !== mode) return;         // an older palette / popup must not replace a newer settings screen
     const clip = String(t || '').trim();
@@ -2430,16 +2513,18 @@ function openOverlay(mode, extra = {}) {
       clipboardUrl: /^https?:\/\/\S+$/.test(clip) && clip.length < 500 ? clip : '' });
   });
 }
-function closeOverlay() {
+function closeOverlay(keepFocus = false) {                  // keepFocus === true: the user clicked elsewhere (NaoAIへの指示's box): the keyboard stays there
   approveAnchorPending = false;
   if (!overlayOpen) return;
   if (overlayMode === 'update-first' && settings.updateChoiceDone !== true) updateChoice(true);
   const wasUpdate = overlayMode === 'update' || overlayMode === 'update-first';
   overlayOpen = false; overlayMode = '';
+  ins = null;                                                // NaoAIへの指示: the box is gone (a send under way still ends with its toast)
   bcPv = null; bcPvNo = 0;                                  // (#12) a preview holds only while it is on screen (a batch goes on)
   if (approveOpen) hideApprove();
   overlay.setVisible(false);
   if (wasUpdate) { keyboardFocus = win.webContents; win.webContents.focus(); return; }
+  if (keepFocus === true) return;
   keyboardFocus = panes[focused]?.view.webContents;
   panes[focused]?.view.webContents.focus();
 }
@@ -2489,6 +2574,7 @@ function ensureSide(url) {
   });
   wc.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });   // the app's keys as in the bar / overlay
   wc.on('before-mouse-event', (e, m) => {
+    if (m.type === 'mouseDown') closeInstruct();            // NaoAIへの指示: a click in the sidebar closes the box at once (a right-click on a row opens it again for that row)
     if (m.type === 'mouseUp') splitEnd();                   // a splitter / edge drag released over the page
     if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
   });
@@ -2574,7 +2660,35 @@ function sideMenu(wc, params) {
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 function sideToggle() { const v = SR.view(settings); if (!v.configured) openSidebarSettings(); else sidebarSet({ sidebarOpen: !v.open }); }   // no URL: the setting
-function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url, confirm: SR.confirmOpen(settings) } }); }
+function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url, confirm: SR.confirmOpen(settings) }, hook: hookView() }); }
+// ---- NaoAIへの指示: this window's box (sidebarInstruct). The overlay in mode 'instruct' on SI.boxRect only, focused at once; the page gets the row,
+// the draft of its tid and { configured, host, available }. Closed by Esc / a click outside it (its view's margin, the sidebar, a pane, the bar: the
+// keyboard stays where the user went) / another screen - the draft stays (instruct-draft, kept by tid). Another app in front: it stays open
+const insRect = () => { const [w, h] = win.getContentSize(); return SI.boxRect(w, h); };
+function openInstruct(no, task, draft) {
+  if (approveOpen) hideApprove();
+  ins = { no, task, sending: false };
+  openOverlay('instruct', { no, task, draft, hook: hookView() });
+}
+function closeInstruct() { if (overlayOpen && overlayMode === 'instruct') closeOverlay(true); }
+function instructBlur() { if (overlayOpen && overlayMode === 'instruct' && windowActive() && !overlay.webContents.isDestroyed() && !overlay.webContents.isFocused()) closeInstruct(); }
+// 送信 / ↵ in the box (its number = the box on screen; the row / the webhook are main's own): once at a time, the text kept as the draft until it
+// went out. Sent -> the draft gone, the box closed, 「NaoAIに送りました（tid）」; not sent -> the box stays with the text and says why; a toast either way
+const insTell = (box, v) => { if (ins === box && overlayOpen && overlayMode === 'instruct' && !overlay.webContents.isDestroyed()) overlay.webContents.send('instruct-state', { no: box.no, ...v }); };
+async function instructSend(no, text) {
+  const box = ins;
+  if (!box || box.no !== no || box.sending) return;
+  instructDraft(no, text);
+  box.sending = true; insTell(box, { sending: true });
+  let r;
+  try { r = SI.instruction(text) ? await instructPost(box.task, text) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
+  box.sending = false;
+  if (r.ok && insDrafts.get(box.task.tid) === text) SI.draftSet(insDrafts, box.task.tid, '');
+  const m = { text: SI.toastText(r, box.task.tid), kind: SI.toastKind(r) };
+  showToast(m);
+  if (ins !== box || !overlayOpen || overlayMode !== 'instruct') return;
+  if (r.ok) closeOverlay(); else insTell(box, { sending: false, note: m.text, kind: m.kind, hook: hookView() });
+}
 // the state for its page (sideState: every window's panes, this one's first), sent only when it differs from the last one it got (force: a new page)
 function sidePush(force = false) {
   const wc = side && side.webContents;
@@ -2777,6 +2891,11 @@ function runAction(a) {
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
     case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
+    case 'instruct-send': instructSend(a.no, a.text).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵
+    case 'instruct-draft': instructDraft(a.no, a.text); break;
+    case 'instruct-settings': if (overlayOpen && overlayMode === 'instruct') openSidebarSettings(); break;
+    case 'instruct-hook-save': if (overlayOpen && overlayMode === 'sidebar-settings') overlay.webContents.send('instruct-hook', hookReply(instructWebhook.set({ url: a.url, key: a.key }))); break;
+    case 'instruct-hook-clear': if (overlayOpen && overlayMode === 'sidebar-settings') overlay.webContents.send('instruct-hook', hookReply(instructWebhook.clear())); break;
     case 'ws-overwrite': closeOverlay(); overwriteWorkspace(String(a.name || ''), !!a.confirm); break;
     case 'ws-load': closeOverlay(); loadWorkspace(a.name); break;
     case 'ws-delete': delete workspaces[a.name]; save(); buildMenu(); broadcast(); break;
@@ -3216,6 +3335,7 @@ const ctx = { snapshot, ui, paneIpc, updateViewBackgrounds, get win() { return w
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
   sideSync, sideKick, botNames, openSidebarSettings, sidePush, composerFocus, openBot,   // 進捗サイドバー
+  openInstruct, closeInstruct,                               // NaoAIへの指示
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   inView, openPane(p) { const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); },   // (#61) notification click: this very pane, not marked read
@@ -3241,6 +3361,7 @@ win.once('ready-to-show', () => { win.show(); updateFirstWhenReady(ctx); });
 win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
 win.on('resize', () => { dismissTip(); relayout(); if (overlayOpen && overlayMode === 'approve-inline') win.webContents.send('approve-anchor-request'); });
 win.on('move', dismissTip);
+win.on('move', hideToast);                                   // NaoAIへの指示: the toast does not follow a moved window
 win.on('moved', save); win.on('resized', save);
 win.on('focus', () => { setFocused(focused); buildMenu(); });
 win.on('blur', () => dockEnd('BLUR'));                       // (dock) another app / window in front: a header drag ends, the views come back
@@ -3273,7 +3394,11 @@ overlay.setBackgroundColor('#00000000');
 overlay.setVisible(false);
 win.contentView.addChildView(overlay);
 overlay.webContents.loadFile(path.join(__dirname, 'overlay.html'));
-overlay.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
+overlay.webContents.on('before-input-event', (e, input) => {
+  if (overlayMode === 'instruct' && input.key === 'Escape') return;   // NaoAIへの指示: the box decides (an IME composition's Esc cancels it, never closes the box)
+  if (handleKey(input)) e.preventDefault();
+});
+overlay.webContents.on('blur', () => { if (overlayOpen && overlayMode === 'instruct') setTimeout(instructBlur, 60); });   // NaoAIへの指示: the keyboard went to a pane / the bar: closed
 
 const specs = Array.isArray(spec.panes) ? spec.panes : [];
 // (#31) every pane requested before any starts: the focused one first, then the rest LQ.LIMIT at a time (shown as waiting meanwhile)

@@ -6,7 +6,7 @@
 //        pane    = a web pane (pane-preload: coarse page signals only; the local newtab page is a pane too)
 //        probe   = the hidden background check of a sleeping pane (pane-preload; only its message count is used)
 //        approve = the 承認Bot popup (no preload: may not send anything)
-//        sidebar = the 進捗サイドバー page (sidebar-preload.js: focusBot / jump / state / settings), on the origin main created it for (sender.origin, from main's registry)
+//        sidebar = the 進捗サイドバー page (sidebar-preload.js: focusBot / jump / state / settings / instruct), on the origin main created it for (sender.origin, from main's registry)
 const path = require('path');
 const { fileURLToPath } = require('url');
 const { SNAP, DRAFT } = require('./pane-rules');
@@ -14,6 +14,7 @@ const AS = require('./approve-setting');
 const TL = require('./tooltip-list');
 const GS = require('./gbar-sections');
 const SR = require('./sidebar-rules');
+const SI = require('./instruct-rules');
 
 const ROLES = ['chrome', 'overlay', 'pane', 'probe', 'approve', 'sidebar'];
 const MAX_PANES = 10;                     // = MAX in main.js
@@ -103,6 +104,14 @@ const ACTIONS = {
     && x.id !== '__proto__' && !!AS.normalizeUrl('https://grok.com/bot/' + x.id) },
   'approve-reset': { shape: x => Object.keys(x).length === 1 },
   'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again) + 開く前に確認する
+  // NaoAIへの指示 (instruct-rules.js): the box sends its text with the number main gave the box (main takes its own row / webhook for it), keeps the
+  // draft the same way, or asks for the settings; the settings screen saves the webhook (https on cursor.com / cursor.sh, a key: main checks again,
+  // encrypts it and never sends it back) or removes it
+  'instruct-send': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
+  'instruct-draft': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
+  'instruct-settings': { shape: x => Object.keys(x).length === 1 },
+  'instruct-hook-save': { shape: x => Object.keys(x).length === 3 && str(x.url, SI.URL_MAX) && str(x.key, SI.KEY_MAX + 100) && !!SI.hookUrl(x.url) && !!SI.hookKey(x.key) },
+  'instruct-hook-clear': { shape: x => Object.keys(x).length === 1 },
   rename: { shape: x => id(x.id) && text(x.value), target: inPane },
   'ws-save': { shape: x => newName(x.value) },
   'ws-overwrite': { shape: x => text(x.name) && opt(x.confirm, bool), target: inWs },
@@ -214,11 +223,13 @@ const CHANNELS = {
   'pane:ime': { roles: PANE, shape: a => bool(a[0]) },        // an IME composition started / ended (#11 input guard)
   'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)
   // ---- the 進捗サイドバー page (sidebar-preload.js; contextBridge window.xgBotsSidebar): a Bot's name (focusBot), a jump ({ name, agentId?: a UUID,
-  // open?: boolean } - never a URL; ipcHandle: main answers with the result), the state of the panes (ipcHandle, no argument), its settings screen ----
+  // open?: boolean } - never a URL; ipcHandle: main answers with the result), the state of the panes (ipcHandle, no argument), its settings screen,
+  // the NaoAIへの指示 box for a row ({ tid, task?, bot?, state?, memo? }: strings only; ipcHandle: main cleans / cuts them and answers the result) ----
   'sidebar:focus-bot': { roles: ['sidebar'], shape: a => a.length === 1 && SR.nameOk(a[0]) },
   'sidebar:jump': { roles: ['sidebar'], shape: a => a.length === 1 && SR.jumpOk(a[0]) },
   'sidebar:get-state': { roles: ['sidebar'], shape: a => a.length === 0 },
   'sidebar:open-settings': { roles: ['sidebar'], shape: a => a.length === 0 },
+  'sidebar:instruct': { roles: ['sidebar'], shape: a => a.length === 1 && SI.requestOk(a[0]) },
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored

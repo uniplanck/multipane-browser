@@ -11,4 +11,11 @@
   <div id="list" role="listbox"></div>
   <div id="foot"><span><kbd>↑↓</kbd> 選択</span><span><kbd>↵</kbd> 実行</span><span><kbd>⌘↵</kbd> 新しいペインで開く</span></div>
 </div>
-<script src="approve-setting.js"></script><script src="sidebar-rules.js"></script><script src="overlay.js"></script></body></html>
+<div id="ins" role="dialog" aria-modal="true" aria-label="NaoAIへの指示">
+  <div class="ins-box">
+    <div class="ins-head"><code id="ins-tid"></code><span id="ins-bot"></span><span id="ins-task"></span></div>
+    <div class="ins-in"><span class="ins-icon">✦</span><textarea id="ins-text" rows="1" spellcheck="false" placeholder="NaoAIへの指示"></textarea><button id="ins-send" type="button">送信</button></div>
+    <div class="ins-foot"><span id="ins-note"></span><button id="ins-settings" type="button">設定を開く</button><span class="sp"></span><span id="ins-count"></span><span><kbd>↵</kbd> 送信</span><span><kbd>⇧↵</kbd> 改行</span><span><kbd>esc</kbd> 閉じる</span></div>
+  </div>
+</div>
+<script src="approve-setting.js"></script><script src="sidebar-rules.js"></script><script src="instruct-rules.js"></script><script src="overlay.js"></script></body></html>

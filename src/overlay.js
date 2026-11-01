@@ -149,10 +149,12 @@ mpb.onOverlayOpen(o => {
   document.body.classList.toggle('diag', mode === 'diag');
   document.body.classList.toggle('queue', mode === 'queue');
   document.body.classList.toggle('bc', mode === 'broadcast');
+  document.body.classList.toggle('instruct', mode === 'instruct');
   items = [];                                                // (#01) nothing kept from the previous screen
   if (mode === 'update' || mode === 'update-first') { document.body.classList.toggle('light', !o.dark); renderUpdate(o); return; }
   if (mode === 'approve-settings' || mode === 'approve-inline') { document.body.classList.toggle('light', !o.dark); renderApproveSettings(o); return; }
   if (mode === 'sidebar-settings') { document.body.classList.toggle('light', !o.dark); renderSidebarSettings(o); return; }
+  if (mode === 'instruct') { document.body.classList.toggle('light', !o.dark); renderInstruct(o); return; }
   if (mode === 'approve') { apRect(o.rect); return; }
   if (mode === 'broadcast') { bcV = o.bc && o.bc.phase ? o.bc : null; bcWait = false; if (!bcV) { bcSel.clear(); bcText.value = ''; } $('#icon').textContent = '📣'; const b = $('#box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; renderBc(); setTimeout(() => bcText.focus(), 30); return; }
   document.body.classList.toggle('prompt', mode !== 'palette');
@@ -167,6 +169,67 @@ mpb.onOverlayOpen(o => {
   render();
   if (mode === 'recovery') { sel = Math.max(0, items.findIndex(it => it.act)); render(); }   // start on the first choice, not the explanation
   q.focus(); q.select();
+});
+
+// ---- NaoAIへの指示 (instruct-rules.js): the box over the panes (main shows this page on the box's rect only). The row (tid · Bot · task) on one
+// line, the field (↵ 送信 / ⇧↵ 改行 / esc 閉じる - an IME composition never sends or closes: InstructRules.keyAction), 送信. Every change of the text
+// goes to main as the draft of its tid (kept until the app quits). main sends it, closes the box when it went out, otherwise says why here (and in
+// a toast); no webhook: 設定を開く. This page never gets the URL / key
+const insEl = $('#ins'), insText = $('#ins-text'), insSend = $('#ins-send'), insNote = $('#ins-note'), insSet = $('#ins-settings'), insCount = $('#ins-count');
+let insNo = 0, insBusy = false, insHook = { configured: false }, insIme = false;
+insText.maxLength = InstructRules.TEXT_MAX;
+const insUnset = () => insHook.configured ? '' : 'NaoAIのwebhookが未設定です';
+function insFit() { insText.style.height = 'auto'; insText.style.height = Math.min(insText.scrollHeight, 180) + 'px'; }
+function insFoot() {
+  const n = insText.value.length;
+  insSend.disabled = insBusy || !InstructRules.instruction(insText.value);
+  insText.readOnly = insBusy;
+  insCount.textContent = n > InstructRules.TEXT_MAX * 0.8 ? `${n}/${InstructRules.TEXT_MAX}` : '';
+  insSet.hidden = insHook.configured === true;
+}
+function insSay(text, kind) { insNote.textContent = text || ''; insNote.className = text && kind ? 'k-' + kind : ''; }
+function renderInstruct(o) {
+  const t = o.task && typeof o.task === 'object' ? o.task : {};
+  insNo = o.no; insBusy = false; insIme = false; insHook = o.hook && typeof o.hook === 'object' ? o.hook : { configured: false };
+  $('#ins-tid').textContent = t.tid || '';
+  $('#ins-bot').textContent = t.bot || ''; $('#ins-bot').hidden = !t.bot;
+  $('#ins-task').textContent = t.task || '';
+  $('.ins-head').title = [t.tid, t.bot, t.task, t.state].filter(Boolean).join(' · ');
+  insText.value = typeof o.draft === 'string' ? o.draft : '';
+  insSay(insUnset(), 'warn'); insFoot(); insFit();
+  const b = $('.ins-box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
+  insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n);
+}
+function insGo() {
+  if (mode !== 'instruct' || insBusy || !InstructRules.instruction(insText.value)) return;
+  insBusy = true; insSay('送信中…'); insFoot();
+  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value });
+}
+insText.addEventListener('compositionstart', () => { insIme = true; });
+insText.addEventListener('compositionend', () => { insIme = false; });
+insText.addEventListener('keydown', e => {
+  if (mode !== 'instruct') return;
+  const a = InstructRules.keyAction({ key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, repeat: e.repeat, isComposing: e.isComposing, keyCode: e.keyCode, composing: insIme });
+  if (a === 'send') { e.preventDefault(); insGo(); }
+  else if (a === 'close') { e.preventDefault(); mpb.closeOverlay(); }
+  else if (a === 'ignore') e.preventDefault();
+});
+insText.addEventListener('input', () => {
+  if (mode !== 'instruct' || insBusy) return;
+  insFit(); insFoot(); insSay(insUnset(), 'warn');
+  mpb.run({ type: 'instruct-draft', no: insNo, text: insText.value });
+});
+insSend.onclick = () => insGo();
+insSet.onclick = () => mpb.run({ type: 'instruct-settings' });
+insEl.addEventListener('mousedown', e => { if (mode === 'instruct' && e.target === insEl) { e.preventDefault(); mpb.closeOverlay(); } });   // the margin around the box = outside
+addEventListener('keydown', e => { if (mode === 'instruct' && e.target !== insText && e.key === 'Escape') { e.preventDefault(); mpb.closeOverlay(); } });   // Esc on the buttons
+mpb.onInstruct(v => {
+  if (mode !== 'instruct' || !v || v.no !== insNo) return;
+  insBusy = v.sending === true;
+  if (v.hook && typeof v.hook === 'object') insHook = v.hook;
+  if (insBusy) insSay('送信中…'); else insSay(v.note || insUnset(), v.note ? v.kind || 'err' : 'warn');
+  insFoot();
+  if (!insBusy) insText.focus();
 });
 
 // ---- update settings: main owns all state and operations; this view sends only fixed actions. ----
@@ -206,12 +269,53 @@ function renderSidebarSettings(o) {
       <label class="update-toggle"><input type="checkbox" id="sidebar-confirm" ${sb.confirm !== false ? 'checked' : ''}><span>開く前に確認する<br><small>ペインが開いていないBotを押したとき、開く前に確認を出す</small></span></label>
       <div id="approve-error" role="alert" aria-live="polite"></div>
       <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="cancel">キャンセル</button><button class="approve-reset" type="button" data-sidebar-action="clear">URLを消す</button></div>
-    </form>`;
+    </form>
+    <div class="hook-sec">
+      <h3>NaoAIへの指示（webhook）</h3>
+      <p class="update-copy">サイドバーの行を右クリックすると指示の入力欄が開き、送信でこのwebhookへ送ります（ページが <code>window.xgBotsSidebar.instruct(…)</code> を呼ぶ場合）。URLとキーはこのMacにだけ暗号化して保存し（macOSのキーチェーン）、送信のとき以外はアプリの外に出しません。保存したURL・キーはこの画面にも表示しません。</p>
+      <div id="hook-status"></div>
+      <form id="hook-form" novalidate autocomplete="off">
+        <label class="approve-field">URL（https・cursor.com / cursor.sh とそのサブドメイン）<input id="hook-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://hooks.cursor.com/…"></label>
+        <label class="approve-field">キー（${InstructRules.KEY_MIN}〜${InstructRules.KEY_MAX}文字）<input id="hook-key" type="password" autocomplete="new-password" spellcheck="false"></label>
+        <div id="hook-error" role="alert" aria-live="polite"></div>
+        <div class="update-actions"><button class="primary" type="submit" id="hook-save">保存</button><button class="approve-reset" type="button" data-hook-action="clear">削除</button></div>
+      </form>
+    </div>`;
+  hookStatus(o.hook);
   setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#sidebar-url')?.focus(); }, 0);
 }
+// NaoAIへの指示（webhook）: main tells { configured, host, available } only (never the URL / key); a save / removal answers the same + a code
+const HOOK_ERR = { URL: 'https:// で始まる cursor.com / cursor.sh（またはそのサブドメイン）のURLを入力してください。', KEY: `キーは空白なしの${InstructRules.KEY_MIN}〜${InstructRules.KEY_MAX}文字（英数字・記号）で入力してください。`,
+  UNAVAILABLE: 'この環境では暗号化して保存できないため、保存しません（macOSのキーチェーンが使えません）。', WRITE: '保存できませんでした（ファイルに書き込めません）。' };
+let hookAsk = '';                                            // 'save' | 'clear': what the next answer is for
+function hookStatus(h) {
+  const v = h && typeof h === 'object' ? h : {}, el = approveSettingsPanel.querySelector('#hook-status'), save = approveSettingsPanel.querySelector('#hook-save');
+  if (!el) return;
+  el.innerHTML = v.configured ? `設定済み: <b>${esc(v.host || '（保存した設定を読めません。削除して設定し直してください）')}</b>` : '未設定';
+  if (v.available === false) el.innerHTML += '<br><small>この環境では暗号化して保存できないため、新しく保存できません。</small>';
+  if (save) save.disabled = v.available === false;
+}
+function hookSave() {
+  const p = approveSettingsPanel, url = p.querySelector('#hook-url').value, key = p.querySelector('#hook-key').value, err = p.querySelector('#hook-error');
+  err.className = '';
+  if (!InstructRules.hookUrl(url)) { err.textContent = HOOK_ERR.URL; return; }
+  if (!InstructRules.hookKey(key)) { err.textContent = HOOK_ERR.KEY; return; }
+  err.textContent = ''; hookAsk = 'save';
+  mpb.run({ type: 'instruct-hook-save', url: url.trim(), key: key.trim() });
+}
+mpb.onInstructHook?.(v => {
+  if (mode !== 'sidebar-settings' || !v || typeof v !== 'object') return;
+  const p = approveSettingsPanel, err = p.querySelector('#hook-error'), was = hookAsk; hookAsk = '';
+  hookStatus(v);
+  if (!err) return;
+  if (v.code) { err.className = ''; err.textContent = HOOK_ERR[v.code] || '保存できませんでした。'; return; }
+  p.querySelector('#hook-url').value = ''; p.querySelector('#hook-key').value = '';   // nothing of it stays on screen
+  err.className = 'ok'; err.textContent = was === 'clear' ? '削除しました。' : '保存しました。';
+});
 const sidebarConfirm = () => { const c = approveSettingsPanel.querySelector('#sidebar-confirm'); return c ? c.checked === true : true; };   // no box: on
 approveSettingsPanel.addEventListener('submit', e => {
   e.preventDefault();
+  if (mode === 'sidebar-settings' && e.target && e.target.id === 'hook-form') { hookSave(); return; }   // NaoAIへの指示（webhook）: its own form
   if (mode === 'sidebar-settings') {
     const url = approveSettingsPanel.querySelector('#sidebar-url').value;
     if (!SidebarRules.validUrl(url)) { approveSettingsPanel.querySelector('#approve-error').textContent = 'https:// で始まるURLを入力してください（開発用に http://localhost も使えます）。'; return; }
@@ -225,11 +329,15 @@ approveSettingsPanel.addEventListener('submit', e => {
   error.textContent = '';
   mpb.run({ type: 'approve-save', url, label });
 });
-approveSettingsPanel.addEventListener('input', () => { const error = approveSettingsPanel.querySelector('#approve-error'); if (error) error.textContent = ''; });
+approveSettingsPanel.addEventListener('input', e => {
+  const hook = !!(e.target && e.target.closest && e.target.closest('#hook-form')), error = approveSettingsPanel.querySelector(hook ? '#hook-error' : '#approve-error');
+  if (error) { error.textContent = ''; error.className = ''; }
+});
 approveSettingsPanel.addEventListener('click', e => {
   const pick = e.target.closest('[data-approve-pick]');
   if (pick && mode === 'approve-inline') { mpb.run({ type: 'approve-pick', id: pick.dataset.approvePick }); return; }
   if (mode === 'sidebar-settings' && e.target.closest('[data-sidebar-action="clear"]')) { mpb.run({ type: 'sidebar-save', url: '', confirm: sidebarConfirm() }); return; }
+  if (mode === 'sidebar-settings' && e.target.closest('[data-hook-action="clear"]')) { hookAsk = 'clear'; mpb.run({ type: 'instruct-hook-clear' }); return; }
   const action = e.target.closest('[data-approve-action]')?.dataset.approveAction;
   if (action === 'reset') mpb.run({ type: 'approve-reset' });
   else if (action === 'cancel') mpb.closeOverlay();

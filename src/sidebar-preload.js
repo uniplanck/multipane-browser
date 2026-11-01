@@ -5,10 +5,16 @@
 //     ('focused' | 'opened' | 'none' | 'blocked' | 'nomatch'; anything main refused = 'blocked'). agentId: a UUID or it is left out
 //   onState(cb) / getState(): the panes as main tells this page only ({ panes: [{ agentId|null, names, active }], confirmOpen }); onState -> unsubscribe
 //   openSettings(): the 進捗サイドバー settings screen
-// focusBot / jump / openSettings count only right after the user's click / key in the sidebar (main: within 5 s, never from a page timer).
+//   instruct({ tid, task, bot, state, memo }): the NaoAIへの指示 box for that row (call it from the row's contextmenu handler, preventDefault there)
+//     -> Promise<{ result }> ('open' | 'blocked' | 'bad': not strings / no tid / too long; anything main refused = 'blocked'). Strings only; main
+//     strips control characters and cuts each field (tid 60, task 500, bot 40, state 20, memo 500). The text and the webhook stay in the app
+// focusBot / jump / openSettings / instruct count only right after the user's click / key in the sidebar (main: within 5 s, never from a page
+// timer; a right-click's mouse-down counts).
 const { contextBridge, ipcRenderer } = require('electron');
 const AGENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;   // = SidebarRules.agentOk (a sandboxed preload cannot require it)
 const RESULTS = ['focused', 'opened', 'none', 'blocked', 'nomatch'];                // = SidebarRules.RESULTS
+const FIELDS = ['tid', 'task', 'bot', 'state', 'memo'], RAW_MAX = 10000;             // = InstructRules.FIELDS / RAW_MAX
+const INSTRUCT = ['open', 'blocked', 'bad'];                                          // = InstructRules.RESULTS
 const EMPTY = () => ({ panes: [], confirmOpen: true });                               // main refused / gone: nothing known, ask before opening
 const listeners = new Set();
 ipcRenderer.on('sidebar:state', (e, s) => { for (const cb of [...listeners]) { try { cb(s); } catch {} } });   // the state only, never the event
@@ -25,4 +31,15 @@ contextBridge.exposeInMainWorld('xgBotsSidebar', Object.freeze({
   onState: cb => { if (typeof cb !== 'function') return () => {}; listeners.add(cb); return () => { listeners.delete(cb); }; },
   getState: () => ipcRenderer.invoke('sidebar:get-state').then(s => s && typeof s === 'object' && Array.isArray(s.panes) ? s : EMPTY(), EMPTY),
   openSettings: () => { ipcRenderer.send('sidebar:open-settings'); },
+  instruct: req => {
+    const o = req && typeof req === 'object' ? req : {}, msg = {};
+    for (const k of FIELDS) {
+      const v = o[k];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'string' || v.length > RAW_MAX) return Promise.resolve({ result: 'bad' });
+      msg[k] = v;
+    }
+    if (!msg.tid || !msg.tid.trim()) return Promise.resolve({ result: 'bad' });
+    return ipcRenderer.invoke('sidebar:instruct', msg).then(r => ({ result: r && INSTRUCT.includes(r.result) ? r.result : 'blocked' }), () => ({ result: 'blocked' }));
+  },
 }));
