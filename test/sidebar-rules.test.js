@@ -1,6 +1,7 @@
 // node test/sidebar-rules.test.js — 進捗サイドバー (src/sidebar-rules.js): the pane area with / without the sidebar, the width limits and the
 // drag, the URL rules (https / loopback http, no user name, its origin only), the settings defaults and the Bot-name matching; the jump
-// (agentId -> pane / new pane URL), the state the page is told (agentId / names / active only) and the composer focus script (on a fake DOM).
+// (agentId -> pane / new pane URL), the state the page is told (agentId / names / active only) and the composer focus script (on a fake DOM);
+// a failed load / a renderer gone: which failures count, the retry backoff, when a retry may run (never on a page that loaded).
 const SR = require('../src/sidebar-rules');
 let bad = 0; const t = (n, ok) => { if (!ok) bad++; console.log(ok ? 'ok  ' : 'FAIL', n); };
 const J = JSON.stringify;
@@ -169,6 +170,41 @@ t('FOCUS_JS: fixed code only (the page waits FOCUS_WAIT_MS at most; it never typ
 t('composerPage: grok.com pages only', SR.composerPage(BOT(A1)) && SR.composerPage('https://grok.com/') && !SR.composerPage('https://grok.com.evil/') && !SR.composerPage('http://grok.com/') && !SR.composerPage('about:blank') && !SR.composerPage(null));
 t('WORLD: its own isolated world (no other module uses it)', SR.WORLD === 1008 && ['grok-bots', 'copy-policy', 'usage-web', 'new-pane'].every(m => require('../src/' + m).WORLD !== SR.WORLD));
 t('results the page may get', J(SR.RESULTS) === J(['focused', 'opened', 'none', 'blocked', 'nomatch']));
+
+// ---- a failed load: the setting's URL again with a backoff (retry*) ----
+t('retryWait: 2 / 5 / 15 / 30 s after the 1st .. 4th failure in a row, then every 60 s', J([1, 2, 3, 4, 5, 6, 50, 100000].map(SR.retryWait)) === J([2000, 5000, 15000, 30000, 60000, 60000, 60000, 60000])
+  && J(SR.RETRY_MS) === J([2000, 5000, 15000, 30000, 60000]));
+t('retryWait: no / bad count -> the first wait (never 0 / NaN: no tight loop)', [0, -1, NaN, undefined, null, '3', 2.5, Infinity].every(n => SR.retryWait(n) === 2000));
+t('failKind: a main-frame error -> FAIL (offline, DNS, refused, timed out, reset, certificate, HTTP error page ...)', [-106, -105, -102, -118, -7, -101, -21, -137, -200, -379, -2].every(c => SR.failKind(c, true) === 'FAIL'));
+t('failKind: ERR_ABORTED (a newer load / a stop / a move main refused) is no failure, main frame or not', SR.failKind(-3, true) === 'ABORTED' && SR.failKind(-3, false) === 'ABORTED');
+t('failKind: a frame inside the page -> SUBFRAME (not retried)', SR.failKind(-106, false) === 'SUBFRAME' && SR.failKind(-106, undefined) === 'SUBFRAME' && SR.failKind(-106, 1) === 'SUBFRAME');
+t('failKind: no error code -> NONE', [0, 1, 200, NaN, undefined, null, '-106', -1.5].every(c => SR.failKind(c, true) === 'NONE'));
+{ const rec0 = SR.retryRec();
+  t('retryRec: nothing failed', J(rec0) === J({ n: 0, failed: false }) && SR.retryRec() !== rec0);
+  let rec = rec0; const waits = [];
+  for (let i = 0; i < 7; i++) { const r = SR.retryStep(rec, 'fail'); rec = r.rec; waits.push(r.wait); }
+  t('retryStep fail: failed, counted, the backoff 2 / 5 / 15 / 30 / 60 / 60 / 60 s', J(waits) === J([2000, 5000, 15000, 30000, 60000, 60000, 60000]) && J(rec) === J({ n: 7, failed: true }));
+  t('retryStep does not change its input', J(rec0) === J({ n: 0, failed: false }));
+  const g = SR.retryStep({ n: 2, failed: true }, 'gone');
+  t('retryStep gone (renderer gone): the same backoff as a failed load', J(g) === J({ rec: { n: 3, failed: true }, wait: 15000 }) && J(SR.retryStep(rec0, 'gone')) === J({ rec: { n: 1, failed: true }, wait: 2000 }));
+  const p = SR.retryStep({ n: 9, failed: true }, 'page');
+  t('retryStep page (did-navigate): nothing failed, the backoff starts over, no retry planned', J(p) === J({ rec: { n: 0, failed: false }, wait: 0 }) && J(SR.retryStep(SR.retryStep(p.rec, 'fail').rec, 'fail').rec) === J({ n: 2, failed: true }));
+  t('retryStep kick (woke / unlocked / shown again): a failed record starts over (tried at once by main), a working one is left alone',
+    J(SR.retryStep({ n: 6, failed: true }, 'kick')) === J({ rec: { n: 0, failed: true }, wait: 0 }) && J(SR.retryStep({ n: 0, failed: false }, 'kick')) === J({ rec: { n: 0, failed: false }, wait: 0 })
+    && J(SR.retryStep(SR.retryStep({ n: 6, failed: true }, 'kick').rec, 'fail')) === J({ rec: { n: 1, failed: true }, wait: 2000 }));
+  t('retryStep: an unknown event / a broken record -> nothing planned, a sound record', J(SR.retryStep({ n: 3, failed: true }, 'x')) === J({ rec: { n: 3, failed: true }, wait: 0 })
+    && [null, undefined, 'x', { n: -4, failed: 'yes' }, { n: 1.5 }, { n: NaN, failed: 1 }].every(r => J(SR.retryStep(r, 'x').rec) === J({ n: 0, failed: false }) && J(SR.retryStep(r, 'fail').rec) === J({ n: 1, failed: true }))); }
+{ const F = { n: 2, failed: true }, open = { open: true, crashed: false, loading: false };
+  t('retryDue: failed, shown, nothing loading -> RETRY (appLoad of the setting\'s URL)', SR.retryDue(F, open) === 'RETRY');
+  t('retryDue: a page loaded since -> NONE (a working page is never reloaded), whatever else', [open, { ...open, loading: true }, { ...open, crashed: true }].every(s => SR.retryDue({ n: 0, failed: false }, s) === 'NONE')
+    && SR.retryDue(null, open) === 'NONE' && SR.retryDue({ n: 3, failed: 'true' }, open) === 'NONE');
+  t('retryDue: closed (hidden) -> NONE (tried when shown again)', SR.retryDue(F, { ...open, open: false }) === 'NONE' && SR.retryDue(F, { crashed: true }) === 'NONE' && SR.retryDue(F, undefined) === 'NONE');
+  t('retryDue: no renderer -> RECREATE (a new view); a load running -> WAIT (that load decides)', SR.retryDue(F, { ...open, crashed: true }) === 'RECREATE' && SR.retryDue(F, { ...open, loading: true }) === 'WAIT'
+    && SR.retryDue(F, { ...open, crashed: true, loading: true }) === 'RECREATE'); }
+{ const DG = require('../src/diagnostics');
+  t('diagnostics: sidebar.retry codes = RETRY_CODES (all accepted); sidebar.load takes OK and every net code', J([...DG.SIDEBAR_CODES].sort()) === J([...SR.RETRY_CODES].sort())
+    && SR.RETRY_CODES.every(c => DG.EVENTS['sidebar.retry'].r.includes(c)) && ['OK', ...DG.NET_CODES].every(c => DG.EVENTS['sidebar.load'].r.includes(c))
+    && ['RETRY', 'RECREATE', 'WAIT'].every(c => SR.RETRY_CODES.includes(c)) && [-106, -105, -7, -200, -999].every(c => DG.EVENTS['sidebar.load'].r.includes(DG.netCode(c)) || DG.netCode(c) === 'UNKNOWN')); }
 
 setTimeout(() => { console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0); }, 2500);   // the composer waits above settle first
 

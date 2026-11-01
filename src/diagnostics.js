@@ -83,6 +83,10 @@ const GBAR_CODES = ['OK', 'AUTH', 'TIMEOUT', 'EMPTY', 'COLLAPSED', 'OFFSITE', 'E
 // found open / no toggle in time / clicked, open not seen / the page went elsewhere / the user used the pane first / the shared state busy / the
 // stored state not confirmed back / an error. Never a URL / name
 const NEWPANE_CODES = ['OPENED', 'ALREADY', 'NOTOGGLE', 'UNSURE', 'MOVED', 'USER', 'BUSY', 'RESTORE_FAIL', 'ERROR'];
+// (進捗サイドバー, sidebar-rules.js RETRY_CODES; checked by test/sidebar-rules.test.js) its page loaded again by itself: its renderer gone, the setting's
+// URL loaded again / a new view for it (the renderer gone), a load still running when due, started over by a signal (woke / unlocked / shown again);
+// n = failures in a row. A failed load itself is sidebar.load (its net code; OK = a page after failures). Never the URL (its key is in it)
+const SIDEBAR_CODES = ['GONE', 'RETRY', 'RECREATE', 'WAIT', 'RESUME'];
 
 // an error -> fixed code. Only `code` is read (fs / state-store codes); message / stack are never looked at
 function errCode(e) {
@@ -130,6 +134,8 @@ const EVENTS = {
   nav: { ja: 'キーボードでのペイン移動', r: PANE_NAV_CODES },
   gbar: { ja: 'Bot一覧の読み込み（Grokボタン）', r: GBAR_CODES },
   newpane: { ja: '新規ペインのサイドバー', r: NEWPANE_CODES },
+  'sidebar.load': { ja: '進捗サイドバーの読込', r: ['OK', ...NET_CODES] },
+  'sidebar.retry': { ja: '進捗サイドバーの自動再読込', r: SIDEBAR_CODES },
   'state.load': { ja: '構成の読込', r: ['READY', 'REPAIRED', 'RECOVERY_READ', 'RECOVERY_JSON', 'RECOVERY_INVALID', 'NEWER'] },
   'state.save': { ja: '構成の保存', r: ['RECOVERED', ...FS_CODES] },
   'diag.disk': { ja: '診断ログのファイル保存', r: ['ON', 'OFF', 'RECOVERED', ...FS_CODES] },
@@ -387,5 +393,5 @@ function createDiag({ fs = realFs, wall = Date.now, mono = hrMs, timers = { set:
   return { rec, setDisk, flushNow, entries: () => ring.list().map(e => ({ ...e })), stats, diskInfo, view, summary };
 }
 
-module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, GBAR_CODES, NEWPANE_CODES, SETTINGS,
+module.exports = { RING_MAX, FILE_MAX, GENERATIONS, MAX_AGE_MS, MS_MAX, N_MAX, PANE_MAX, QUEUE_MAX, BATCH_MAX, EVENTS, FS_CODES, NET_CODES, GONE_CODES, IPC_CODES, DOM_CODES, GEN_CODES, GUARD_AUTO_CODES, GUARD_EXPIRE_CODES, LOAD_CODES, NAV_CODES, PERM_CODES, ZOOM_CODES, NOTIFY_CODES, REOPEN_CODES, BCAST_CODES, RECOVER_CODES, RESTORE_CODES, QUEUE_CODES, PANE_NAV_CODES, GBAR_CODES, NEWPANE_CODES, SIDEBAR_CODES, SETTINGS,
   errCode, netCode, goneCode, sanitize, createRing, createClock, planRotation, safeEnv, viewRows, summaryText, createDiag };

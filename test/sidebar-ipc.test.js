@@ -2,7 +2,8 @@
 // its view for) may send 'sidebar:focus-bot' (one name, a string up to 80 characters), 'sidebar:jump' ({ name, agentId?: a UUID, open? } - never a
 // URL), 'sidebar:get-state' / 'sidebar:open-settings' (no argument), and nothing else; sidebar-preload.js exposes exactly window.xgBotsSidebar
 // { focusBot, jump, onState, getState, openSettings }; main creates the view sandboxed in its own partition, never as a pane, gates the jump like
-// focus-bot, builds the only URL it opens from the UUID and tells the pane state to that sidebar view only.
+// focus-bot, builds the only URL it opens from the UUID and tells the pane state to that sidebar view only. A failed load / a renderer gone
+// loads the setting's URL again by itself (appLoad, backoff, never a page that loaded, never the URL in a log).
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const { pathToFileURL } = require('url');
 const P = require('../src/ipc-policy');
@@ -176,6 +177,35 @@ const tests = [];                                           // async checks, awa
     && /try \{ destroySide\(\); \} catch \{\}/.test(main) && /wc\.close\(\)/.test(fn('destroySide')) && /unregWc\(r => r\.wc === wc\)/.test(fn('destroySide')));
   t('main: nothing polls for it (only the edge drag follows the cursor while held, 60 s at most)', !/setInterval/.test(fn('sideSync') + ens + fn('destroySide') + fn('sidebarFocusBot') + fn('sidePlace'))
     && (fn('sideResizeStart').match(/setInterval\(/g) || []).length === 1 && /Date\.now\(\) - d\.t0 > 60000/.test(fn('sideResizeStart')) && /clearInterval\(d\.timer\)/.test(fn('sideResizeEnd')));
-  t('main: the Grok usage read never uses the sidebar\'s page', /wcReg\.get\(w\.id\)\?\.role !== 'sidebar'/.test(fn('fetchUsage'))); }
+  t('main: the Grok usage read never uses the sidebar\'s page', /wcReg\.get\(w\.id\)\?\.role !== 'sidebar'/.test(fn('fetchUsage')));
+  // a failed load / its renderer gone: the setting's URL again by itself
+  const failed = fn('sideFailed'), gone = fn('sideGone'), page = fn('sidePage'), rin = fn('sideRetryIn'), now = fn('sideRetryNow'), kick = fn('sideKick'), retry = failed + gone + page + rin + now + kick;
+  t('main: the view\'s did-fail-load / did-navigate / render-process-gone go to sideFailed / sidePage / sideGone',
+    /wc\.on\('did-fail-load', \(e, code, desc, u, isMain\) => sideFailed\(wc, code, desc, isMain\)\);/.test(ens) && /wc\.on\('did-navigate', \(\) => sidePage\(wc\)\);/.test(ens)
+    && /wc\.on\('render-process-gone', \(e, d\) => sideGone\(wc, d && d\.reason\)\);/.test(ens));
+  t('main: only a main-frame failure of the current view counts (SR.failKind: not ERR_ABORTED / a frame in the page); an old view / one being destroyed: nothing',
+    /if \(side\?\.webContents !== wc \|\| SR\.failKind\(code, isMain\) !== 'FAIL'\) return;/.test(failed) && /if \(side\?\.webContents !== wc\) return;/.test(gone) && /if \(side\?\.webContents !== wc\) return;/.test(page));
+  t('main: a failure / a renderer gone plans the retry after SR.retryStep\'s wait; a page stops it and starts the backoff over',
+    /SR\.retryStep\(sideFail, 'fail'\)/.test(failed) && /sideRetryIn\(r\.wait\)/.test(failed) && /SR\.retryStep\(sideFail, 'gone'\)/.test(gone) && /sideRetryIn\(r\.wait\)/.test(gone)
+    && /sideFail = SR\.retryStep\(sideFail, 'page'\)\.rec; sideRetryStop\(\);/.test(page));
+  t('main: one timer per view (setTimeout, replaced each time), none while the sidebar is closed', /sideRetryStop\(\);\n\s*if \(ms > 0 && side && SR\.view\(settings\)\.open\) \{ sideRetryTimer = setTimeout\(sideRetryNow, ms\);/.test(rin)
+    && /function sideRetryStop\(\) \{ clearTimeout\(sideRetryTimer\); sideRetryTimer = null; \}/.test(main) && !/setInterval/.test(retry));
+  t('main: the retry asks SR.retryDue (never a page that loaded / a closed sidebar; a load running: waits for it) and loads exactly the setting\'s URL through appLoad - not wc.reload()',
+    /SR\.retryDue\(sideFail, \{ open: v\.open, crashed, loading: !crashed && wc\.isLoadingMainFrame\(\) \}\)/.test(now) && /if \(what === 'NONE'\) return;/.test(now)
+    && /if \(!wc \|\| wc\.isDestroyed\(\) \|\| sideUrl !== v\.url\) return;/.test(now) && /else appLoad\(wc, sideUrl\);/.test(now) && /if \(what === 'WAIT'\) sideRetryIn\(SR\.retryWait\(sideFail\.n\)\);/.test(now)
+    && !/\.reload\(|loadURL/.test(retry) && /ensureSide\(v\.url\)/.test(fn('sideSync')));
+  t('main: no renderer -> a new view for the URL (destroySide + sideSync -> ensureSide), the backoff kept',
+    /else if \(what === 'RECREATE'\) \{ const keep = sideFail; destroySide\(\); sideFail = keep; sideSync\(\); \}/.test(now)
+    && /if \(side && !side\.webContents\.isDestroyed\(\) && !side\.webContents\.isCrashed\(\) && sideUrl === url\) return side;/.test(ens));
+  t('main: the view destroyed / another URL (destroySide): the retry stops, the record is dropped (after the no-view return: a RECREATE keeps it)',
+    /const v = side; if \(!v\) return;\n\s*side = null; sideUrl = ''; sideSent = ''; sideRetryStop\(\); sideFail = SR\.retryRec\(\);/.test(fn('destroySide')));
+  t('main: closed (hidden): the retry stops; shown again: a failed page at once (sideKick)', /side\.setVisible\(false\); sideRetryStop\(\);/.test(fn('sideSync'))
+    && /const back = v\.open && !!side && !!sideTimer;/.test(fn('sideSync')) && /relayout\(\);\n  if \(back\) sideKick\('shown again'\);/.test(fn('sideSync')));
+  t('main: the Mac woke / was unlocked: every window\'s failed page at once (powerMonitor resume / unlock-screen -> sidebarKick -> ctx.sideKick), a working one untouched',
+    /powerMonitor\.on\('resume', \(\) => sidebarKick\('resume'\)\); powerMonitor\.on\('unlock-screen', \(\) => sidebarKick\('unlock'\)\);/.test(main)
+    && /^function sidebarKick\(why\) \{ ctxs\.forEach\(c => \{ try \{ c\.sideKick\(why\); \} catch \{\} \}\); \}/m.test(main) && /sideSync, sideKick, /.test(main)
+    && /if \(!side \|\| !sideFail\.failed\) return;\n\s*sideFail = SR\.retryStep\(sideFail, 'kick'\)\.rec;/.test(kick) && /sideRetryNow\(\);/.test(kick));
+  t('main: the retry never logs the URL (its key is in the hash): codes / counts only', !/url|Url|getURL|origin/i.test(retry.replace(/sideUrl !== v\.url|appLoad\(wc, sideUrl\)|ensureSide\(v\.url\)|\/\/[^\n]*/g, ''))
+    && (retry.match(/diag\.rec\('sidebar\.(load|retry)'/g) || []).length === 5 && !/dlog\([^\n]*\bu\b/.test(retry)); }
 
 Promise.all(tests).then(() => { console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0); });

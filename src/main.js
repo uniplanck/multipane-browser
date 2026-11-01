@@ -566,8 +566,9 @@ function guardUi(wc) {                                       // the window's own
 // (makeWindow: side*) in its own partition (persist:xg-sidebar: storage the only permission, no download, nothing shared with the panes' login)
 // with its own preload (sidebar-preload.js: window.xgBotsSidebar focusBot / jump / onState / getState / openSettings on 'sidebar:*', its only IPC). It stays on its URL's
 // origin (routes / hash inside it as usual); a link elsewhere goes to the default browser after a click, window.open never opens a window.
-// Not a pane: never in panes[] (no input guard / sleep / unread / queue / counts / snapshot / Grok bar / closed panes / recovery).
-// Closed: hidden, destroyed SR.KEEP_MS later (opened again in time: the same page). Nothing polls.
+// Not a pane: never in panes[] (no input guard / sleep / unread / queue / counts / snapshot / Grok bar / closed panes / the panes' recovery).
+// Closed: hidden, destroyed SR.KEEP_MS later (opened again in time: the same page). Nothing polls; a failed load / its renderer gone only: the
+// setting's URL again with a backoff until a page loads (makeWindow: sideFailed / sideRetryNow; sidebarKick when the Mac wakes / is unlocked).
 const SR = require('./sidebar-rules');
 let sideSesReady = false;
 function sideSes() {                                         // its partition, set up once: Chrome's UA, storage only (as the background check), no download
@@ -634,6 +635,8 @@ function sideStateSoon() {
   if (sideStateTimer || !SR.view(settings).configured) return;   // no URL: no sidebar view anywhere (nothing to tell)
   sideStateTimer = setTimeout(() => { sideStateTimer = null; ctxs.forEach(c => { try { c.sidePush(); } catch {} }); }, 200);
 }
+// the Mac woke / was unlocked: every window's failed sidebar page is loaded again at once, its backoff started over (a page that loaded: nothing)
+function sidebarKick(why) { ctxs.forEach(c => { try { c.sideKick(why); } catch {} }); }
 // its gear (window.xgBotsSidebar.openSettings): the 進捗サイドバー settings screen of that window, with the same gate as focus-bot
 ipcOn('sidebar:open-settings', r => { if (recentGesture(r.wc) && !r.ctx.overlayOpen) r.ctx.openSidebarSettings(); else dlog('sidebar', 'open-settings: not right after a click / key in it'); });
 
@@ -803,6 +806,7 @@ let approve = null, approveOpen = false, approveTimer = null, approvePane = null
 let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2', maximizedId = null, maxMode = null;
 let side = null, sideUrl = '', sideTimer = null, sideDrag = null;   // 進捗サイドバー: this window's view, the URL it shows, its destroy timer, an edge drag
 let sideSent = '';                                           // (進捗サイドバー) the state its page was told last (JSON; '' = none yet)
+let sideFail = SR.retryRec(), sideRetryTimer = null;        // (進捗サイドバー) its page's failed loads (SR.retryStep: in a row, nothing loaded since), the retry planned
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
   for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
@@ -2441,18 +2445,20 @@ function closeOverlay() {
 }
 // ---- 進捗サイドバー: this window's view of settings.sidebarUrl (global part: sideSes / sidebarSet / sidebarFocusBot) ----
 // the setting changed / the window is new: open -> the view (made once per URL; a renderer gone: a new one), shown by relayout; closed -> hidden,
-// destroyed SR.KEEP_MS later; another URL / none -> the old page goes at once
+// destroyed SR.KEEP_MS later (no retry of a failed page meanwhile; shown again: tried at once); another URL / none -> the old page goes at once
 function sideSync() {
   if (!win || win.isDestroyed()) return;
   const v = SR.view(settings);
   if (side && sideUrl !== v.url) destroySide();
+  const back = v.open && !!side && !!sideTimer;              // the hidden view shown again
   if (v.open) { clearTimeout(sideTimer); sideTimer = null; ensureSide(v.url); }
   else if (side && !sideTimer) {
     if (side.webContents.isFocused()) { keyboardFocus = panes[focused]?.view.webContents || win.webContents; keyboardFocus.focus(); }   // the keyboard leaves the hidden page
-    side.setVisible(false);
+    side.setVisible(false); sideRetryStop();
     sideTimer = setTimeout(() => { sideTimer = null; if (!SR.view(settings).open) destroySide(); }, SR.KEEP_MS);
   }
   relayout();
+  if (back) sideKick('shown again');
 }
 function sidePlace() { if (!side) return; const r = SR.view(settings).open ? sideLay().side : null; side.setVisible(!!r); if (r) side.setBounds(r); }   // a window too narrow: none
 function ensureSide(url) {
@@ -2488,6 +2494,10 @@ function ensureSide(url) {
   });
   wc.on('context-menu', (e, params) => sideMenu(wc, params));
   wc.on('did-finish-load', () => sidePush(true));            // a (re)loaded page: the state at once (onState / getState)
+  // a failed load (offline right after login, the server down ...) / its renderer gone: the setting's URL again by itself; a page: no more retries
+  wc.on('did-fail-load', (e, code, desc, u, isMain) => sideFailed(wc, code, desc, isMain));
+  wc.on('did-navigate', () => sidePage(wc));
+  wc.on('render-process-gone', (e, d) => sideGone(wc, d && d.reason));
   win.contentView.addChildView(v);
   if (overlayOpen || popOpen) bringOverlayToFront();         // below the overlay / popover / 承認Bot popup, as the panes
   appLoad(wc, url);
@@ -2496,12 +2506,60 @@ function ensureSide(url) {
 function destroySide() {
   clearTimeout(sideTimer); sideTimer = null; sideResizeEnd(false);
   const v = side; if (!v) return;
-  side = null; sideUrl = ''; sideSent = '';
+  side = null; sideUrl = ''; sideSent = ''; sideRetryStop(); sideFail = SR.retryRec();
   const wc = v.webContents;
   if (keyboardFocus === wc) keyboardFocus = null;
   unregWc(r => r.wc === wc);
   try { if (!win.isDestroyed()) win.contentView.removeChildView(v); } catch {}
   try { if (!wc.isDestroyed()) wc.close(); } catch {}
+}
+// (進捗サイドバー) a failed load of its page (sidebar-rules.js retry*): the exact setting's URL again through appLoad (its key may be in the hash; not a
+// reload of the error page) SR.RETRY_MS later (2 / 5 / 15 / 30 s, then every 60 s) while it fails; its renderer gone: a new view the same way.
+// At once when the Mac wakes / is unlocked or the sidebar is shown again (sideKick: the backoff starts over). Only while nothing loaded since the
+// failure - a page that loaded is never reloaded by this, a load still running decides first. Stops with a page, the view destroyed / another URL
+// (destroySide), the sidebar closed (hidden: tried when shown again). The URL is never logged (its key is in it): codes / counts only
+function sideFailed(wc, code, desc, isMain) {
+  if (side?.webContents !== wc || SR.failKind(code, isMain) !== 'FAIL') return;   // ERR_ABORTED (a newer load / a stop / a refused move) / a frame in the page
+  const r = SR.retryStep(sideFail, 'fail'); sideFail = r.rec;
+  diag.rec('sidebar.load', DIAG.netCode(code), { n: sideFail.n });
+  dlog('sidebar', 'load failed', code, desc, `(${sideFail.n} in a row)`);
+  sideRetryIn(r.wait);
+}
+function sideGone(wc, reason) {
+  if (side?.webContents !== wc) return;                      // its view being destroyed (destroySide): nothing
+  const r = SR.retryStep(sideFail, 'gone'); sideFail = r.rec;
+  diag.rec('sidebar.retry', 'GONE', { n: sideFail.n });
+  dlog('sidebar', 'renderer gone', reason);
+  sideRetryIn(r.wait);
+}
+function sidePage(wc) {                                      // did-navigate: a page committed - nothing failed any more, the backoff starts over
+  if (side?.webContents !== wc) return;
+  if (sideFail.failed) { diag.rec('sidebar.load', 'OK', { n: sideFail.n }); dlog('sidebar', 'loaded after', sideFail.n, 'failure(s)'); }
+  sideFail = SR.retryStep(sideFail, 'page').rec; sideRetryStop();
+}
+function sideRetryStop() { clearTimeout(sideRetryTimer); sideRetryTimer = null; }
+function sideRetryIn(ms) {                                   // closed: none (sideKick when shown again)
+  sideRetryStop();
+  if (ms > 0 && side && SR.view(settings).open) { sideRetryTimer = setTimeout(sideRetryNow, ms); dlog('sidebar', `retry in ${ms / 1000}s`); }
+}
+function sideRetryNow() {
+  sideRetryStop();
+  const wc = side && side.webContents, v = SR.view(settings);
+  if (!wc || wc.isDestroyed() || sideUrl !== v.url) return;  // gone / another URL: sideSync / destroySide see to it
+  const crashed = wc.isCrashed(), what = SR.retryDue(sideFail, { open: v.open, crashed, loading: !crashed && wc.isLoadingMainFrame() });
+  if (what === 'NONE') return;                               // a page loaded since / closed
+  diag.rec('sidebar.retry', what, { n: sideFail.n });
+  dlog('sidebar', 'retry', what, `(${sideFail.n} failed)`);
+  if (what === 'WAIT') sideRetryIn(SR.retryWait(sideFail.n));   // a load running (its 再読み込み / the page's own): its outcome decides, looked at again later
+  else if (what === 'RECREATE') { const keep = sideFail; destroySide(); sideFail = keep; sideSync(); }   // no renderer: a new view (ensureSide), the backoff kept
+  else appLoad(wc, sideUrl);                                 // = the setting's URL (sideSync made the view for it)
+}
+function sideKick(why) {                                     // a signal (the Mac woke / was unlocked, the sidebar shown again): a failed page at once
+  if (!side || !sideFail.failed) return;
+  sideFail = SR.retryStep(sideFail, 'kick').rec;
+  diag.rec('sidebar.retry', 'RESUME');
+  dlog('sidebar', 'retry at once:', why);
+  sideRetryNow();
 }
 function sideMenu(wc, params) {
   if (wc.isDestroyed() || side?.webContents !== wc) return;
@@ -3157,7 +3215,7 @@ const ctx = { snapshot, ui, paneIpc, updateViewBackgrounds, get win() { return w
   reloadAll, sendState, newPane, closePane, toggleMaximize, togglePc, relayout, reopenClosed, setZoom, resetPaneZoom, setZoomIndiv, applyGlobalZoom, nextUnread, navKey, focusUrlBar, openOverlay, openApproveSettings, approveChanged, syncApproveSleep, paneMenu, applyPreset,
   sleepTick, probeNext, recoverNext, loadWorkspace, overwriteWorkspace, clearAll, showViews, get layout() { return layout; }, get focusedPane() { return panes[focused]; },
   askClose, askReload, autoReload, openLink,                 // through the input guard (#11)
-  sideSync, botNames, openSidebarSettings, sidePush, composerFocus, openBot,   // 進捗サイドバー
+  sideSync, sideKick, botNames, openSidebarSettings, sidePush, composerFocus, openBot,   // 進捗サイドバー
   get activeWs() { return workspaces[activeWs] ? activeWs : null; }, wsRenamed(o, n) { if (activeWs === o) activeWs = n; },
   focusPaneById(id) { const i = panes.findIndex(p => p.id === id); if (i >= 0) focusPane(i); },
   inView, openPane(p) { const i = panes.indexOf(p); if (i >= 0) focusPane(i, { clear: false }); },   // (#61) notification click: this very pane, not marked read
@@ -3559,6 +3617,7 @@ app.whenReady().then(() => {
   if (isMac && !app.isPackaged) { try { const img = require('electron').nativeImage.createFromPath(path.join(__dirname, '../build/icon.png')); if (!img.isEmpty()) app.dock?.setIcon(img); } catch {} }
   powerMonitor.on('suspend', () => { sysBlocked = true; }); powerMonitor.on('lock-screen', () => { sysBlocked = true; });
   powerMonitor.on('resume', () => { sysBlocked = false; resumeAt = Date.now(); }); powerMonitor.on('unlock-screen', () => { sysBlocked = false; resumeAt = Date.now(); });
+  powerMonitor.on('resume', () => sidebarKick('resume')); powerMonitor.on('unlock-screen', () => sidebarKick('unlock'));   // (進捗サイドバー) a failed page loaded again at once
   session.defaultSession.setUserAgent(chromeUA());
   // (#72) site permissions: permission-policy.js decides from the permission, the asking page's role (main's registry; not registered = a window
   // a page opened, no page = a worker), the asking frame's origin and the page's top-level URL. Only the permissions allowed before, for any

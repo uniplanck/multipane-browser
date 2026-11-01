@@ -7,6 +7,7 @@
 //   jump() / jumpOk(): window.xgBotsSidebar.jump({ name, agentId, open }) -> the pane (its grok.com/bot/<agentId> URL, then findBot) or the URL
 //     of a new one (built from the UUID only), or why not; state() / paneNames(): what the page is told of the panes (agentId, a few names, active)
 //   focusComposer / FOCUS_JS: the page side of a jump - the keyboard into a grok.com composer (main runs it in the pane's own world, WORLD)
+//   failKind() / retryStep() / retryDue() / retryWait(): a failed load / a renderer gone -> the setting's URL again with a backoff (RETRY_MS)
 const SidebarRules = (() => {
   const DEFAULT_WIDTH = 300, MIN_WIDTH = 220, MAX_WIDTH = 560;
   const PANES_MIN = 240;                     // the panes keep at least this much width: a narrow window gets a narrower sidebar...
@@ -146,8 +147,37 @@ const SidebarRules = (() => {
   const FOCUS_JS = `(${focusComposer})(${FOCUS_WAIT_MS})`;
   const composerPage = url => typeof url === 'string' && /^https:\/\/grok\.com\//.test(url);   // FOCUS_JS runs on grok.com pages only
 
+  // ---- a failed load of its page (main: sideFailed / sideGone / sideRetryNow / sideKick): the setting's URL again by itself ----
+  // A failed main-frame load (offline right after login, the server down ...: Chromium's empty error page, getURL still the setting) or its renderer
+  // gone -> the exact setting's URL again (appLoad; its key may be in the hash) after RETRY_MS[n - 1] (n = failures in a row), then every
+  // RETRY_MS's last while it fails. Only while nothing loaded since: a page that loaded (did-navigate) is never reloaded by this. A signal (the
+  // Mac woke / was unlocked, the sidebar shown again) tries a failed one at once and starts the backoff over. Memory only, per view.
+  const RETRY_MS = [2000, 5000, 15000, 30000, 60000];
+  const ABORTED = -3;                        // ERR_ABORTED: a load replaced by a newer one / stopped / a move main refused - no failure of the page
+  // diagnostics (sidebar.retry; = diagnostics.js SIDEBAR_CODES): its renderer gone, the URL loaded again / a new view for it (the renderer gone),
+  // a load still running when due (looked at again later), started over by a signal
+  const RETRY_CODES = ['GONE', 'RETRY', 'RECREATE', 'WAIT', 'RESUME'];
+  const retryWait = n => RETRY_MS[Math.min(RETRY_MS.length, Math.max(1, Number.isSafeInteger(n) ? n : 1)) - 1];
+  // did-fail-load (errorCode, isMainFrame) -> 'FAIL' (its page did not load: retried) | 'ABORTED' | 'SUBFRAME' (a frame inside a page that loaded) |
+  // 'NONE' (no error code). A load superseded by a newer navigation ends as ERR_ABORTED; one that still fails while a newer load runs waits for it (retryDue)
+  const failKind = (code, main) => !Number.isSafeInteger(code) || code >= 0 ? 'NONE' : code === ABORTED ? 'ABORTED' : main !== true ? 'SUBFRAME' : 'FAIL';
+  // the record: n = failures in a row, failed = nothing loaded since the last failure (its error page / no renderer on screen)
+  const retryRec = () => ({ n: 0, failed: false });
+  // (rec, 'fail' (failKind FAIL) | 'gone' (render-process-gone) | 'page' (did-navigate: a page committed) | 'kick' (a signal)) -> { rec, wait: ms
+  // until the retry, 0 = none planned }. A kick changes only a failed record (n back to 0: main tries it at once, then 2 s ... again)
+  function retryStep(rec, ev) {
+    const r = { n: rec && Number.isSafeInteger(rec.n) && rec.n > 0 ? rec.n : 0, failed: !!rec && rec.failed === true };
+    if (ev === 'fail' || ev === 'gone') return { rec: { n: r.n + 1, failed: true }, wait: retryWait(r.n + 1) };
+    if (ev === 'page') return { rec: retryRec(), wait: 0 };
+    return { rec: ev === 'kick' && r.failed ? { n: 0, failed: true } : r, wait: 0 };
+  }
+  // the timer / a signal: s = { open: the sidebar shown (closed: tried when shown again), crashed: no renderer, loading: a main-frame load running }
+  // -> 'RETRY' (appLoad of the setting's URL) | 'RECREATE' (a new view for it) | 'WAIT' (that load decides; looked at again after the next wait) | 'NONE'
+  const retryDue = (rec, s) => { const o = s || {}; return !(rec && rec.failed === true) || o.open !== true ? 'NONE' : o.crashed === true ? 'RECREATE' : o.loading === true ? 'WAIT' : 'RETRY'; };
+
   return { DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH, PANES_MIN, HIDE_BELOW, URL_MAX, NAME_MAX, KEEP_MS, PARTITION, RESULTS, NAMES_PER_TIER, STATE_PANES, WORLD, FOCUS_WAIT_MS, JUMP_WAIT_MS,
     clampWidth, fit, layout, dragWidth, normalizeUrl, validUrl, originOf, navOk, httpUrl, view, normName, nameOk, findBot,
-    agentOk, agentOf, botUrl, confirmOpen, jumpOk, jump, paneNames, state, focusComposer, FOCUS_JS, composerPage };
+    agentOk, agentOf, botUrl, confirmOpen, jumpOk, jump, paneNames, state, focusComposer, FOCUS_JS, composerPage,
+    RETRY_MS, RETRY_CODES, retryWait, failKind, retryRec, retryStep, retryDue };
 })();
 if (typeof module !== 'undefined') module.exports = SidebarRules;
