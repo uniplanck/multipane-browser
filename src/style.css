@@ -72,6 +72,7 @@ body.mac #tl-space{width:68px}
 @keyframes glow{from{box-shadow:0 0 0 1px var(--glow),0 0 8px color-mix(in srgb,var(--glow) 35%,transparent)}to{box-shadow:0 0 0 1px var(--glow),0 0 22px color-mix(in srgb,var(--glow) 70%,transparent)}}
 @keyframes pulse{50%{opacity:.4}}
 .head{height:30px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;background:var(--head);border-radius:9px 9px 0 0;border-bottom:1px solid var(--line);position:relative;cursor:grab}
+.pane.colored{background:color-mix(in srgb,var(--pc) 12%,var(--card))}
 .pane.colored .head::before{content:"";position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:0 3px 3px 0;background:var(--pc)}
 .pane.colored .head{background:linear-gradient(90deg,color-mix(in srgb,var(--pc) 16%,var(--head)),var(--head) 60%)}
 .pane.unread .head{background:linear-gradient(90deg,color-mix(in srgb,var(--glow) 22%,var(--head)),var(--head) 70%)}

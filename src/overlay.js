@@ -196,9 +196,34 @@ function renderInstruct(o) {
   $('#ins-task').textContent = t.task || '';
   $('.ins-head').title = [t.tid, t.bot, t.task, t.state].filter(Boolean).join(' · ');
   insText.value = typeof o.draft === 'string' ? o.draft : '';
+  const answer = t.mode === 'answer';
+  const opts = Array.isArray(t.options) ? t.options : [];
+  const askEl = $('#ins-ask'), chEl = $('#ins-choices'), inEl = $('.ins-in');
+  if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('answer', answer);
+  insText.placeholder = answer ? '回答を入力' : 'NaoAIへの指示';
+  if (askEl) {
+    if (answer && (t.ask || !opts.length)) { askEl.hidden = false; askEl.textContent = t.ask || '何を待っているか：待ちの内容が台帳にありません。'; }
+    else { askEl.hidden = true; askEl.textContent = ''; }
+  }
+  if (chEl) { while (chEl.firstChild) chEl.removeChild(chEl.firstChild); }
+  if (answer && opts.length && chEl) {
+    chEl.hidden = false; if (inEl) inEl.hidden = true;
+    if (typeof document !== 'undefined' && document.createElement) {
+      for (const label of opts) {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+        b.addEventListener('click', () => insGoChoice(label));
+        chEl.appendChild(b);
+      }
+    }
+  } else { if (chEl) chEl.hidden = true; if (inEl) inEl.hidden = false; }
   insSay(insUnset(), 'warn'); insFoot(); insFit();
   const b = $('.ins-box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
-  insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n);
+  if (!inEl || !inEl.hidden) { insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n); }
+}
+function insGoChoice(label) {
+  if (mode !== 'instruct' || insBusy || !InstructRules.instruction(label)) return;
+  insBusy = true; insSay('送信中…'); $('#ins-choices')?.querySelectorAll('button').forEach(b => { b.disabled = true; }); insFoot();
+  mpb.run({ type: 'instruct-send', no: insNo, text: label, choice: label });
 }
 function insGo() {
   if (mode !== 'instruct' || insBusy || !InstructRules.instruction(insText.value)) return;
@@ -282,6 +307,7 @@ function renderSidebarSettings(o) {
       </form>
     </div>`;
   hookStatus(o.hook);
+  if (approveSettingsPanel) { approveSettingsPanel.dataset = approveSettingsPanel.dataset || {}; approveSettingsPanel.dataset.sidebarUrl = (o.sidebar && o.sidebar.url) || ''; }
   setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#sidebar-url')?.focus(); }, 0);
 }
 // NaoAIへの指示（webhook）: main tells { configured, host, available } only (never the URL / key); a save / removal answers the same + a code
@@ -317,9 +343,13 @@ approveSettingsPanel.addEventListener('submit', e => {
   e.preventDefault();
   if (mode === 'sidebar-settings' && e.target && e.target.id === 'hook-form') { hookSave(); return; }   // NaoAIへの指示（webhook）: its own form
   if (mode === 'sidebar-settings') {
-    const url = approveSettingsPanel.querySelector('#sidebar-url').value;
-    if (!SidebarRules.validUrl(url)) { approveSettingsPanel.querySelector('#approve-error').textContent = 'https:// で始まるURLを入力してください（開発用に http://localhost も使えます）。'; return; }
-    mpb.run({ type: 'sidebar-save', url: url.trim(), confirm: sidebarConfirm() });
+    const typed = approveSettingsPanel.querySelector('#sidebar-url').value;
+    const err = approveSettingsPanel.querySelector('#approve-error');
+    const cur = (approveSettingsPanel.dataset && approveSettingsPanel.dataset.sidebarUrl) || '';
+    const d = SidebarRules.decideSidebarUrl(typed, cur);
+    if (!d.ok) { err.textContent = d.message; return; }
+    if (err) err.textContent = d.completed ? d.message : '';
+    mpb.run({ type: 'sidebar-save', url: d.url, confirm: sidebarConfirm() });
     return;
   }
   const url = approveSettingsPanel.querySelector('#approve-url').value, label = approveSettingsPanel.querySelector('#approve-name').value;

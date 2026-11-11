@@ -20,6 +20,7 @@
 // (進捗サイドバー) settings.sidebarOpen (boolean), sidebarWidth (220-560), sidebarUrl (sidebar-rules.js: https / loopback http, normalised) and
 // sidebarConfirmOpen (boolean: 開く前に確認する): optional, no new schema (none = closed, 300 px, no URL, ask before opening). A non-boolean flag /
 // unusable URL is dropped, a width out of range clamped, as a repair.
+// (ペイン色) settings.botColors (pane-color.js: Bot URL / agentId -> a muted colour name): optional, no new schema. A broken map is cleaned as a repair.
 const SS = require('./session-snapshot');
 const DL = require('./dock-layout');
 const GB = require('./grok-bots');
@@ -28,6 +29,7 @@ const GM = require('./gbar-mode');
 const GS = require('./gbar-sections');
 const AS = require('./approve-setting');
 const SR = require('./sidebar-rules');
+const PC = require('./pane-color');
 const { DRAFT } = require('./pane-rules');
 const BOOL_FLAGS = ['usageShow', 'usageV2', 'saveDrafts', 'approveKeepAwake', 'sidebarOpen', 'sidebarConfirmOpen'];
 const SCHEMA_VERSION = 1;
@@ -90,6 +92,7 @@ function validate(doc) {
     if (doc.settings.approveLabel !== undefined && (!AS.validLabel(doc.settings.approveLabel) || doc.settings.approveLabel !== doc.settings.approveLabel.trim())) e.push('settings.approveLabel: not a clean label');
     if (doc.settings.sidebarWidth !== undefined && SR.clampWidth(doc.settings.sidebarWidth) !== doc.settings.sidebarWidth) e.push('settings.sidebarWidth: not a width');
     if (doc.settings.sidebarUrl !== undefined && (typeof doc.settings.sidebarUrl !== 'string' || (doc.settings.sidebarUrl !== '' && SR.normalizeUrl(doc.settings.sidebarUrl) !== doc.settings.sidebarUrl))) e.push('settings.sidebarUrl: not a normalized URL');
+    if (doc.settings.botColors !== undefined && !PC.validMap(doc.settings.botColors)) e.push('settings.botColors: not a clean colour map');
   }
   if (!isObj(doc.workspaces)) e.push('workspaces: not an object');
   else Object.values(doc.workspaces).forEach((ws, i) => e.push(...groupErrors(ws, `workspaces#${i}`)));
@@ -177,6 +180,17 @@ function migrate(raw) {
     const url = typeof settings.sidebarUrl === 'string' ? SR.normalizeUrl(settings.sidebarUrl) : '';
     settings = { ...settings }; if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
     fixes.push(`settings.sidebarUrl: ${url ? 'repaired' : 'dropped'}`);
+  }
+  if (settings.botColors !== undefined) {
+    const clean = PC.cleanMap(settings.botColors);
+    if (!clean) {
+      const { botColors, ...rest } = settings; settings = rest;
+      if (settings.botColors !== undefined) {}
+      fixes.push('settings.botColors: dropped');
+    } else {
+      if (!PC.validMap(settings.botColors)) fixes.push('settings.botColors: repaired');
+      settings = { ...settings, botColors: clean };
+    }
   }
   const doc = { schema: SCHEMA_VERSION, windows, favorites, ...(grok ? { grok } : {}), settings, workspaces };
   const errors = validate(doc);

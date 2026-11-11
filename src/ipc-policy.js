@@ -107,7 +107,7 @@ const ACTIONS = {
   // NaoAIへの指示 (instruct-rules.js): the box sends its text with the number main gave the box (main takes its own row / webhook for it), keeps the
   // draft the same way, or asks for the settings; the settings screen saves the webhook (https on cursor.com / cursor.sh, a key: main checks again,
   // encrypts it and never sends it back) or removes it
-  'instruct-send': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
+  'instruct-send': { shape: x => (Object.keys(x).length === 3 || (Object.keys(x).length === 4 && str(x.choice, SI.OPT_MAX))) && id(x.no) && str(x.text, SI.TEXT_MAX) },
   'instruct-draft': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
   'instruct-settings': { shape: x => Object.keys(x).length === 1 },
   'instruct-hook-save': { shape: x => Object.keys(x).length === 3 && str(x.url, SI.URL_MAX) && str(x.key, SI.KEY_MAX + 100) && !!SI.hookUrl(x.url) && !!SI.hookKey(x.key) },
@@ -152,7 +152,7 @@ const CHANNELS = {
   'dock-hover': { roles: CHROME, shape: a => num(a[0], -1e5, 1e5) && num(a[1], -1e5, 1e5) },
   'dock-drop': { roles: CHROME, shape: a => num(a[0], -1e5, 1e5) && num(a[1], -1e5, 1e5) },
   'dock-end': { roles: CHROME },
-  add: { roles: CHROME }, 'reopen-closed': { roles: CHROME }, 'reload-all': { roles: CHROME }, 'ws-menu': { roles: CHROME },
+  add: { roles: CHROME }, 'reopen-closed': { roles: CHROME }, 'reload-all': { roles: CHROME }, 'open-grok-bot': { roles: CHROME }, 'ws-menu': { roles: CHROME },
   'approve-open': { roles: CHROME, shape: a => a.length <= 1 && opt(a[0], approveRect) },
   'approve-keep-awake-toggle': { roles: CHROME, shape: a => a.length === 0 },
   'approve-inline-open': { roles: CHROME, shape: a => a.length === 1 && approveRect(a[0]) },

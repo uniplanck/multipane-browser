@@ -32,6 +32,7 @@ PK.forEach((k, i) => {
 $('#add').onclick = () => mpb.add();
 $('#reopen').onclick = () => { if (S && S.canReopen) mpb.reopenClosed(); };
 $('#reload-all').onclick = () => mpb.reloadAll();
+$('#open-grok-bot').onclick = () => mpb.openGrokBot();
 $('#ws-btn').onclick = () => mpb.wsMenu();
 $('#cmdk').onclick = () => mpb.palette();
 $('#unread-sum').onclick = () => mpb.run({ type: 'next-unread' });
@@ -181,6 +182,7 @@ function mk(id) {
   badge.ondblclick = e => e.stopPropagation();
   badge.ondragstart = e => { e.preventDefault(); e.stopPropagation(); };
   badge.onmouseenter = badge.onmouseleave = badge.onfocus = badge.onblur = () => badgeTitle(badge);
+  head.oncontextmenu = e => { if (e.target.closest('button,input,.badge')) return; e.preventDefault(); e.stopPropagation(); mpb.paneMenu(id); };
   head.onmousedown = e => { badgePressed = false; maxPressed = false; if (!e.target.closest('button,input')) mpb.focusPane(id); };
   head.ondblclick = e => { if (!e.target.closest('button,input')) mpb.maximize(id); };
   title.onclick = () => startEdit(d);

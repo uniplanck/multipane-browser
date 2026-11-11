@@ -2,6 +2,9 @@ const { app, BrowserWindow, WebContentsView, ipcMain, Menu, Notification, native
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
+const GBA = require('./grok-bot-app');
+const PC = require('./pane-color');
 const CPU = require('./cpu-meter');
 const { placeTooltip } = require('./tooltip-layout');
 const { halfRects } = require('./half-layout');
@@ -37,14 +40,53 @@ const RELOAD_CHOICES = [0, 1, 5, 15, 30];
 const TYPING_GRACE_MS = 2 * 60 * 1000;
 const PRESETS = { '2x1': [2, 1], '3x1': [3, 1], '4x1': [4, 1], '2x2': [2, 2], '3x2': [3, 2], '4x2': [4, 2], '3x3': [3, 3], '5x2': [5, 2] };
 const PRESET_KEYS = Object.keys(PRESETS);
-const COLORS = { none: null, red: '#ff5f57', orange: '#ff9f0a', yellow: '#ffd60a', green: '#30d158', teal: '#40c8e0', blue: '#0a84ff', purple: '#bf5af2', pink: '#ff375f' };
-const COLOR_JA = { none: 'なし', red: '赤', orange: 'オレンジ', yellow: '黄', green: '緑', teal: '水色', blue: '青', purple: '紫', pink: 'ピンク' };
+const COLORS = { none: null, ...Object.fromEntries(PC.NAMES.filter(n => n !== 'none').map(n => [n, PC.hex(n)])) };
+const COLOR_JA = PC.COLOR_JA;
 
 let settings = { notifications: false, ecoMode: true, debugLog: false, grokFix: true, theme: 'system' };   // ecoMode: unused (no CPU throttling, see 'load reduction'); kept so panes.json reads / writes as before
 let workspaces = {};        // name -> { layout, panes: [spec] }
 let favorites = [];         // [{ id, url, label }]
 let nextFavId = 1, nextPaneId = 1;
 const ctxs = [];           // one per app window
+
+// Per-Bot pane colour (pane-color.js): muted tones washed over the header and the page, saved in settings.botColors by Bot URL / agentId.
+function resolvePaneColor(spec, url) {
+  const key = PC.botKey(url || (spec && spec.url) || '');
+  const saved = PC.lookup(settings.botColors, key, 'none');
+  if (saved !== 'none') return saved;
+  const fromSpec = spec && PC.isName(spec.color) ? spec.color : 'none';
+  if (fromSpec !== 'none' && key) settings.botColors = PC.setBg(fromSpec, settings.botColors, key);
+  return fromSpec;
+}
+async function applyPaneTint(p) {
+  const wc = p && p.view && p.view.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  if (p.colorCss) { try { await wc.removeInsertedCSS(p.colorCss); } catch {} p.colorCss = ''; }
+  const css = PC.washCss(p.color, nativeTheme.shouldUseDarkColors);
+  if (!css) return;
+  try { p.colorCss = await wc.insertCSS(css); } catch {}
+}
+function setBotColor(p, c) {
+  if (!p || !PC.isName(c)) return;
+  const key = PC.botKey(paneUrl(p) || p.url || '');
+  p.color = c;
+  if (key) {
+    settings.botColors = PC.setBg(c, settings.botColors, key);
+  }
+  for (const cx of ctxs) {
+    try {
+      for (const q of cx.panes || []) {
+        if (!key || PC.botKey((typeof paneUrl === 'function' ? paneUrl(q) : '') || q.url || '') === key) {
+          q.color = c; applyPaneTint(q);
+        }
+      }
+    } catch {}
+  }
+  if (!key) applyPaneTint(p);
+  ctxs.forEach(cx => { try { cx.sendState(); } catch {} });
+  save();
+}
+
 let saveTimer;
 
 // ---- debug log (MPB_DEBUG=1 or 設定メニュー) -> userData/pane-debug.log ----
@@ -584,8 +626,9 @@ function sideSes() {                                         // its partition, s
 }
 function sidebarSet(patch) { Object.assign(settings, patch); save(); ctxs.forEach(c => c.sideSync()); buildMenu(); }   // every window follows
 function setSidebarUrl(value, confirm) {                     // '' = none (closed); a URL is opened right away. confirm: 開く前に確認する (absent: as it is)
-  if (!SR.validUrl(value)) return false;
-  const url = SR.normalizeUrl(value);
+  const d = SR.decideSidebarUrl(value, settings.sidebarUrl || '');
+  if (!d.ok) return false;
+  const url = d.url;
   if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
   if (typeof confirm === 'boolean') settings.sidebarConfirmOpen = confirm;
   sidebarSet({ sidebarOpen: !!url });                        // -> sideSync / relayout / sendState: the pages get the new confirmOpen (sideStateSoon)
@@ -686,10 +729,10 @@ const instructDraft = (no, text) => { const tid = insBoxes.get(no); if (tid) SI.
 let insSesReady = null;
 function instructSession() { return insSesReady || (insSesReady = require('electron').session.fromPartition(SI.PARTITION, { cache: false })); }   // in memory only (no 'persist:')
 const insFetch = (url, opts) => instructSession().fetch(url, opts);
-async function instructPost(task, text) {
+async function instructPost(task, text, extra) {
   const hook = hooks().secret();
   if (!hook) return { ok: false, code: hook === false ? 'READ' : 'UNSET' };
-  const body = SI.payload({ id: SI.messageId(randomBytes(12)), instruction: text, task, now: new Date() });
+  const body = SI.payload({ id: SI.messageId(randomBytes(12)), instruction: text, task, now: new Date(), ...(extra && typeof extra === 'object' ? extra : {}) });
   if (!body) return { ok: false, code: 'TEXT' };
   const r = await IW.post({ url: hook.url, key: hook.key, body, fetch: insFetch, timeoutMs: SI.TIMEOUT_MS });
   dlog('instruct', r.ok ? 'sent' : 'not sent', r.code || '', r.status || '');
@@ -892,6 +935,7 @@ let toastWin = null, toastReady = null, toastTimer = null;   // NaoAIへの指�
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
   for (const p of panes) { try { if (!p.view.webContents.isDestroyed()) p.view.setBackgroundColor(color); } catch {} }
+  for (const p of panes) { if (typeof applyPaneTint === 'function') applyPaneTint(p); }
   try { if (approve && !approve.webContents.isDestroyed()) approve.setBackgroundColor(color); } catch {}
   try { if (side && !side.webContents.isDestroyed()) side.setBackgroundColor(color); } catch {}
 }
@@ -2135,13 +2179,14 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
   view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff');
   const p = { id: nextPaneId++, draftId: draftId(spec.draftId), view, url: paneStart(normalize(spec.url)), unread: 0, glow: false, msgMode: false, loadedAt: Date.now(),
     reloadMinutes: RELOAD_CHOICES.includes(spec.reloadMinutes) ? spec.reloadMinutes : 0,
-    name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: COLORS[spec.color] !== undefined ? spec.color : 'none',
+    name: typeof spec.name === 'string' ? spec.name.slice(0, 60) : '', color: 'none',
     muted: !!spec.muted, ...ZP.restore(spec, gZoom()),      // zoom / zoomIndiv (older saves had per-pane zoom only: those panes stay individual)
     lastReload: Date.now(), lastTyping: 0, lastInteract: Date.now(), waitSince: 0, sleepOn: spec.sleep !== false, sleeping: false, editing: false,
     inputRev: 0, ime: false, sel: false };                   // #11: keys typed into the pane (main's input revision) / an IME composition reported by the page; a selection (copySel)
   p.obs = PS.createObs(nextNo(), nextNo());                  // this pane entity + its first world generation (#02; memory only)
   p.rcv = RP.createRec();                                    // (#32) its failures / planned reload (memory only)
   p.sb = st.sidebar ? NEWP.arm(Date.now(), p.inputRev, p.lastInteract) : null;   // 新規ペインはGrok: its sidebar, once (memory only)
+  p.color = resolvePaneColor(spec, p.url);
   win.contentView.addChildView(view);
   if (overlayOpen) bringOverlayToFront();
   const wc = view.webContents;
@@ -2185,6 +2230,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
     recoverLive(p);
     onGrokLoad(p);
     if (NEWP.due(p.sb)) sbOpen(p);
+    applyPaneTint(p);
     dlog(`pane${p.id}`, 'loaded', wc.getURL());
   });
   wc.on('focus', () => paneGotFocus(p));
@@ -2675,13 +2721,14 @@ function instructBlur() { if (overlayOpen && overlayMode === 'instruct' && windo
 // 送信 / ↵ in the box (its number = the box on screen; the row / the webhook are main's own): once at a time, the text kept as the draft until it
 // went out. Sent -> the draft gone, the box closed, 「NaoAIに送りました（tid）」; not sent -> the box stays with the text and says why; a toast either way
 const insTell = (box, v) => { if (ins === box && overlayOpen && overlayMode === 'instruct' && !overlay.webContents.isDestroyed()) overlay.webContents.send('instruct-state', { no: box.no, ...v }); };
-async function instructSend(no, text) {
+async function instructSend(no, text, choice) {
   const box = ins;
   if (!box || box.no !== no || box.sending) return;
   instructDraft(no, text);
   box.sending = true; insTell(box, { sending: true });
   let r;
-  try { r = SI.instruction(text) ? await instructPost(box.task, text) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
+  const extra = box.task && box.task.mode === 'answer' ? { mode: 'answer', ...(typeof choice === 'string' && choice ? { choice } : {}) } : {};
+  try { r = SI.instruction(text) ? await instructPost(box.task, text, extra) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
   box.sending = false;
   if (r.ok && insDrafts.get(box.task.tid) === text) SI.draftSet(insDrafts, box.task.tid, '');
   const m = { text: SI.toastText(r, box.task.tid), kind: SI.toastKind(r) };
@@ -2779,7 +2826,7 @@ function paneMenu(id) {
   const p = byId(id); if (!p) return;
   const tpl = [
     { label: '名前を変更…', click: () => openOverlay('rename', { id, value: p.name || '' }) },
-    { label: '色', submenu: Object.keys(COLORS).map(c => ({ label: COLOR_JA[c], type: 'radio', checked: (p.color || 'none') === c, click: () => { p.color = c; sendState(); save(); } })) },
+    { label: '色', submenu: PC.NAMES.map(c => ({ label: COLOR_JA[c], type: 'radio', checked: (p.color || 'none') === c, click: () => setBotColor(p, c) })) },
     { label: 'このペインの通知をミュート', type: 'checkbox', checked: !!p.muted, click: m => { p.muted = m.checked; updateBadge(); sendState(); save(); } },
     { label: '待機中・終了にスリープ（メモリ節約）', type: 'checkbox', checked: p.sleepOn !== false, click: m => { p.sleepOn = m.checked; if (!m.checked && p.sleeping) reloadPane(p); sendState(); save(); } },
     { label: '自動リロード', submenu: RELOAD_CHOICES.map(m => ({ label: m ? `${m}分ごと` : 'オフ', type: 'radio', checked: p.reloadMinutes === m,
@@ -2891,7 +2938,7 @@ function runAction(a) {
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
     case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
-    case 'instruct-send': instructSend(a.no, a.text).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵
+    case 'instruct-send': instructSend(a.no, a.text, a.choice).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ / a choice button
     case 'instruct-draft': instructDraft(a.no, a.text); break;
     case 'instruct-settings': if (overlayOpen && overlayMode === 'instruct') openSidebarSettings(); break;
     case 'instruct-hook-save': if (overlayOpen && overlayMode === 'sidebar-settings') overlay.webContents.send('instruct-hook', hookReply(instructWebhook.set({ url: a.url, key: a.key }))); break;
@@ -3202,6 +3249,7 @@ on('probe-resume', () => probeResume());                     // (#33) 確認を�
 on('pane-menu', id => paneMenu(id));
 on('chip-menu', id => chipMenu(id));
 on('reload-all', () => reloadAll());
+on('open-grok-bot', () => { const { openPath } = shell; GBA.open({ platform: process.platform, fs, execFile, openPath }).then(r => { if (r && r.toast) showToast(r.toast); }).catch(() => showToast(GBA.TOAST.fail)); });
 on('usage-pop-show', r => popShow(r));
 on('usage-win-menu', (kind, sel) => usageWinMenu(String(kind), String(sel || '')));
 on('usage-pop-keep', () => clearTimeout(popTimer));
