@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('xgBotsSidebar', Object.freeze({
       msg[k] = v;
     }
     if (!msg.tid || !msg.tid.trim()) return Promise.resolve({ result: 'bad' });
+    if (o.mode === 'answer') msg.mode = 'answer';
+    if (typeof o.ask === 'string' && o.ask.length <= RAW_MAX) msg.ask = o.ask;
+    if (Array.isArray(o.options) && o.options.length <= 8 && o.options.every(x => typeof x === 'string' && x.length <= RAW_MAX)) msg.options = o.options;
     return ipcRenderer.invoke('sidebar:instruct', msg).then(r => ({ result: r && INSTRUCT.includes(r.result) ? r.result : 'blocked' }), () => ({ result: 'blocked' }));
   },
 }));

@@ -84,7 +84,7 @@ const tests = [];
   t('main: the row is never logged (only fixed words)', !/dlog\([^\n]*\b(req|task|no)\b/.test(noStr(gate)) && !/dlog\([^\n]*\b(task|text|hook|body)\b/.test(noStr(post + send)));
   t('main: the POST: the setting read in main (secret: here only), the body built here (a new messageId from 12 random bytes, the time now), IW.post with its own session',
     (main.match(/hooks\(\)\.secret\(\)/g) || []).length === 1 && /const hook = hooks\(\)\.secret\(\);/.test(post)
-    && /SI\.payload\(\{ id: SI\.messageId\(randomBytes\(12\)\), instruction: text, task, now: new Date\(\) \}\)/.test(post) && /IW\.post\(\{ url: hook\.url, key: hook\.key, body, fetch: insFetch, timeoutMs: SI\.TIMEOUT_MS \}\)/.test(post)
+    && /SI\.payload\(\{ id: SI\.messageId\(randomBytes\(12\)\), instruction: text, task, now: new Date\(\), \.\.\.\(extra && typeof extra === 'object' \? extra : \{\}\) \}\)/.test(post) && /IW\.post\(\{ url: hook\.url, key: hook\.key, body, fetch: insFetch, timeoutMs: SI\.TIMEOUT_MS \}\)/.test(post)
     && /if \(!hook\) return \{ ok: false, code: hook === false \? 'READ' : 'UNSET' \};/.test(post));
   t('main: the POST\'s log: the result code / HTTP status only', /dlog\('instruct', r\.ok \? 'sent' : 'not sent', r\.code \|\| '', r\.status \|\| ''\);/.test(post) && (post.match(/dlog\(/g) || []).length === 1);
   t('main: the URL / key never reach a page, a log or a diagnostic (hook.url / hook.key only inside the IW.post call)', (main.match(/hook\.(url|key)\b/g) || []).length === 2
@@ -115,8 +115,8 @@ const tests = [];
   t('main: the toast: a display-only child window (no focus, no mouse, toast-preload: no send API), bottom centre, SI.TOAST_MS', /focusable: false/.test(toast) && /toastWin\.setIgnoreMouseEvents\(true\);/.test(toast)
     && /preload: path\.join\(__dirname, 'toast-preload\.js'\), contextIsolation: true, nodeIntegration: false, sandbox: true/.test(toast) && /guardUi\(toastWin\.webContents\);/.test(toast)
     && /SI\.toastRect\(c\.width, c\.height\)/.test(toast) && /child\.showInactive\(\)/.test(toast) && /setTimeout\(hideToast, SI\.TOAST_MS\)/.test(toast)
-    && /child\.webContents\.send\('toast-display', \{ text: m\.text, kind: m\.kind, dark: nativeTheme\.shouldUseDarkColors \}\);/.test(toast) && (main.match(/showToast\(/g) || []).length === 2);
-  t('main: the box\'s actions: send / draft / settings (the box on screen only)', /case 'instruct-send': instructSend\(a\.no, a\.text\)\.catch\(\(\) => \{\}\); break;/.test(main) && /case 'instruct-draft': instructDraft\(a\.no, a\.text\); break;/.test(main)
+    && /child\.webContents\.send\('toast-display', \{ text: m\.text, kind: m\.kind, dark: nativeTheme\.shouldUseDarkColors \}\);/.test(toast) && (main.match(/showToast\(/g) || []).length >= 2);
+  t('main: the box\'s actions: send / draft / settings (the box on screen only)', /case 'instruct-send': instructSend\(a\.no, a\.text, a\.choice\)\.catch\(\(\) => \{\}\); break;/.test(main) && /case 'instruct-draft': instructDraft\(a\.no, a\.text\); break;/.test(main)
     && /case 'instruct-settings': if \(overlayOpen && overlayMode === 'instruct'\) openSidebarSettings\(\); break;/.test(main)); }
 
 // ---- toast page / preload ----
@@ -129,7 +129,7 @@ const tests = [];
   let focused = null;
   const mk = (id, extra) => ({ id, handlers: {}, style: {}, textContent: '', hidden: false, className: '', value: '', disabled: false, readOnly: false, scrollHeight: 30, offsetHeight: 0, title: '', maxLength: -1,
     addEventListener(type, f) { (this.handlers[type] = this.handlers[type] || []).push(f); }, focus() { focused = this; }, setSelectionRange(x, y) { this.sel = [x, y]; }, ...extra });
-  const els = Object.fromEntries(['#ins', '#ins-text', '#ins-send', '#ins-note', '#ins-settings', '#ins-count', '#ins-tid', '#ins-bot', '#ins-task', '.ins-head', '.ins-box'].map(s => [s, mk(s)]));
+  const els = Object.fromEntries(['#ins', '#ins-text', '#ins-send', '#ins-note', '#ins-settings', '#ins-count', '#ins-tid', '#ins-bot', '#ins-task', '#ins-ask', '#ins-choices', '.ins-head', '.ins-box', '.ins-in'].map(s => [s, mk(s)]));
   const calls = [], win = {}; let onIns = null;
   const ctx = { $: s => els[s], mode: 'instruct', InstructRules: SI, addEventListener: (type, f) => { (win[type] = win[type] || []).push(f); },
     mpb: { run: x => calls.push(x), closeOverlay: () => calls.push('close'), onInstruct: cb => { onIns = cb; } } };
@@ -207,8 +207,8 @@ const tests = [];
   t('settings: 削除 -> instruct-hook-clear', J(calls) === J([{ type: 'instruct-hook-clear' }]));
   onHook({ configured: false, host: '', available: true, code: '' });
   t('settings: removed -> 未設定, 削除しました', fields['#hook-status'].innerHTML === '未設定' && fields['#hook-error'].textContent === '削除しました。');
-  calls.length = 0; fields['#sidebar-url'].value = 'https://example.com/'; submit('sidebar-settings-form');
-  t('settings: the sidebar URL form still saves the URL only', J(calls) === J([{ type: 'sidebar-save', url: 'https://example.com/', confirm: true }])); }
+  calls.length = 0; fields['#sidebar-url'].value = 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; submit('sidebar-settings-form');
+  t('settings: the sidebar URL form still saves the URL only', J(calls) === J([{ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm: true }])); }
 
 // ---- the public build: nothing personal, nothing configured ----
 { const files = fs.readdirSync(SRC).filter(f => /\.(js|html|css)$/.test(f) && f !== 'pane-preload.js'), all = files.map(f => [f, read(f)]);

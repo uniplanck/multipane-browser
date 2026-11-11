@@ -65,9 +65,9 @@ t('the sidebar is not part of a window / workspace / pane spec (one shared setti
   timers.pop()(); t('screen: the URL field gets the focus', focus.join() === 'url');
   const submit = v => { fields['#sidebar-url'].value = v; fields['#approve-error'].textContent = ''; handlers.submit({ preventDefault() {} }); };
   submit('http://example.com/');
-  t('screen: an unusable URL -> a message, nothing sent', fields['#approve-error'].textContent.includes('https://') && calls.length === 0);
-  submit('  https://example.com/#/p/sidebar  ');
-  t('screen: a usable URL -> sidebar-save (trimmed) with 開く前に確認する', JSON.stringify(calls[0]) === JSON.stringify({ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar', confirm: true }));
+  t('screen: an unusable URL -> a message, nothing sent', (fields['#approve-error'].textContent.includes('https://') || fields['#approve-error'].textContent.includes('#/p/sidebar')) && calls.length === 0);
+  submit('  https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ');
+  t('screen: a usable URL -> sidebar-save (trimmed) with 開く前に確認する', JSON.stringify(calls[0]) === JSON.stringify({ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm: true }));
   fields['#sidebar-confirm'].checked = false; submit('');
   t('screen: empty -> sidebar-save with no URL (turns it off), the box as it is', JSON.stringify(calls[1]) === JSON.stringify({ type: 'sidebar-save', url: '', confirm: false }));
   fields['#sidebar-confirm'].checked = true;

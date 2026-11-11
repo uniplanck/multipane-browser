@@ -37,15 +37,36 @@ const InstructRules = (() => {
     for (const ch of t) { if (out.length + ch.length > max) break; out += ch; }
     return out.trim();
   }
-  // the IPC payload: one plain object of these keys only, each a string (RAW_MAX at most), tid present
-  const requestOk = v => obj(v) && Object.keys(v).every(k => FIELDS.includes(k)) && typeof v.tid === 'string'
-    && FIELDS.every(k => v[k] === undefined || (typeof v[k] === 'string' && v[k].length <= RAW_MAX));
-  // -> { tid, task, bot, state, memo } (every key, '' when absent), or null (not usable / no tid left after cleaning)
+  const ASK_MAX = 500, OPT_MAX = 80, OPT_N = 8;   // 待ち内容 / 選択肢 (task.sh --ask / --options; the answer box)
+  const EXTRA = ['mode', 'ask', 'options'];        // optional: mode "answer", the wait prompt, up to 8 choice strings
+  // the IPC payload: the row fields (strings) plus the optional answer keys; tid present
+  const requestOk = v => obj(v) && Object.keys(v).every(k => FIELDS.includes(k) || EXTRA.includes(k)) && typeof v.tid === 'string'
+    && FIELDS.every(k => v[k] === undefined || (typeof v[k] === 'string' && v[k].length <= RAW_MAX))
+    && (v.mode === undefined || v.mode === 'answer' || v.mode === '')
+    && (v.ask === undefined || (typeof v.ask === 'string' && v.ask.length <= RAW_MAX))
+    && (v.options === undefined || (Array.isArray(v.options) && v.options.length <= OPT_N && v.options.every(x => typeof x === 'string' && x.length <= RAW_MAX)));
+  function optionsOf(v) {
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    for (const x of v) {
+      const s = clean(x, OPT_MAX);
+      if (s && !out.includes(s)) out.push(s);
+      if (out.length >= OPT_N) break;
+    }
+    return out;
+  }
+  // -> { tid, task, bot, state, memo, mode?, ask?, options? }, or null (not usable / no tid left after cleaning)
   function request(v) {
     if (!requestOk(v)) return null;
     const o = {};
     for (const k of FIELDS) o[k] = clean(v[k], LIMITS[k]);
-    return o.tid ? o : null;
+    if (!o.tid) return null;
+    if (v.mode === 'answer') o.mode = 'answer';
+    const ask = clean(v.ask, ASK_MAX);
+    if (ask) o.ask = ask;
+    const opts = optionsOf(v.options);
+    if (opts.length) o.options = opts;
+    return o;
   }
   // the box's text -> what is sent: line breaks kept (CR LF -> LF), other control characters out, trimmed; '' = nothing to send / too long
   function instruction(text) {
@@ -90,6 +111,13 @@ const InstructRules = (() => {
   function payload(o) {
     const x = obj(o) ? o : {}, task = request(x.task), ins = instruction(x.instruction), t = timeOf(x.now);
     if (typeof x.id !== 'string' || !ID_RE.test(x.id) || !task || !ins || !Number.isFinite(t) || Number.isNaN(new Date(t).getTime())) return null;
+    if (x.mode === 'answer') {
+      const body = { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task },
+        source: SOURCE, createdAt: new Date(t).toISOString(), createdAtJst: jst(t), mode: 'answer' };
+      const ch = typeof x.choice === 'string' ? clean(x.choice, OPT_MAX) : '';
+      if (ch) body.choice = ch;
+      return body;
+    }
     return { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task, bot: task.bot, state: task.state, memo: task.memo },
       source: SOURCE, createdAt: new Date(t).toISOString(), createdAtJst: jst(t) };
   }
@@ -138,8 +166,8 @@ const InstructRules = (() => {
   }
   const toastKind = r => { const o = obj(r) ? r : {}; return o.ok === true ? 'ok' : o.code === 'UNSET' || o.code === 'TEXT' ? 'warn' : 'err'; };
 
-  return { LIMITS, FIELDS, RAW_MAX, TEXT_MAX, URL_MAX, KEY_MIN, KEY_MAX, HOSTS, TIMEOUT_MS, TOAST_MS, DRAFTS_MAX, PARTITION, KIND, SOURCE, RESULTS, ID_RE, BOX, TOAST,
-    clean, requestOk, request, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
+  return { LIMITS, FIELDS, EXTRA, ASK_MAX, OPT_MAX, OPT_N, RAW_MAX, TEXT_MAX, URL_MAX, KEY_MIN, KEY_MAX, HOSTS, TIMEOUT_MS, TOAST_MS, DRAFTS_MAX, PARTITION, KIND, SOURCE, RESULTS, ID_RE, BOX, TOAST,
+    clean, requestOk, request, optionsOf, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
     toastText, toastKind };
 })();
 if (typeof module !== 'undefined') module.exports = InstructRules;

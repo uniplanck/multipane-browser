@@ -99,3 +99,31 @@ t('nothing personal in the rules: no URL but the hosts rule, no UUID, no key', !
 
 console.log(bad ? `${bad} failed` : 'all passed');
 process.exit(bad ? 1 : 0);
+
+{ const { test: t } = require('node:test'), assert = require('node:assert/strict'), R = require('../src/instruct-rules');
+  const J = v => JSON.stringify(v);
+  const id = R.messageId(Buffer.from('0123456789ab', 'utf8').length === 12 ? Buffer.from([1,2,3,4,5,6,7,8,9,10,11,12]) : Buffer.alloc(12, 7));
+  const now = new Date('2026-11-11T07:00:00.000Z');
+  t('request: mode answer + ask + options are kept and cleaned; unknown keys still refused', () => {
+    const r = R.request({ tid: 'T1', task: '仕事', mode: 'answer', ask: '  どちら？  ', options: [' 案A ', '', '案B', '案A'] });
+    assert.equal(r.mode, 'answer');
+    assert.equal(r.ask, 'どちら？');
+    assert.deepEqual(r.options, ['案A', '案B']);
+    assert.equal(R.request({ tid: 'T1', extra: 'x' }), null);
+    assert.equal(R.request({ tid: 'T1', mode: 'instruct' }), null);
+  });
+  t('payload: answer mode has mode, task{tid,task} only, optional choice, same kind', () => {
+    const p = R.payload({ id, instruction: '案A', task: { tid: 'T1', task: '仕事', bot: 'NaoAI', state: '待ち', memo: 'x' }, now, mode: 'answer', choice: '案A' });
+    assert.equal(p.kind, 'xg-bots-instruction');
+    assert.equal(p.mode, 'answer');
+    assert.deepEqual(p.task, { tid: 'T1', task: '仕事' });
+    assert.equal(p.choice, '案A');
+    assert.equal(p.instruction, '案A');
+    const f = R.payload({ id, instruction: '自由に書きます', task: { tid: 'T1', task: '仕事' }, now, mode: 'answer' });
+    assert.equal(f.mode, 'answer');
+    assert.ok(!('choice' in f));
+    const n = R.payload({ id, instruction: '普通', task: { tid: 'T1', task: '仕事', bot: 'B', state: '', memo: '' }, now });
+    assert.ok(!('mode' in n));
+    assert.deepEqual(Object.keys(n.task), ['tid', 'task', 'bot', 'state', 'memo']);
+  });
+}
