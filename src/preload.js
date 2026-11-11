@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('mpb', {
   sidebarToggle: () => send('sidebar-toggle'), sidebarSettings: () => send('sidebar-settings'), sidebarResizeStart: () => send('sidebar-resize-start'), sidebarResizeReset: () => send('sidebar-resize-reset'),   // 進捗サイドバー
   splitStart: (a, i, row) => send('split-start', a, i, row), syncCols: v => send('sync-cols', v), syncReset: () => send('sync-reset'), splitEnd: () => send('split-end'), splitReset: (a, row) => send('split-reset', a, row),
   reloadAll: () => send('reload-all'), reopenClosed: () => send('reopen-closed'),
+  openGrokBot: () => send('open-grok-bot'),
   sleepToggle: id => send('sleep-toggle', id), wakePane: id => send('wake-pane', id), sleepNow: id => send('sleep-now', id), loadCancel: id => send('load-cancel', id),
   probeResume: () => send('probe-resume'),
   approveOpen: rect => send('approve-open', rect), approveInline: rect => send('approve-inline-open', rect), approveKeepAwakeToggle: () => send('approve-keep-awake-toggle'),

@@ -65,6 +65,68 @@ const SidebarRules = (() => {
   // settings -> what the windows show (no URL: never open, the button guides to the setting)
   const view = s => { const o = s || {}, url = normalizeUrl(o.sidebarUrl); return { url, configured: !!url, open: o.sidebarOpen === true && !!url, width: clampWidth(o.sidebarWidth) }; };
 
+  // the settings field: only the dashboard sidebar page (path or hash /p/sidebar) is saved. A Cursor webhook host is refused (it belongs in
+  // 「NaoAIへの指示（webhook）」). If the typed value is the sidebar route but has no read key (k=), keep the key from the already-saved URL when
+  // the origin matches (or when the typed value is only a hash / path). Never invent a host or a key. Messages never include the URL / key (host at most).
+  const SIDEBAR_ROUTE = /(?:^|\/)p\/sidebar(?:\/)?(?:[?#]|$)/;
+  const hookHost = h => typeof h === 'string' && (h === 'cursor.com' || h === 'cursor.sh' || h.endsWith('.cursor.com') || h.endsWith('.cursor.sh'));
+  const fragOrPath = u => ((u.hash || '').replace(/^#/, '').split('?')[0] + ' ' + (u.pathname || '')).trim();
+  const hasKey = u => {
+    const q = (u.search || '') + (((u.hash || '').includes('?') ? u.hash.slice(u.hash.indexOf('?')) : ''));
+    return /(?:^|[?&])k=/.test(q) && /(?:^|[?&])k=[^&]+/.test(q);
+  };
+  const isSidebarPage = u => SIDEBAR_ROUTE.test(u.hash || '') || SIDEBAR_ROUTE.test(u.pathname || '');
+  function parseLoose(value, base) {
+    if (typeof value !== 'string') return null;
+    const s = value.trim();
+    if (!s) return null;
+    const full = parse(s);
+    if (full) return full;
+    if (s.startsWith('#') || s.startsWith('/')) {
+      const b = parse(base);
+      if (!b) return null;
+      try { return new URL(s, b.origin + '/'); } catch { return null; }
+    }
+    return null;
+  }
+  const MSG = {
+    WEBHOOK: 'これは進捗サイドバーのURLではなさそうです。NaoAIのwebhookは、設定の「NaoAIへの指示（webhook）」に入れてください。',
+    OTHER: '進捗サイドバーのページ（#/p/sidebar）のURLを入力してください。読み取り用の鍵が付いたものを使います。',
+    NO_KEY: '読み取り用の鍵が付いていません。ダッシュボードが出す、アプリ用のURLをそのまま貼ってください。',
+    INVALID: 'https:// で始まるURLを入力してください（開発用に http://localhost も使えます）。',
+  };
+  // typed + the already-saved URL -> { ok, url, code, message, completed }
+  // code: OK | EMPTY | WEBHOOK | OTHER | NO_KEY | INVALID. ok means setSidebarUrl may write `url` ('' = none).
+  function decideSidebarUrl(typed, current) {
+    if (typeof typed !== 'string' || !typed.trim()) return { ok: true, url: '', code: 'EMPTY', message: '', completed: false };
+    if (typed.length > URL_MAX) return { ok: false, url: '', code: 'INVALID', message: MSG.INVALID, completed: false };
+    const raw = typed.trim();
+    const u0 = parse(raw);
+    if (u0 && hookHost(u0.hostname)) return { ok: false, url: '', code: 'WEBHOOK', message: MSG.WEBHOOK, completed: false };
+    const u = parseLoose(raw, current);
+    if (!u) return { ok: false, url: '', code: 'INVALID', message: MSG.INVALID, completed: false };
+    if (hookHost(u.hostname)) return { ok: false, url: '', code: 'WEBHOOK', message: MSG.WEBHOOK, completed: false };
+    if (!isSidebarPage(u)) return { ok: false, url: '', code: 'OTHER', message: MSG.OTHER, completed: false };
+    if (hasKey(u)) {
+      const href = normalizeUrl(u.href) || u.href;
+      return href ? { ok: true, url: href, code: 'OK', message: '', completed: false } : { ok: false, url: '', code: 'INVALID', message: MSG.INVALID, completed: false };
+    }
+    const cur = parse(current);
+    if (cur && isSidebarPage(cur) && hasKey(cur) && cur.origin === u.origin) {
+      const next = new URL(u.href);
+      const curHashQ = (cur.hash.includes('?') ? cur.hash.slice(cur.hash.indexOf('?') + 1) : (cur.search || '').replace(/^\?/, ''));
+      const key = (curHashQ.split('&').find(p => p.startsWith('k=')) || '').slice(2);
+      if (key) {
+        const path = (next.hash || '').replace(/^#/, '').split('?')[0] || '/p/sidebar';
+        next.hash = path + '?k=' + key;
+        next.search = '';
+        const href = normalizeUrl(next.href) || next.href;
+        if (href) return { ok: true, url: href, code: 'OK', message: '読み取り鍵を補いました。', completed: true };
+      }
+    }
+    return { ok: false, url: '', code: 'NO_KEY', message: MSG.NO_KEY, completed: false };
+  }
+
   // names: NFKC (full-width -> half-width), trimmed, case-folded, runs of spaces / underscores = one space ("Grok_Bot" = "grok bot")
   const normName = s => typeof s === 'string' ? s.normalize('NFKC').replace(/[\u200b-\u200d\u2060\ufeff]/g, '').replace(/[\s_]+/g, ' ').trim().toLowerCase() : '';
   const nameOk = v => typeof v === 'string' && v.length <= NAME_MAX && !controls.test(v) && !!normName(v);
@@ -176,7 +238,7 @@ const SidebarRules = (() => {
   const retryDue = (rec, s) => { const o = s || {}; return !(rec && rec.failed === true) || o.open !== true ? 'NONE' : o.crashed === true ? 'RECREATE' : o.loading === true ? 'WAIT' : 'RETRY'; };
 
   return { DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH, PANES_MIN, HIDE_BELOW, URL_MAX, NAME_MAX, KEEP_MS, PARTITION, RESULTS, NAMES_PER_TIER, STATE_PANES, WORLD, FOCUS_WAIT_MS, JUMP_WAIT_MS,
-    clampWidth, fit, layout, dragWidth, normalizeUrl, validUrl, originOf, navOk, httpUrl, view, normName, nameOk, findBot,
+    clampWidth, fit, layout, dragWidth, normalizeUrl, validUrl, originOf, navOk, httpUrl, view, decideSidebarUrl, normName, nameOk, findBot,
     agentOk, agentOf, botUrl, confirmOpen, jumpOk, jump, paneNames, state, focusComposer, FOCUS_JS, composerPage,
     RETRY_MS, RETRY_CODES, retryWait, failKind, retryRec, retryStep, retryDue };
 })();

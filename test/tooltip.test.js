@@ -13,7 +13,7 @@ for (const [file, text] of [['index.html', html], ['renderer.js', renderer], ['t
   assert(!/\.title\s*=/.test(text), `${file}: native title property`);
   assert(!/setAttribute\(\s*["']title["']/.test(text), `${file}: native title setter`);
 }
-for (const id of ['mem', 'cpu', 'queue-sum', 'unread-sum', 'save-warn', 'ws-btn', 'sync-cols', 'reload-all', 'reopen', 'add', 'cmdk', 'approve-btn', 'fav-star']) {
+for (const id of ['mem', 'cpu', 'queue-sum', 'unread-sum', 'save-warn', 'open-grok-bot', 'ws-btn', 'sync-cols', 'reload-all', 'reopen', 'add', 'cmdk', 'approve-btn', 'fav-star']) {
   const tag = html.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`));
   assert(tag && /data-tip=/.test(tag[0]) && /aria-label=/.test(tag[0]), `${id} needs a tip and accessible name`);
 }
