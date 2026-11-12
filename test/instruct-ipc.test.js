@@ -359,7 +359,7 @@ const tests = [];
 { const ov = read('overlay.js'), a = ov.indexOf("const updatePanel = $('#update-panel');"), b = ov.indexOf('function renderUpdate(o) {', a);
   const handlers = {}, calls = [];
   const field = v => ({ value: v, textContent: '', className: '', innerHTML: '', disabled: false, focus() {} });
-  const fields = { '#sidebar-url': field(''), '#sidebar-confirm': { checked: true }, '#approve-error': field(''), '#hook-url': field(''), '#hook-key': field(''), '#hook-error': field(''), '#hook-status': field(''), '#hook-save': field('') };
+  const fields = { '#sidebar-url': field(''), '#approve-error': field(''), '#hook-url': field(''), '#hook-key': field(''), '#hook-error': field(''), '#hook-status': field(''), '#hook-save': field('') };
   const panel = { innerHTML: '', querySelector: sel => fields[sel] || null, querySelectorAll: () => [], addEventListener: (type, fn) => { handlers[type] = fn; } };
   let onHook = null;
   const ctx = { $: () => panel, ApproveSetting: require('../src/approve-setting'), SidebarRules: require('../src/sidebar-rules'), InstructRules: SI, mode: 'sidebar-settings', ctx: {}, setTimeout: () => {},
@@ -390,7 +390,7 @@ const tests = [];
   onHook({ configured: false, host: '', available: true, code: '' });
   t('settings: removed -> 未設定, 削除しました', fields['#hook-status'].innerHTML === '未設定' && fields['#hook-error'].textContent === '削除しました。');
   calls.length = 0; fields['#sidebar-url'].value = 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; submit('sidebar-settings-form');
-  t('settings: the sidebar URL form still saves the URL only', J(calls) === J([{ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm: true }])); }
+  t('settings: the sidebar URL form still saves the URL only', J(calls) === J([{ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }])); }
 
 // ---- the public build: nothing personal, nothing configured ----
 { const files = fs.readdirSync(SRC).filter(f => /\.(js|html|css)$/.test(f) && f !== 'pane-preload.js'), all = files.map(f => [f, read(f)]);

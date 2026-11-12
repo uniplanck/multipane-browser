@@ -625,13 +625,12 @@ function sideSes() {                                         // its partition, s
   return ses;
 }
 function sidebarSet(patch) { Object.assign(settings, patch); save(); ctxs.forEach(c => c.sideSync()); buildMenu(); }   // every window follows
-function setSidebarUrl(value, confirm) {                     // '' = none (closed); a URL is opened right away. confirm: 開く前に確認する (absent: as it is)
+function setSidebarUrl(value) {                              // '' = none (closed); a URL is opened right away
   const d = SR.decideSidebarUrl(value, settings.sidebarUrl || '');
   if (!d.ok) return false;
   const url = d.url;
   if (url) settings.sidebarUrl = url; else delete settings.sidebarUrl;
-  if (typeof confirm === 'boolean') settings.sidebarConfirmOpen = confirm;
-  sidebarSet({ sidebarOpen: !!url });                        // -> sideSync / relayout / sendState: the pages get the new confirmOpen (sideStateSoon)
+  sidebarSet({ sidebarOpen: !!url });                        // -> sideSync / relayout / sendState
   return true;
 }
 // a Bot's name from the sidebar page, right after the user's click / key in it (a page's own timer never moves the keyboard; nothing while a prompt is
@@ -669,9 +668,9 @@ function sidebarJump(r, req) {
 }
 // what the page is told (window.xgBotsSidebar.onState / getState), to its own sidebar view only: every window's panes (this window's first) as
 // SR.state gives them - the agentId of a grok.com/bot/<uuid> page (nothing else of any URL), a few names of findBot's tiers, whether it is this
-// window's active pane - and settings.sidebarConfirmOpen. Pushed 200 ms after a change (any window's sendState: panes added / closed / renamed /
-// moved / activated, the setting) and when its page has loaded; an unchanged state is not sent again. Nothing polls
-const sideState = from => SR.state(sidePanes(from), SR.confirmOpen(settings));
+// window's active pane - and confirmOpen, always false (a saved settings.sidebarConfirmOpen is ignored: the page opens a Bot without asking).
+// Pushed 200 ms after a change (any window's sendState: panes added / closed / renamed / moved / activated) and when its page has loaded; an unchanged state is not sent again. Nothing polls
+const sideState = from => SR.state(sidePanes(from));
 ipcHandle('sidebar:get-state', r => sideState(r.ctx));
 let sideStateTimer = null;
 function sideStateSoon() {
@@ -2710,7 +2709,7 @@ function sideMenu(wc, params) {
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 function sideToggle() { const v = SR.view(settings); if (!v.configured) openSidebarSettings(); else sidebarSet({ sidebarOpen: !v.open }); }   // no URL: the setting
-function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url, confirm: SR.confirmOpen(settings) }, hook: hookView() }); }
+function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url }, hook: hookView() }); }
 // ---- NaoAIへの指示: this window's box (sidebarInstruct). The overlay in mode 'instruct' on SI.boxRect only, focused at once; the page gets the row
 // (a batch: { bot, tasks } instead), the draft of its tid (a batch: of its Bot) and { configured, host, available }. Closed by Esc / a click outside
 // it (its view's margin, the sidebar, a pane, the bar: the keyboard stays where the user went) / another screen - the draft stays (instruct-draft,
@@ -2954,7 +2953,7 @@ function runAction(a) {
       break;
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
-    case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
+    case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none); a confirm sent by an older screen is ignored
     case 'instruct-send': instructSend(a.no, a.text, a.choice).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ / a choice button
     case 'instruct-draft': instructDraft(a.no, a.text); break;
     case 'instruct-settings': if (overlayOpen && overlayMode === 'instruct') openSidebarSettings(); break;

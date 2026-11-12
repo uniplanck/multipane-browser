@@ -148,7 +148,7 @@ const SidebarRules = (() => {
   const agentOk = v => typeof v === 'string' && AGENT_RE.test(v);
   const agentOf = url => { const m = typeof url === 'string' ? url.match(BOT_RE) : null; return m ? m[1].toLowerCase() : ''; };   // '' = not a Bot's page
   const botUrl = id => agentOk(id) ? 'https://grok.com/bot/' + id : '';   // the only URL a jump opens: built here, never taken from the page
-  const confirmOpen = s => !(s && s.sidebarConfirmOpen === false);      // settings.sidebarConfirmOpen: the page asks before opening (default on)
+  const confirmOpen = () => false;                                     // 開く前に確認する is gone: a saved settings.sidebarConfirmOpen is ignored, never asked
   // the IPC payload: { name, agentId?, open? } and nothing else (the preload sends only these; main checks again)
   const jumpOk = v => !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => k === 'name' || k === 'agentId' || k === 'open')
     && nameOk(v.name) && (v.agentId === undefined || agentOk(v.agentId)) && (v.open === undefined || typeof v.open === 'boolean');
@@ -186,9 +186,9 @@ const SidebarRules = (() => {
     return out;
   }
   // rows: [{ url, tiers, active }] (the sidebar's window first) -> what the page gets: per pane only the agentId (a grok.com/bot/<uuid> URL;
-  // nothing else of any URL), its names and whether it is the active pane of the sidebar's window; and the confirm setting
-  const state = (rows, confirm) => ({ panes: (Array.isArray(rows) ? rows : []).slice(0, STATE_PANES).map(r => ({ agentId: agentOf(r && r.url) || null,
-    names: paneNames(r && r.tiers, r && r.url), active: !!r && r.active === true })), confirmOpen: confirm !== false });
+  // nothing else of any URL), its names and whether it is the active pane of the sidebar's window. confirmOpen stays for the page, always false
+  const state = rows => ({ panes: (Array.isArray(rows) ? rows : []).slice(0, STATE_PANES).map(r => ({ agentId: agentOf(r && r.url) || null,
+    names: paneNames(r && r.tiers, r && r.url), active: !!r && r.active === true })), confirmOpen: confirmOpen() });
   // the page side (fixed code, run by main in the pane's page in its own world WORLD: the page's scripts cannot change what it uses), so it uses
   // the page's globals only. The composer = the last visible textarea / contenteditable (as the broadcast / draft restore pick it), focused with
   // the caret at its end (already focused: left as it is); waits up to ms for it to appear. Never types, reads nothing else -> 'focused' | 'none'

@@ -9,6 +9,25 @@ function setTip(el, name, description, key = '', detail = '') {
   el.dataset.tipKey = String(key || ''); el.dataset.tipDetail = String(detail || '');
   el.setAttribute('aria-label', [name, description, detail].filter(Boolean).join('。'));
 }
+// Long press (approve button, a pane's ⤢, a Grok bar item): onHold runs when HOLD_MS has passed, without a release.
+// The timer answers on the press event's own clock (press.at + HOLD_MS). click(e) -> true: this click is consumed.
+function holdPress(el, onHold) {
+  let hold = GbarLongPress.idle(), feedback = null, timer = 0;
+  const clear = () => { clearTimeout(timer); timer = 0; if (feedback) feedback.cancel(); feedback = null; };
+  const settle = result => { hold = result.state; if (!hold.press) clear(); if (result.openHere) onHold(); };
+  const cancel = e => { hold = GbarLongPress.cancel(hold, e); if (!hold.press) clear(); };
+  el.onpointerdown = e => {
+    clear(); hold = GbarLongPress.begin(e);
+    if (!hold.press) return;
+    const due = hold.press.at + GbarLongPress.HOLD_MS;
+    feedback = el.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
+    timer = setTimeout(() => settle(GbarLongPress.fire(hold, due)), GbarLongPress.HOLD_MS);
+  };
+  el.onpointermove = e => { hold = GbarLongPress.move(hold, e); if (!hold.press) clear(); };
+  el.onpointerleave = el.onpointercancel = cancel;
+  el.onpointerup = e => settle(GbarLongPress.release(hold, e));
+  return { cancel, click: e => { const result = GbarLongPress.click(hold, e); hold = result.state; clear(); return result.suppress; } };
+}
 function tipAttrs(name, description, key = '', detail = '') {
   return `data-tip="${esc(name)}" data-tip-desc="${esc(description)}" data-tip-key="${esc(key)}" data-tip-detail="${esc(detail)}" aria-label="${esc([name, description, detail].filter(Boolean).join('。'))}"`;
 }
@@ -51,25 +70,10 @@ function renderApproveButton(a) {
     `現在: ${a.keepAwake === true ? '常時起動' : '自動スリープ'}・長押しで切り替えます。`);
 }
 const approveBtn = $('#approve-btn');
-let approveHold = GbarLongPress.idle(), approveFeedback = null;
-const clearApproveFeedback = () => { if (approveFeedback) approveFeedback.cancel(); approveFeedback = null; };
-const cancelApproveHold = e => { approveHold = GbarLongPress.cancel(approveHold, e); if (!approveHold.press) clearApproveFeedback(); };
-approveBtn.onpointerdown = e => {
-  clearApproveFeedback(); approveHold = GbarLongPress.begin(e);
-  if (approveHold.press) approveFeedback = approveBtn.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
-};
-approveBtn.onpointermove = e => { approveHold = GbarLongPress.move(approveHold, e); if (!approveHold.press) clearApproveFeedback(); };
-approveBtn.onpointerleave = approveBtn.onpointercancel = cancelApproveHold;
-approveBtn.addEventListener('dragstart', () => cancelApproveHold());
-approveBtn.onpointerup = e => {
-  const result = GbarLongPress.release(approveHold, e); approveHold = result.state;
-  if (!approveHold.press) clearApproveFeedback();
-  if (result.openHere) mpb.approveKeepAwakeToggle();
-};
+const approveHold = holdPress(approveBtn, () => mpb.approveKeepAwakeToggle());
+approveBtn.addEventListener('dragstart', () => approveHold.cancel());
 approveBtn.onclick = e => {
-  const result = GbarLongPress.click(approveHold, e); approveHold = result.state;
-  clearApproveFeedback();
-  if (result.suppress) { e.preventDefault(); e.stopPropagation(); return; }
+  if (approveHold.click(e)) { e.preventDefault(); e.stopPropagation(); return; }
   mpb.approveOpen(approveButtonRect());
 };
 $('#approve-btn').oncontextmenu = e => { e.preventDefault(); mpb.approveInline(approveButtonRect()); };
@@ -153,30 +157,16 @@ function mk(id) {
   // A non-draggable child can still start a drag on its draggable parent; exclude that press from docking too.
   let badgePressed = false, maxPressed = false;
   const maxBtn = d.querySelector('[data-a=maximize]');
-  let maxHold = GbarLongPress.idle(), maxFeedback = null, contextClick = false;
-  const clearMaxFeedback = () => { if (maxFeedback) maxFeedback.cancel(); maxFeedback = null; };
-  const cancelMaxHold = e => { maxHold = GbarLongPress.cancel(maxHold, e); if (!maxHold.press) clearMaxFeedback(); };
-  maxBtn.onpointerdown = e => {
-    contextClick = false; clearMaxFeedback(); maxHold = GbarLongPress.begin(e);
-    if (maxHold.press) maxFeedback = maxBtn.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
-  };
-  maxBtn.onpointermove = e => { maxHold = GbarLongPress.move(maxHold, e); if (!maxHold.press) clearMaxFeedback(); };
-  maxBtn.onpointerleave = maxBtn.onpointercancel = cancelMaxHold;
-  maxBtn.onmousedown = e => { maxPressed = true; badgePressed = false; e.stopPropagation(); };
-  maxBtn.ondragstart = e => { cancelMaxHold(); e.preventDefault(); e.stopPropagation(); };
-  maxBtn.onpointerup = e => {
-    const result = GbarLongPress.release(maxHold, e); maxHold = result.state;
-    if (!maxHold.press) clearMaxFeedback();
-    if (result.openHere) mpb.maximize(id);
-  };
+  let contextClick = false;
+  const maxHold = holdPress(maxBtn, () => mpb.maximize(id));
+  maxBtn.onmousedown = e => { contextClick = false; maxPressed = true; badgePressed = false; e.stopPropagation(); };
+  maxBtn.ondragstart = e => { maxHold.cancel(); e.preventDefault(); e.stopPropagation(); };
   maxBtn.onclick = e => {
-    const result = GbarLongPress.click(maxHold, e); maxHold = result.state;
-    clearMaxFeedback();
-    if (result.suppress || (contextClick && e.detail !== 0)) { contextClick = false; e.preventDefault(); e.stopPropagation(); return; }
+    if (maxHold.click(e) || (contextClick && e.detail !== 0)) { contextClick = false; e.preventDefault(); e.stopPropagation(); return; }
     contextClick = false; e.stopPropagation();
     if (e.button === 0 && !e.ctrlKey) mpb.maximizeHalf(id, 'left');
   };
-  maxBtn.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); cancelMaxHold(); contextClick = true; mpb.maximizeHalf(id, 'right'); };
+  maxBtn.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); maxHold.cancel(); contextClick = true; mpb.maximizeHalf(id, 'right'); };
   badge.onclick = e => { e.stopPropagation(); mpb.close(id); };
   badge.onmousedown = e => { badgePressed = true; e.preventDefault(); e.stopPropagation(); };
   badge.ondblclick = e => e.stopPropagation();
@@ -464,27 +454,12 @@ function gbotBtn(b, pin) {
   setTip(el, b.name, 'クリックで開き、長押しで今のペインに開きます。', '',
     `${b.name !== b.orig ? `元の名前: ${b.orig}・` : ''}${b.group ? 'グループ・' : ''}${b.pinned ? 'お気に入り・' : ''}${b.url}・右クリックでメニュー`);
   gTrack(el, b);
-  let hold = GbarLongPress.idle(), feedback = null;
-  const clearFeedback = () => { if (feedback) feedback.cancel(); feedback = null; };
-  const cancelHold = e => { hold = GbarLongPress.cancel(hold, e); if (!hold.press) clearFeedback(); };
-  el.onpointerdown = e => {
-    clearFeedback(); hold = GbarLongPress.begin(e);
-    if (hold.press) feedback = el.animate([{ backgroundColor: 'var(--ctl-hi)' }, { backgroundColor: 'var(--accent)' }], { duration: GbarLongPress.HOLD_MS, easing: 'linear', fill: 'forwards' });
-  };
-  el.onpointermove = e => { hold = GbarLongPress.move(hold, e); if (!hold.press) clearFeedback(); };
-  el.onpointerleave = el.onpointercancel = cancelHold;
+  const hold = holdPress(el, () => mpb.gbotOpen(b.id, 'here'));
   // Do not capture the pointer or prevent pointerdown/dragstart: pinned items
   // retain Chromium's native drag-and-drop reorder gesture.
-  el.addEventListener('dragstart', () => cancelHold());
-  el.onpointerup = e => {
-    const result = GbarLongPress.release(hold, e); hold = result.state;
-    if (!hold.press) clearFeedback();
-    if (result.openHere) mpb.gbotOpen(b.id, 'here');
-  };
+  el.addEventListener('dragstart', () => hold.cancel());
   el.onclick = e => {
-    const result = GbarLongPress.click(hold, e); hold = result.state;
-    clearFeedback();
-    if (result.suppress) { e.preventDefault(); e.stopPropagation(); return; }
+    if (hold.click(e)) { e.preventDefault(); e.stopPropagation(); return; }
     if (e.button === 2 || e.ctrlKey) return;
     mpb.gbotOpen(b.id, openWhere(e));
   };

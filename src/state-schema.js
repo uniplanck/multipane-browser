@@ -18,7 +18,7 @@
 // (Grok bar 表示モード) settings.gbarMode (gbar-mode.js: 'normal' / 'semi' / 'compact'): optional, no new schema (none = 通常). Anything else is
 // repaired to 'normal'; validate() wants one of the modes.
 // (進捗サイドバー) settings.sidebarOpen (boolean), sidebarWidth (220-560), sidebarUrl (sidebar-rules.js: https / loopback http, normalised) and
-// sidebarConfirmOpen (boolean: 開く前に確認する): optional, no new schema (none = closed, 300 px, no URL, ask before opening). A non-boolean flag /
+// sidebarConfirmOpen (boolean: the former 開く前に確認する, kept as it is in the file but ignored): optional, no new schema (none = closed, 300 px, no URL). A non-boolean flag /
 // unusable URL is dropped, a width out of range clamped, as a repair.
 // (ペイン色) settings.botColors (pane-color.js: Bot URL / agentId -> a muted colour name): optional, no new schema. A broken map is cleaned as a repair.
 const SS = require('./session-snapshot');

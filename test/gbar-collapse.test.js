@@ -150,7 +150,7 @@ t('source: collapsed status dots only occupy space when their state is present',
   const ctx = vm.createContext({ $: s => elements[s], mpb, S: { favorites: [], focusedId: 11, panes: [
     { id: 11, url: sections[0].items[0].url }, { id: 12, url: sections[0].items[1].url, needsReply: true },
     { id: 13, url: sections[1].items[0].url }] }, MOD: '⌘', renderSummaryTips() {}, URL,
-    GbarPresence: Presence, GbarMode: Mode, GbarPages: Pages, GbarLongPress: require('../src/gbar-long-press'),
+    GbarPresence: Presence, GbarMode: Mode, GbarPages: Pages, GbarLongPress: require('../src/gbar-long-press'), setTimeout: () => 0, clearTimeout() {},
     document: doc,
     getComputedStyle: e => e === favs ? { columnGap: '4px' } : { marginLeft: e.classList.contains('gsep') ? '4px' : '0', marginRight: e.classList.contains('gsep') ? '4px' : '0' },
     ResizeObserver: class { constructor(cb) { box.resize = cb; } observe() {} } });

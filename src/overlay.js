@@ -299,15 +299,13 @@ function renderApproveSettings(o) {
   if (inline) positionApproveInline();
   setTimeout(() => { if (mode === o.mode) approveSettingsPanel.querySelector('#approve-url')?.focus(); }, 0);
 }
-// 進捗サイドバー: the page shown left of the panes (main checks the URL again; saving one opens the sidebar, an empty one turns it off) and
-// 開く前に確認する (settings.sidebarConfirmOpen, on unless turned off: the page asks before a Bot without a pane is opened). Both saved together
+// 進捗サイドバー: the page shown left of the panes (main checks the URL again; saving one opens the sidebar, an empty one turns it off)
 function renderSidebarSettings(o) {
   const sb = o.sidebar || {};
   approveSettingsPanel.innerHTML = `<div class="update-head"><span class="update-icon">▤</span><h2>進捗サイドバー</h2></div>
     <p class="update-copy">ペインの左に表示するページのURLを設定します。https:// で始まるURL（開発用に http://localhost も可）だけ使えます。<br>空欄で保存するとサイドバーを使いません。ページからは <code>window.xgBotsSidebar.jump(…)</code> / <code>window.xgBotsSidebar.focusBot(名前)</code> でそのBotのペインへ移動できます。</p>
     <form id="sidebar-settings-form" novalidate>
       <label class="approve-field">ページのURL<input id="sidebar-url" type="text" spellcheck="false" autocomplete="off" placeholder="https://example.com/#/p/sidebar" value="${esc(sb.url || '')}"></label>
-      <label class="update-toggle"><input type="checkbox" id="sidebar-confirm" ${sb.confirm !== false ? 'checked' : ''}><span>開く前に確認する<br><small>ペインが開いていないBotを押したとき、開く前に確認を出す</small></span></label>
       <div id="approve-error" role="alert" aria-live="polite"></div>
       <div class="update-actions"><button class="primary" type="submit">保存</button><button type="button" data-approve-action="cancel">キャンセル</button><button class="approve-reset" type="button" data-sidebar-action="clear">URLを消す</button></div>
     </form>
@@ -354,7 +352,6 @@ mpb.onInstructHook?.(v => {
   p.querySelector('#hook-url').value = ''; p.querySelector('#hook-key').value = '';   // nothing of it stays on screen
   err.className = 'ok'; err.textContent = was === 'clear' ? '削除しました。' : '保存しました。';
 });
-const sidebarConfirm = () => { const c = approveSettingsPanel.querySelector('#sidebar-confirm'); return c ? c.checked === true : true; };   // no box: on
 approveSettingsPanel.addEventListener('submit', e => {
   e.preventDefault();
   if (mode === 'sidebar-settings' && e.target && e.target.id === 'hook-form') { hookSave(); return; }   // NaoAIへの指示（webhook）: its own form
@@ -365,7 +362,7 @@ approveSettingsPanel.addEventListener('submit', e => {
     const d = SidebarRules.decideSidebarUrl(typed, cur);
     if (!d.ok) { err.textContent = d.message; return; }
     if (err) err.textContent = d.completed ? d.message : '';
-    mpb.run({ type: 'sidebar-save', url: d.url, confirm: sidebarConfirm() });
+    mpb.run({ type: 'sidebar-save', url: d.url });
     return;
   }
   const url = approveSettingsPanel.querySelector('#approve-url').value, label = approveSettingsPanel.querySelector('#approve-name').value;
@@ -382,7 +379,7 @@ approveSettingsPanel.addEventListener('input', e => {
 approveSettingsPanel.addEventListener('click', e => {
   const pick = e.target.closest('[data-approve-pick]');
   if (pick && mode === 'approve-inline') { mpb.run({ type: 'approve-pick', id: pick.dataset.approvePick }); return; }
-  if (mode === 'sidebar-settings' && e.target.closest('[data-sidebar-action="clear"]')) { mpb.run({ type: 'sidebar-save', url: '', confirm: sidebarConfirm() }); return; }
+  if (mode === 'sidebar-settings' && e.target.closest('[data-sidebar-action="clear"]')) { mpb.run({ type: 'sidebar-save', url: '' }); return; }
   if (mode === 'sidebar-settings' && e.target.closest('[data-hook-action="clear"]')) { hookAsk = 'clear'; mpb.run({ type: 'instruct-hook-clear' }); return; }
   const action = e.target.closest('[data-approve-action]')?.dataset.approveAction;
   if (action === 'reset') mpb.run({ type: 'approve-reset' });

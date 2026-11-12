@@ -283,10 +283,10 @@ assert(read('src/style.css').includes('#approve-btn.icon-only'));
 {
   const calls = [], label = {}, classes = {}, button = { getBoundingClientRect: () => anchor, classList: { toggle: (k, v) => { classes[k] = v; } },
     addEventListener() {}, animate: () => ({ cancel() {} }) };
-  const ctx = { $: sel => sel === '#approve-btn' ? button : label, setTip: (_, name, desc) => calls.push({ name, desc }), GbarLongPress: require('../src/gbar-long-press'),
+  const ctx = { $: sel => sel === '#approve-btn' ? button : label, setTip: (_, name, desc) => calls.push({ name, desc }), GbarLongPress: require('../src/gbar-long-press'), setTimeout: () => 0, clearTimeout() {},
     mpb: { approveOpen: r => calls.push({ action: 'open', rect: r }), approveInline: r => calls.push({ action: 'inline', rect: r }),
       approveInlineAnchor: r => calls.push({ action: 'anchor', rect: r }), onApproveAnchorRequest: cb => { ctx.request = cb; } } };
-  vm.runInNewContext(segment(renderer, 'function approveButtonRect() {', 'let approveSavedTimer;'), ctx);
+  vm.runInNewContext(segment(renderer, 'function holdPress(', 'function tipAttrs(') + segment(renderer, 'function approveButtonRect() {', 'let approveSavedTimer;'), ctx);
   button.onclick({ detail: 0 }); assert.strictEqual(calls[0].action, 'open'); assert.strictEqual(JSON.stringify(calls[0].rect), JSON.stringify(anchor));
   let prevented = false; button.oncontextmenu({ preventDefault: () => { prevented = true; } });
   assert(prevented && calls[1].action === 'inline'); assert.strictEqual(JSON.stringify(calls[1].rect), JSON.stringify(anchor));

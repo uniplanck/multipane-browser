@@ -49,7 +49,10 @@ assert(main.includes('keepAwake: settings.approveKeepAwake === true'));
     addEventListener: (k, fn) => { listeners[k] = fn; }, animate: (frames, options) => {
       const a = { frames, options, cancelled: false, cancel() { this.cancelled = true; } }; animations.push(a); return a;
     } };
+  const timers = new Map(); let timerId = 0;   // the hold timer: elapse() is HOLD_MS passing while the button is still down
+  const elapse = () => { for (const [id, t] of [...timers]) { timers.delete(id); t.fn(); } };
   const ctx = { $: s => s === '#approve-btn' ? button : label, GbarLongPress: Hold,
+    setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; }, clearTimeout: id => { timers.delete(id); },
     mpb: { approveOpen: r => calls.push(['open', r]), approveInline: r => calls.push(['inline', r]),
       approveKeepAwakeToggle: () => calls.push(['toggle']), approveInlineAnchor() {}, onApproveAnchorRequest() {} } };
   vm.runInNewContext(segment(renderer, 'function setTip(', 'function tipAttrs(')
@@ -65,22 +68,32 @@ assert(main.includes('keepAwake: settings.approveKeepAwake === true'));
   assert.strictEqual(animations[0].frames[1].backgroundColor, 'var(--accent)');
   assert.strictEqual(animations[0].options.duration, Hold.HOLD_MS);
   assert.strictEqual(animations[0].options.easing, 'linear'); assert.strictEqual(animations[0].options.fill, 'forwards');
-  assert(animations[0].cancelled);
+  assert(animations[0].cancelled); assert.strictEqual(timers.size, 0, 'a short press leaves no timer');
   calls.length = 0;
-  const long = hold(Hold.HOLD_MS);
-  assert(long.prevented && long.stopped); assert.deepStrictEqual(calls, [['toggle']]);
+  // Held: the toggle runs when HOLD_MS has passed, the button still down. The release and its click add nothing.
+  button.onpointerdown(event(1000));
+  assert.deepStrictEqual(calls, []); assert.deepStrictEqual([...timers.values()].map(t => t.ms), [Hold.HOLD_MS]);
+  elapse(); assert.deepStrictEqual(calls, [['toggle']], 'fires at HOLD_MS without a release');
   assert(animations.at(-1).cancelled);
-  click(1600); assert.strictEqual(calls[1][0], 'open', 'only the following click is suppressed');
+  button.onpointerup(event(1900)); const long = click(1900);
+  assert(long.prevented && long.stopped); assert.deepStrictEqual(calls, [['toggle']]);
+  click(2000); assert.strictEqual(calls[1][0], 'open', 'only the following click is suppressed');
   calls.length = 0;
-  button.onpointerdown(event(2000)); button.onpointerup(event(2600));
+  button.onpointerdown(event(2000)); elapse(); button.onpointerup(event(2600));
   click(2601, { detail: 0 }); assert.deepStrictEqual(calls.map(c => c[0]), ['toggle', 'open'], 'keyboard activation still opens');
   calls.length = 0;
-  button.onpointerdown(event(3000)); button.onpointermove(event(3100, { clientX: 27 })); button.onpointerup(event(3600));
+  button.onpointerdown(event(3000)); button.onpointermove(event(3100, { clientX: 27 }));
+  assert.strictEqual(timers.size, 0, 'moving away stops the timer'); elapse(); button.onpointerup(event(3600));
   assert(click(3601).prevented); assert.deepStrictEqual(calls, []); assert(animations.at(-1).cancelled);
-  button.onpointerdown(event(4000)); button.onpointerleave(event(4100));
+  button.onpointerdown(event(4000)); button.onpointerleave(event(4100)); assert.strictEqual(timers.size, 0); elapse();
   click(4200, { detail: 0 }); assert.deepStrictEqual(calls.map(c => c[0]), ['open']);
   calls.length = 0;
-  button.onpointerdown(event(5000, { button: 2 })); button.onpointerup(event(5600, { button: 2 }));
+  // A timer of an earlier press that was not stopped could not fire the next press early (its due time is the old press's).
+  button.onpointerdown(event(4300)); const stale = [...timers.values()][0].fn; button.onpointerup(event(4350)); click(4350);
+  button.onpointerdown(event(4600)); stale(); assert.deepStrictEqual(calls.map(c => c[0]), ['open']);
+  elapse(); assert.deepStrictEqual(calls.map(c => c[0]), ['open', 'toggle']); button.onpointerup(event(5200)); assert(click(5200).prevented);
+  calls.length = 0;
+  button.onpointerdown(event(5000, { button: 2 })); assert.strictEqual(timers.size, 0, 'a right press starts no hold'); button.onpointerup(event(5600, { button: 2 }));
   const right = event(5600, { button: 2 }); button.oncontextmenu(right);
   assert(right.prevented && calls.length === 1 && calls[0][0] === 'inline' && JSON.stringify(calls[0][1]) === JSON.stringify(rect));
   assert.strictEqual(typeof listeners.dragstart, 'function');

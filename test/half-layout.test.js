@@ -113,8 +113,14 @@ context.toggleMaximize(1, true, 'right'); context.setImgMax(panes[0], false, tru
 // Source contracts for controls and all direct resets (the conditional toggle resets both together).
 const ctxMenu = renderer.match(/maxBtn\.oncontextmenu = e => \{[^\n]+/)[0];
 assert(ctxMenu.includes('e.preventDefault()') && ctxMenu.includes('e.stopPropagation()') && ctxMenu.includes("mpb.maximizeHalf(id, 'right')"));
-for (const method of ['idle', 'begin', 'move', 'cancel', 'release', 'click']) assert(renderer.includes(`GbarLongPress.${method}(`));
-assert(/if \(result\.suppress[^\n]*e\.preventDefault\(\); e\.stopPropagation\(\); return;/.test(renderer));
+for (const method of ['idle', 'begin', 'move', 'cancel', 'fire', 'release', 'click']) assert(renderer.includes(`GbarLongPress.${method}(`));
+// One wiring for the three long presses: the timer fires at HOLD_MS on the press's own clock, never Date.now().
+const holdPress = renderer.slice(renderer.indexOf('function holdPress('), renderer.indexOf('function tipAttrs('));
+assert(/const due = hold\.press\.at \+ GbarLongPress\.HOLD_MS;/.test(holdPress) && /timer = setTimeout\(\(\) => settle\(GbarLongPress\.fire\(hold, due\)\), GbarLongPress\.HOLD_MS\);/.test(holdPress));
+assert(!/Date\.now|performance\.now/.test(holdPress) && renderer.split('GbarLongPress.fire(').length === 2);
+assert(/el\.onpointerup = e => settle\(GbarLongPress\.release\(hold, e\)\);/.test(holdPress));
+assert(renderer.includes('holdPress(maxBtn, () => mpb.maximize(id))') && renderer.includes('holdPress(approveBtn, () => mpb.approveKeepAwakeToggle())') && renderer.includes("holdPress(el, () => mpb.gbotOpen(b.id, 'here'))"));
+assert(/if \(maxHold\.click\(e\)[^\n]*e\.preventDefault\(\); e\.stopPropagation\(\); return;/.test(renderer));
 assert(/duration: GbarLongPress\.HOLD_MS/.test(renderer));
 for (const line of main.split('\n').filter(line => /maximizedId = null/.test(line))) assert(/maxMode = null/.test(line), line);
 assert(/maximizedId = restore \? null : p\.id;\s*maxMode = restore \? null : mode;/.test(source('toggleMaximize')));

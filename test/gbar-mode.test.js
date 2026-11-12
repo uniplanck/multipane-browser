@@ -178,7 +178,9 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
   const modeCtx = vm.createContext({ GM, settings: {}, save() {}, gbPush() {} });
   vm.runInContext(main.match(/function gbModeNext\(\) \{[^\n]*?\}(?=\s)/)[0], modeCtx);
   const mpb = new Proxy({}, { get: (_, k) => (k === 'onGbar' ? cb => { box.gbar = cb; } : (...a) => { box.calls.push([k, ...a]); if (k === 'gbarMode') modeCtx.gbModeNext(); }) });
-  const ctx = vm.createContext({ $: s => byId[s], mpb, S: null, MOD: '⌘', renderSummaryTips() {}, GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
+  const timers = new Map(); let timerId = 0;   // the hold timers: elapse() is HOLD_MS passing while the buttons are still down
+  const elapse = () => { for (const [id, t] of [...timers]) { timers.delete(id); t.fn(); } };
+  const ctx = vm.createContext({ setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; }, clearTimeout: id => { timers.delete(id); }, $: s => byId[s], mpb, S: null, MOD: '⌘', renderSummaryTips() {}, GbarPresence: require('../src/gbar-presence'), GbarMode: GM, GbarPages: require('../src/gbar-pages'), GbarLongPress: require('../src/gbar-long-press'), URL, document: { createElement: tag => new El(tag) },
     getComputedStyle: e => (e === favs ? { columnGap: '4px' } : { marginLeft: has(e, 'gsep') ? '4px' : '0px', marginRight: has(e, 'gsep') ? '4px' : '0px' }),
     ResizeObserver: class { constructor(cb) { box.ro = cb; } observe() {} } });
   vm.runInContext(ren.slice(ren.indexOf('function setTip('), ren.indexOf('function tipAttrs(')) + ren.slice(A0, A1) + ren.slice(B0, B1), ctx);
@@ -315,24 +317,28 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
       t('vm ' + m + ': holding never opens early; each item animates colour to the threshold', !box.calls.length && items.every(e => {
         const a = e.animations.at(-1); return a.options.duration === 500 && a.options.fill === 'forwards' && a.frames.at(-1).backgroundColor === 'var(--accent)';
       }));
-      items.forEach(e => e.onpointerup(pointer(500)));
-      t('vm ' + m + ': releasing every Bot / group / pin at 500ms opens here once', J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'here'])));
+      const delays = [...timers.values()].map(x => x.ms); elapse();
+      t('vm ' + m + ': every Bot / group / pin held for 500ms opens here once, without a release',
+        delays.length === items.length && delays.every(ms => ms === 500) && J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'here'])) && items.every(e => e.animations.at(-1).cancelled));
       const opened = box.calls.length;
+      items.forEach(e => e.onpointerup(pointer(900)));
       const clicks = items.map(e => click(e));
-      items.forEach(e => e.onpointerup(pointer(1000)));
-      t('vm ' + m + ': following clicks are prevented, duplicate releases do nothing, feedback clears',
+      items.forEach(e => e.onpointerup(pointer(1000))); elapse();
+      t('vm ' + m + ': the release and the following click do nothing more, duplicate releases neither, feedback clears',
         box.calls.length === opened && clicks.every(c => c.prevented && c.stopped) && items.every(e => e.animations.at(-1).cancelled));
       box.calls.length = 0;
       items.forEach(e => { e.onpointerdown(pointer(1000)); e.onpointerup(pointer(1499)); click(e); });
-      t('vm ' + m + ': a fresh short click still opens new', J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'new'])));
+      const left = timers.size; elapse();
+      t('vm ' + m + ': a fresh short click still opens new, its timer stopped', left === 0 && J(box.calls) === J(menuIds.map(id => ['gbotOpen', id, 'new'])));
       for (const cancel of ['onpointerleave', 'onpointercancel', 'onpointermove']) {
         box.calls.length = 0;
-        items.forEach(e => { e.onpointerdown(pointer(0)); e[cancel](pointer(600, { clientX: 27 })); e.onpointerup(pointer(700)); click(e); });
-        t('vm ' + m + ': ' + cancel + ' cancels even after 500ms, including the following click', !box.calls.length && items.every(e => e.animations.at(-1).cancelled));
+        items.forEach(e => { e.onpointerdown(pointer(0)); e[cancel](pointer(300, { clientX: 27 })); }); const armed = timers.size; elapse();
+        items.forEach(e => { e.onpointerup(pointer(700)); click(e); });
+        t('vm ' + m + ': ' + cancel + ' before 500ms cancels the hold, including the following click', armed === 0 && !box.calls.length && items.every(e => e.animations.at(-1).cancelled));
       }
       for (const mods of [{ metaKey: true }, { altKey: true }, { shiftKey: true }, { ctrlKey: true }, { button: 2 }]) {
         box.calls.length = 0;
-        items.forEach(e => { const n = e.animations.length; e.onpointerdown(pointer(0, mods)); e.onpointerup(pointer(700, mods));
+        items.forEach(e => { const n = e.animations.length; e.onpointerdown(pointer(0, mods)); if (timers.size) throw Error('modified press must not arm the hold'); e.onpointerup(pointer(700, mods));
           if (e.animations.length !== n) throw Error('modified press must not animate'); e.onclick({ button: 0, ...mods }); });
         const expected = mods.ctrlKey || mods.button === 2 ? [] : menuIds.map(id => ['gbotOpen', id, mods.shiftKey ? 'window' : 'here']);
         t('vm ' + m + ': holding with ' + J(mods) + ' preserves its click action', J(box.calls) === J(expected));
@@ -340,9 +346,9 @@ t('renderer: the short-label helpers and the bar block are there', A0 > 0 && A1 
       { const pin = items[0], target = items[1], data = {}, transfer = { types: ['text/x-mpb-gpin'], setData(k, v) { data[k] = v; }, getData(k) { return data[k]; } };
         box.calls.length = 0; pin.onpointerdown(pointer(0));
         pin.on.dragstart.forEach(fn => fn({ dataTransfer: transfer })); pin.ondragstart({ dataTransfer: transfer });
-        pin.onpointerup(pointer(700)); click(pin);
+        const dragTimers = timers.size; elapse(); pin.onpointerup(pointer(700)); click(pin);
         t('vm ' + m + ': dragging cancels hold and keeps native pin payload / source styling',
-          !box.calls.length && pin.draggable && data['text/x-mpb-gpin'] === 'p1' && has(pin, 'drag-src') && pin.animations.at(-1).cancelled);
+          !dragTimers && !box.calls.length && pin.draggable && data['text/x-mpb-gpin'] === 'p1' && has(pin, 'drag-src') && pin.animations.at(-1).cancelled);
         const drop = { dataTransfer: transfer, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
         target.ondragover(drop); target.ondrop(drop); pin.ondragend();
         t('vm ' + m + ': pin drag reorder still reaches gbotMove', J(box.calls) === J([['gbotMove', 'p1', 'p2']]) && drop.prevented && drop.stopped && !has(pin, 'drag-src') && !has(target, 'drop-over'));

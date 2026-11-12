@@ -3,7 +3,7 @@
 //   focusBot(name): show the pane of that Bot (no reply; does nothing when no pane matches)
 //   jump({ name, agentId, open }): show that Bot's pane with the keyboard in its composer, or (open: true) open one -> Promise<{ result }>
 //     ('focused' | 'opened' | 'none' | 'blocked' | 'nomatch'; anything main refused = 'blocked'). agentId: a UUID or it is left out
-//   onState(cb) / getState(): the panes as main tells this page only ({ panes: [{ agentId|null, names, active }], confirmOpen }); onState -> unsubscribe
+//   onState(cb) / getState(): the panes as main tells this page only ({ panes: [{ agentId|null, names, active }], confirmOpen: false }); onState -> unsubscribe
 //   openSettings(): the 進捗サイドバー settings screen
 //   instruct({ tid, task, bot, state, memo }): the NaoAIへの指示 box for that row (call it from the row's contextmenu handler, preventDefault there)
 //     -> Promise<{ result }> ('open' | 'blocked' | 'bad': not strings / no tid / too long; anything main refused = 'blocked'). Strings only; main
@@ -20,7 +20,7 @@ const RESULTS = ['focused', 'opened', 'none', 'blocked', 'nomatch'];            
 const FIELDS = ['tid', 'task', 'bot', 'state', 'memo'], RAW_MAX = 10000;             // = InstructRules.FIELDS / RAW_MAX
 const INSTRUCT = ['open', 'blocked', 'bad'];                                          // = InstructRules.RESULTS
 const BATCH_MAX = 20;                                                                 // = InstructRules.BATCH_MAX
-const EMPTY = () => ({ panes: [], confirmOpen: true });                               // main refused / gone: nothing known, ask before opening
+const EMPTY = () => ({ panes: [], confirmOpen: false });                              // main refused / gone: nothing known (confirmOpen is always false)
 const listeners = new Set(), clears = new Set();
 ipcRenderer.on('sidebar:state', (e, s) => { for (const cb of [...listeners]) { try { cb(s); } catch {} } });   // the state only, never the event
 ipcRenderer.on('sidebar:clear-selection', () => { for (const cb of [...clears]) { try { cb(); } catch {} } });   // nothing passed on

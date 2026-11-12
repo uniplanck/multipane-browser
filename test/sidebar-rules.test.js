@@ -112,8 +112,7 @@ t('jumpOk: { name, agentId?, open? } only (no URL, no other key)', [{ name: 'Bot
   t('jump: odd input is not fatal', J(SR.jump(null, P)) === J({ result: 'none' }) && J(SR.jump({ name: 'Writer' }, null)) === J({ result: 'none' }) && SR.jump({ name: 'x', agentId: A1 }, [null, 5, ...P]).key === 'w2-1'); }
 
 // ---- the state the page is told ----
-t('confirmOpen: on unless the setting is false', SR.confirmOpen({}) === true && SR.confirmOpen(undefined) === true && SR.confirmOpen({ sidebarConfirmOpen: true }) === true
-  && SR.confirmOpen({ sidebarConfirmOpen: false }) === false && SR.confirmOpen({ sidebarConfirmOpen: 'no' }) === true);
+t('confirmOpen: always off, a saved sidebarConfirmOpen is ignored', [undefined, null, {}, { sidebarConfirmOpen: true }, { sidebarConfirmOpen: false }, { sidebarConfirmOpen: 'no' }].every(s => SR.confirmOpen(s) === false));
 { const N = SR.paneNames([['My Bot'], ['Bot A', 'bot_a', 'Bot B', 'Bot C', 'Bot D'], ['My_Bot', 'Title']]);
   t('paneNames: the tiers in order, the same name once (folded as findBot folds it), NAMES_PER_TIER of each', J(N) === J(['My Bot', 'Bot A', 'Bot B', 'Bot C', 'Title']) && SR.NAMES_PER_TIER === 3); }
 t('paneNames: cut to NAME_MAX UTF-16 units = what nameOk takes back (not halfway into a surrogate pair), one line, empty / non-string skipped', (() => {
@@ -133,8 +132,8 @@ t('paneNames: odd tiers are not fatal', J(SR.paneNames(null)) === '[]' && J(SR.p
   t('state: { panes, confirmOpen } and per pane exactly agentId / names / active', J(Object.keys(st)) === J(['panes', 'confirmOpen']) && st.panes.every(p => J(Object.keys(p)) === J(['agentId', 'names', 'active'])));
   t('state: agentId only from a grok.com/bot/<uuid> page, else null', J(st.panes.map(p => p.agentId)) === J([A1, null, null, null]));
   t('state: nothing else of any URL (no query / host / path / token) reaches the page', !/secret|mail\.example|inbox\?|https?:|grok\.com|\/bot\/|"url"|"tiers"|"key"|"id"/.test(js));
-  t('state: names per pane; active only when exactly true; the confirm setting', J(st.panes[0].names) === J(['Mine', 'Research Bot']) && J(st.panes[1].names) === J(['Inbox']) && J(st.panes[3].names) === '[]'
-    && J(st.panes.map(p => p.active)) === J([true, false, false, false]) && st.confirmOpen === false && SR.state(rows, true).confirmOpen === true);
+  t('state: names per pane; active only when exactly true; confirmOpen always false (whatever is passed)', J(st.panes[0].names) === J(['Mine', 'Research Bot']) && J(st.panes[1].names) === J(['Inbox']) && J(st.panes[3].names) === '[]'
+    && J(st.panes.map(p => p.active)) === J([true, false, false, false]) && st.confirmOpen === false && SR.state(rows, true).confirmOpen === false && SR.state(rows).confirmOpen === false && SR.state(null).confirmOpen === false);
   t('state: at most STATE_PANES panes; odd rows are not fatal', SR.state(Array(150).fill(rows[0]), true).panes.length === SR.STATE_PANES && SR.state(null).panes.length === 0
     && J(SR.state([null], true).panes) === J([{ agentId: null, names: [], active: false }])); }
 

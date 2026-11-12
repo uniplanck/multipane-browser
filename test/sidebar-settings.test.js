@@ -11,12 +11,12 @@ const load = settings => S.migrate(file(settings));
 { const r = load({ theme: 'dark' });
   t('an older file (no sidebar keys): ready, nothing repaired, no key added', r.ok && r.fixes.length === 0 && J(r.doc.settings) === J({ theme: 'dark' }));
   t('...and it reads as closed, 300 px, no URL (the button dimmed)', J(SR.view(r.doc.settings)) === J({ url: '', configured: false, open: false, width: 300 }));
-  t('...and 開く前に確認する is on (sidebarConfirmOpen absent = true)', SR.confirmOpen(r.doc.settings) === true && !('sidebarConfirmOpen' in r.doc.settings)); }
+  t('...and nothing asks before opening (開く前に確認する is gone), no key added', SR.confirmOpen(r.doc.settings) === false && SR.state([], undefined).confirmOpen === false && !('sidebarConfirmOpen' in r.doc.settings)); }
 for (const v of [true, false]) { const r = load({ sidebarConfirmOpen: v, sidebarUrl: 'https://example.com/' });
-  t(`sidebarConfirmOpen ${v}: loads as it is, written back unchanged`, r.ok && r.fixes.length === 0 && r.doc.settings.sidebarConfirmOpen === v && SR.confirmOpen(r.doc.settings) === v
+  t(`a saved sidebarConfirmOpen ${v}: left in the file as it is (no migration), but ignored - never asks`, r.ok && r.fixes.length === 0 && r.doc.settings.sidebarConfirmOpen === v && SR.confirmOpen(r.doc.settings) === false
     && S.parse(S.serialize(r.doc)).doc.settings.sidebarConfirmOpen === v); }
 for (const v of ['no', 0, 1, null, {}, []]) { const r = load({ sidebarConfirmOpen: v, theme: 'dark' });
-  t(`sidebarConfirmOpen ${J(v)}: not a boolean -> dropped (on), the rest kept`, r.ok && !('sidebarConfirmOpen' in r.doc.settings) && SR.confirmOpen(r.doc.settings) === true
+  t(`sidebarConfirmOpen ${J(v)}: not a boolean -> dropped, the rest kept`, r.ok && !('sidebarConfirmOpen' in r.doc.settings) && SR.confirmOpen(r.doc.settings) === false
     && r.doc.settings.theme === 'dark' && r.fixes.some(f => /sidebarConfirmOpen: not a boolean/.test(f))); }
 { const r = S.parse(J({ layout: '2x2', urls: ['https://grok.com/'] }));
   t('the oldest single-window format still loads, no sidebar', r.ok && !SR.view(r.doc.settings).open); }
@@ -48,7 +48,7 @@ t('the sidebar is not part of a window / workspace / pane spec (one shared setti
   const ov = fs.readFileSync(path.join(__dirname, '..', 'src', 'overlay.js'), 'utf8');
   const a = ov.indexOf("const updatePanel = $('#update-panel');"), b = ov.indexOf('function renderUpdate(o) {', a);
   const handlers = {}, timers = [], focus = [], calls = [];
-  const fields = { '#sidebar-url': { value: '', focus: () => focus.push('url') }, '#sidebar-confirm': { checked: true }, '#approve-error': { textContent: '' } };
+  const fields = { '#sidebar-url': { value: '', focus: () => focus.push('url') }, '#approve-error': { textContent: '' } };
   const panel = { innerHTML: '', querySelector: sel => fields[sel] || null, querySelectorAll: () => [], addEventListener: (type, fn) => { handlers[type] = fn; } };
   const ctx = { $: () => panel, ApproveSetting: require('../src/approve-setting'), SidebarRules: SR, InstructRules: require('../src/instruct-rules'), mode: 'sidebar-settings', ctx: {}, setTimeout: f => timers.push(f),
     mpb: { run: x => calls.push(x), closeOverlay: () => calls.push('close'), onApprovePicked() {} },
@@ -57,22 +57,21 @@ t('the sidebar is not part of a window / workspace / pane spec (one shared setti
   ctx.renderSidebarSettings({ mode: 'sidebar-settings', sidebar: { url: 'https://example.com/?a="x"' } });
   t('screen: title, the rules, the page contract, the URL (escaped), placeholder only', panel.innerHTML.includes('進捗サイドバー') && panel.innerHTML.includes('https://')
     && panel.innerHTML.includes('window.xgBotsSidebar.focusBot') && panel.innerHTML.includes('window.xgBotsSidebar.jump') && panel.innerHTML.includes('value="https://example.com/?a=&quot;x&quot;"') && panel.innerHTML.includes('placeholder="https://example.com/#/p/sidebar"'));
-  t('screen: 開く前に確認する (with its explanation), checked when the setting is absent', /<input type="checkbox" id="sidebar-confirm" checked>/.test(panel.innerHTML) && panel.innerHTML.includes('開く前に確認する')
-    && panel.innerHTML.includes('ペインが開いていないBotを押したとき、開く前に確認を出す'));
-  ctx.renderSidebarSettings({ mode: 'sidebar-settings', sidebar: { url: '', confirm: false } });
-  t('screen: ...unchecked when the setting is off', /<input type="checkbox" id="sidebar-confirm" >/.test(panel.innerHTML));
-  ctx.renderSidebarSettings({ mode: 'sidebar-settings', sidebar: { url: 'https://example.com/?a="x"', confirm: true } });
+  const noConfirm = html => !/sidebar-confirm|開く前に確認|確認を出す|type="checkbox"/.test(html);
+  t('screen: no 開く前に確認する box or explanation', noConfirm(panel.innerHTML) && !/sidebar-confirm|sidebarConfirm|開く前に確認/.test(ov));
+  for (const confirm of [true, false]) { ctx.renderSidebarSettings({ mode: 'sidebar-settings', sidebar: { url: '', confirm } });
+    t(`screen: ...none either when an old main still hands over confirm ${confirm}`, noConfirm(panel.innerHTML)); timers.pop(); }
+  ctx.renderSidebarSettings({ mode: 'sidebar-settings', sidebar: { url: 'https://example.com/?a="x"' } });
   timers.pop()(); t('screen: the URL field gets the focus', focus.join() === 'url');
   const submit = v => { fields['#sidebar-url'].value = v; fields['#approve-error'].textContent = ''; handlers.submit({ preventDefault() {} }); };
   submit('http://example.com/');
   t('screen: an unusable URL -> a message, nothing sent', (fields['#approve-error'].textContent.includes('https://') || fields['#approve-error'].textContent.includes('#/p/sidebar')) && calls.length === 0);
   submit('  https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ');
-  t('screen: a usable URL -> sidebar-save (trimmed) with 開く前に確認する', JSON.stringify(calls[0]) === JSON.stringify({ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm: true }));
-  fields['#sidebar-confirm'].checked = false; submit('');
-  t('screen: empty -> sidebar-save with no URL (turns it off), the box as it is', JSON.stringify(calls[1]) === JSON.stringify({ type: 'sidebar-save', url: '', confirm: false }));
-  fields['#sidebar-confirm'].checked = true;
+  t('screen: a usable URL -> sidebar-save (trimmed), the URL only', JSON.stringify(calls[0]) === JSON.stringify({ type: 'sidebar-save', url: 'https://example.com/#/p/sidebar?k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }));
+  submit('');
+  t('screen: empty -> sidebar-save with no URL (turns it off)', JSON.stringify(calls[1]) === JSON.stringify({ type: 'sidebar-save', url: '' }));
   handlers.click({ target: { closest: s => s === '[data-sidebar-action="clear"]' ? {} : null } });
-  t('screen: 「URLを消す」 -> sidebar-save with no URL (and the box)', JSON.stringify(calls[2]) === JSON.stringify({ type: 'sidebar-save', url: '', confirm: true }));
+  t('screen: 「URLを消す」 -> sidebar-save with no URL', JSON.stringify(calls[2]) === JSON.stringify({ type: 'sidebar-save', url: '' }));
   { const P = require('../src/ipc-policy'), path2 = require('path'), { pathToFileURL } = require('url');
     const ov = { role: 'overlay', frame: { top: true, detached: false, url: pathToFileURL(path2.join(__dirname, '..', 'src', 'overlay.html')).href, origin: 'file://' } };
     const W = { owned: true, pane: () => false, fav: () => false, gbot: () => false, ws: () => false, winPane: () => false };

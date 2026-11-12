@@ -103,7 +103,7 @@ const ACTIONS = {
   'approve-pick': { shape: x => Object.keys(x).length === 2 && typeof x.id === 'string' && /^[A-Za-z0-9_-]+$/.test(x.id)
     && x.id !== '__proto__' && !!AS.normalizeUrl('https://grok.com/bot/' + x.id) },
   'approve-reset': { shape: x => Object.keys(x).length === 1 },
-  'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again) + 開く前に確認する
+  'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again); confirm: still accepted from an older screen, ignored
   // NaoAIへの指示 (instruct-rules.js): the box sends its text with the number main gave the box (main takes its own row / webhook for it), keeps the
   // draft the same way, or asks for the settings; the settings screen saves the webhook (https on cursor.com / cursor.sh, a key: main checks again,
   // encrypts it and never sends it back) or removes it. An answer's send may carry the choice button's label (at most OPT_MAX; main keeps it only

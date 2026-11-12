@@ -111,8 +111,8 @@ const tests = [];                                           // async checks, awa
   sent.length = 0; reply = st;
   { const g = api.getState(), m = sent[0];
     tests.push(g.then(v => t('preload: getState invokes its fixed channel without arguments and resolves the state', sent.length >= 1 && m[0] === GET && m[1].length === 0 && m[2] === 'invoke' && v === st))); }
-  for (const rep of [null, 'x', { panes: 'x' }]) { reply = rep; tests.push(api.getState().then(v => t(`preload: getState with main's reply ${J(rep)} -> no panes, ask before opening`, J(v) === J({ panes: [], confirmOpen: true })))); }
-  reply = () => Promise.reject(new Error('refused')); tests.push(api.getState().then(v => t('preload: getState refused -> no panes, ask before opening', J(v) === J({ panes: [], confirmOpen: true }))));
+  for (const rep of [null, 'x', { panes: 'x' }]) { reply = rep; tests.push(api.getState().then(v => t(`preload: getState with main's reply ${J(rep)} -> no panes, never ask before opening`, J(v) === J({ panes: [], confirmOpen: false })))); }
+  reply = () => Promise.reject(new Error('refused')); tests.push(api.getState().then(v => t('preload: getState refused -> no panes, never ask before opening', J(v) === J({ panes: [], confirmOpen: false }))));
   sent.length = 0;
   t('preload: openSettings sends its fixed channel without arguments, returns nothing', api.openSettings('x', 1) === undefined && sent.length === 1 && sent[0][0] === OPEN && sent[0][1].length === 0 && !sent[0][2]);
   const code = read('sidebar-preload.js'), chans = [...code.matchAll(/ipcRenderer\.(\w+)\('([^']+)'/g)].map(m => [m[1], m[2]]);
@@ -163,7 +163,7 @@ const tests = [];                                           // async checks, awa
   t('main: composerFocus waits for a load only while it is queued / running (a load settling in its slot: the page is there)',
     /const ready = \(\) => \{ const t = lqView\(p\); return !p\.sleeping && !\(t && t\.state === 'wait'\) && !wc\.isLoading\(\) && SR\.composerPage\(wc\.getURL\(\)\); \};/.test(cf));
   t('main: get-state is answered (ipcHandle) with SR.state of the sender\'s window; open-settings has the focus-bot gate',
-    /^ipcHandle\('sidebar:get-state', r => sideState\(r\.ctx\)\);/m.test(main) && /^const sideState = from => SR\.state\(sidePanes\(from\), SR\.confirmOpen\(settings\)\);/m.test(main)
+    /^ipcHandle\('sidebar:get-state', r => sideState\(r\.ctx\)\);/m.test(main) && /^const sideState = from => SR\.state\(sidePanes\(from\)\);/m.test(main)
     && /^ipcOn\('sidebar:open-settings', r => \{ if \(recentGesture\(r\.wc\) && !r\.ctx\.overlayOpen\) r\.ctx\.openSidebarSettings\(\);/m.test(main));
   const push = fn('sidePush');
   t('main: the state goes to the sidebar view only (one send, on its own channel, from sidePush), when it changed / its page loaded',
@@ -173,9 +173,16 @@ const tests = [];                                           // async checks, awa
     /scheduleOthers\(\);\n  sideStateSoon\(\);/.test(fn('sendState')) && /if \(sideStateTimer \|\| !SR\.view\(settings\)\.configured\) return;/.test(fn('sideStateSoon'))
     && /\}, 200\);/.test(fn('sideStateSoon')) && !/setInterval/.test(fn('sideStateSoon') + push));
   t('main: botNames hands over the URL (for SR.jump / SR.state) and which pane is active', /return \{ id: p\.id, url: u, active: i === focused,/.test(fn('botNames')));
-  t('main: the right-click on the bar\'s button / the settings: sidebar-settings opens the screen; it gets the URL and 開く前に確認する; a save takes both',
-    /^on\('sidebar-settings', \(\) => openSidebarSettings\(\)\);/m.test(main) && /sidebar: \{ url: SR\.view\(settings\)\.url, confirm: SR\.confirmOpen\(settings\) \}/.test(fn('openSidebarSettings'))
-    && /setSidebarUrl\(a\.url, a\.confirm\)/.test(main) && /if \(typeof confirm === 'boolean'\) settings\.sidebarConfirmOpen = confirm;/.test(fn('setSidebarUrl')));
+  t('main: the right-click on the bar\'s button / the settings: sidebar-settings opens the screen; it gets the URL only; a save takes the URL and ignores a confirm (開く前に確認する is gone, the saved value is neither read nor written)',
+    /^on\('sidebar-settings', \(\) => openSidebarSettings\(\)\);/m.test(main) && /sidebar: \{ url: SR\.view\(settings\)\.url \}/.test(fn('openSidebarSettings')) && !/confirm/i.test(fn('openSidebarSettings'))
+    && /setSidebarUrl\(a\.url\)\) closeOverlay\(\);/.test(main) && /^function setSidebarUrl\(value\) \{/m.test(main) && !/a\.confirm\)/.test(main.split('\n').find(l => l.includes("case 'sidebar-save'")))
+    && !/sidebarConfirmOpen =|settings\.sidebarConfirmOpen[^ ]/.test(main));
+  for (const saved of [true, false, undefined]) {   // the real setSidebarUrl: a saved value stays as it is in the file, the page is told false either way
+    const box = { SR: SRL, settings: saved === undefined ? {} : { sidebarConfirmOpen: saved }, sidebarSet: patch => Object.assign(box.settings, patch), U: 'https://example.com/#/p/sidebar?k=' + 'a'.repeat(64) };
+    vm.runInNewContext(fn('setSidebarUrl') + '\nvar a = setSidebarUrl(U, true), b = setSidebarUrl(U, false), c = setSidebarUrl("http://example.com/", false);', box);
+    t(`main: setSidebarUrl with a saved sidebarConfirmOpen ${saved}: the URL is saved, the flag untouched and ignored`, box.a === true && box.b === true && box.c === false
+      && box.settings.sidebarUrl === box.U && box.settings.sidebarOpen === true && box.settings.sidebarConfirmOpen === saved
+      && SRL.state([], SRL.confirmOpen(box.settings)).confirmOpen === false); }
   t('renderer / preload: a right-click on #sidebar-btn opens the settings (no native menu)', /sideEl\.oncontextmenu = e => \{ e\.preventDefault\(\); mpb\.sidebarSettings\(\); \};/.test(read('renderer.js'))
     && /sidebarSettings: \(\) => send\('sidebar-settings'\)/.test(read('preload.js')));
   t('nothing personal in the app: no agentId / Bot URL in the sidebar code, the public default URL stays empty', !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(read('sidebar-rules.js') + read('sidebar-preload.js') + jmp + ob + cf + push)
