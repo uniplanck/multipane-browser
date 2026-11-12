@@ -1,6 +1,7 @@
 // node test/img-view.test.js — 画像ビューアの拡大. The built pane preload in a vm: the CSS goes in once per page, on grok.com only (another site /
-// a subdomain never). The CSS itself: three rules, each one a picture <img> as its subject, every declaration !important, only the img's own size
-// caps lifted (width / height 100%, max none, object-fit contain), nothing that moves another box. Which elements the rules pick, on synthetic
+// a subdomain never). The CSS itself: three rules per viewer, each one a picture <img> as its subject, every declaration !important, only the
+// img's own size set (fill + a floor of 70% of the pane / the card's full height, max none, object-fit contain), nothing that moves another
+// box; the sizes those declarations give a small and a large picture (arithmetic on the CSS values). Which elements the rules pick, on synthetic
 // copies of the viewer DOM through a small matcher of the selector subset they use (anything else throws): the viewer's picture today and with
 // one of the three Tailwind signs changed; never the chat's images, thumbnails, avatars, a link's image, a box of several images, another dialog.
 // Not covered here: Chromium's real layout (the fit while resizing, the arrows / close staying on top, a click beside the picture), grok.com's
@@ -38,12 +39,34 @@ t('preload: another site / a subdomain / a look-alike host -> nothing', ['exampl
 
 // ---- the CSS text ----
 const RULES = [...CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), decl: m[2] }));
-t('css: three rules, nothing else (no @-rule, url, comment)', RULES.length === 3 && RULES.map(r => `${r.sel}{${r.decl}}`).join('\n') === CSS && !/@|url\(|\/\*|expression/i.test(CSS));
-const WANT = { width: '100%', height: '100%', 'max-width': 'none', 'max-height': 'none', 'min-width': '0', 'min-height': '0', 'object-fit': 'contain', 'box-shadow': 'none' };
-t('css: each rule = the same declarations, all !important: fill the box, aspect kept (contain), caps lifted; nothing that moves other boxes', RULES.every(r => {
-  const d = r.decl.split(';').filter(Boolean).map(x => /^([a-z-]+):(.+) !important$/.exec(x));
-  return d.every(Boolean) && J(Object.fromEntries(d.map(m => [m[1], m[2]]))) === J(WANT);
-}));
+t('css: three rules per viewer, nothing else (no @-rule, url, comment)', RULES.length === 6 && RULES.map(r => `${r.sel}{${r.decl}}`).join('\n') === CSS && !/@|url\(|\/\*|expression/i.test(CSS));
+const WANT = { width: '100%', height: '100%', 'max-width': 'none', 'max-height': 'none', 'min-width': 'min(70vw,calc(100vw - 4rem))', 'min-height': 'min(70vh,calc(100vh - 14rem))', 'object-fit': 'contain', 'box-shadow': 'none' };
+const WANT_CARD = { height: 'calc(85vh - 48px)', width: 'auto', 'max-width': '90vw', 'max-height': 'none', 'min-width': '0', 'min-height': '0', 'object-fit': 'contain' };
+const decl = r => { const d = r.decl.split(';').filter(Boolean).map(x => /^([a-z-]+):(.+) !important$/.exec(x)); return d.every(Boolean) ? Object.fromEntries(d.map(m => [m[1], m[2]])) : null; };
+t('css: the lightbox rules = the same declarations, all !important: fill the box, a floor under it, aspect kept (contain), caps lifted; nothing that moves other boxes', RULES.slice(0, 3).every(r => J(decl(r)) === J(WANT)));
+t('css: the card rules = the same declarations, all !important: the full height of the page\'s own limit, width by the aspect, aspect kept (contain)', RULES.slice(3).every(r => J(decl(r)) === J(WANT_CARD)));
+
+// ---- the sizes those declarations give (the CSS values, read from the text; rem = 16 px). contain = the picture drawn in its box, aspect kept ----
+{ const len = (v, W, H) => { const m = /^(-?[\d.]+)(vw|vh|rem|px)$/.exec(v.trim()); if (!m) throw new Error('length ' + v); return +m[1] * { vw: W / 100, vh: H / 100, rem: 16, px: 1 }[m[2]]; };
+  const calc = (v, W, H) => { const m = /^calc\((.+) - (.+)\)$/.exec(v.trim()); return m ? len(m[1], W, H) - len(m[2], W, H) : len(v, W, H); };
+  const val = (v, W, H) => { const m = /^min\(([^,]+),(.+)\)$/.exec(v.trim()); return m ? Math.min(calc(m[1], W, H), calc(m[2], W, H)) : calc(v, W, H); };
+  const contain = (nw, nh, bw, bh) => { const k = Math.min(bw / nw, bh / nh); return { w: nw * k, h: nh * k }; };
+  const A = decl(RULES[0]), B = decl(RULES[3]);
+  // the lightbox: the box is the area (what the viewer leaves: here the pane less 4rem / 12rem) and never under the floor
+  const box = (W, H) => ({ w: Math.max(W - 64, val(A['min-width'], W, H)), h: Math.max(H - 192, val(A['min-height'], W, H)), fw: val(A['min-width'], W, H), fh: val(A['min-height'], W, H) });
+  const PANES = [[1440, 900], [2560, 1300], [1000, 1400], [760, 520], [420, 360]];
+  t('floor: at least 70% of the pane each way wherever the viewer\'s padding / caption / thumbnails leave that much; never more than the area (no overflow)', PANES.every(([W, H]) => { const b = box(W, H);
+    return b.fw <= W - 64 && b.fh <= H - 192 && b.fw > 0 && b.fh > 0 && (W < 214 || b.fw >= 0.7 * W - 1e-6) && (H < 747 || b.fh >= 0.7 * H - 1e-6) && b.w <= W && b.h <= H; }));
+  t('floor: even if the area itself came to nothing (the dialog sized to a small picture), the box is the floor: a 320x200 picture is drawn at 70% of the pane or more on its tight side', [[1440, 900], [2560, 1300], [1000, 1400]].every(([W, H]) => {
+    const fw = val(A['min-width'], W, H), fh = val(A['min-height'], W, H), p = contain(320, 200, fw, fh); return p.w > 320 * 2 && (p.w >= 0.7 * W - 1e-6 || p.h >= 0.7 * H - 1e-6) && p.w <= W && p.h <= H; }));
+  t('small picture (120x90, 320x200, 200x900): drawn up to its box, aspect kept; large (4000x3000, 6000x900): drawn down into it, whole (contain: no crop, no overflow)', PANES.every(([W, H]) => { const b = box(W, H);
+    return [[120, 90], [320, 200], [200, 900], [4000, 3000], [6000, 900]].every(([nw, nh]) => { const p = contain(nw, nh, b.w, b.h);
+      return p.w <= b.w + 1e-6 && p.h <= b.h + 1e-6 && Math.abs(p.w / p.h - nw / nh) < 1e-9 && (Math.abs(p.w - b.w) < 1e-6 || Math.abs(p.h - b.h) < 1e-6); }); }));
+  // the card: height = the page's own limit, width by the aspect up to 90vw
+  const card = (nw, nh, W, H) => { const h = val(B.height, W, H), w = Math.min(h * nw / nh, val(B['max-width'], W, H)); return { w, h, p: contain(nw, nh, w, h) }; };
+  t('card: a small picture gets the card a large one gets (the full height of the limit, or 90vw wide), whole, inside the pane', [[1440, 900], [2560, 1300], [1000, 1400]].every(([W, H]) =>
+    [[120, 90], [320, 200], [4000, 3000], [6000, 900], [200, 900]].every(([nw, nh]) => { const c = card(nw, nh, W, H);
+      return c.w <= 0.9 * W + 1e-6 && c.h <= 0.85 * H && c.p.w <= c.w + 1e-6 && c.p.h <= c.h + 1e-6 && (Math.abs(c.p.h - c.h) < 1e-6 || Math.abs(c.p.w - 0.9 * W) < 1e-6) && Math.abs(c.p.w - card(nw * 7, nh * 7, W, H).p.w) < 1e-6; }))); }
 
 // ---- a matcher for the selector subset the rules use: type / *, [a] [a="v"] [a~="v"] [a*="v"] [a^="v"], :is() :not() :has(), ' ' > ~ + ----
 function closeAt(s, j) { let d = 1, q = false; for (; j < s.length; j++) { const c = s[j]; if (q) { if (c === '"') q = false; } else if (c === '"') q = true; else if (c === '(') d++; else if (c === ')' && --d === 0) return j + 1; } throw new Error('unclosed ( in ' + s); }
@@ -130,8 +153,12 @@ function page(o = {}) {
 }
 const only = (o, sel) => { const p = page(o), got = pick(p.doc, sel); return got.length === 1 && got[0] === p.pic; };
 const none = (o, sel) => pick(page(o).doc, sel).length === 0;
+const BOX = SEL.slice(0, 3), CARD = SEL.slice(3);     // the lightbox's rules / the card viewer's
 t('today: exactly the viewer\'s picture (not the chat\'s look-alike, thumbnails, avatar, arrows, close)', only({}));
-t('today: each rule alone picks the picture and nothing else', SEL.every(s => only({}, [s])));
+t('today: each lightbox rule alone picks the picture and nothing else; no card rule picks anything in the lightbox', BOX.every(s => only({}, [s])) && none({}, CARD));
+// the lightbox as grok.com draws it since 2026-11: the arrows in spans before the picture, the caption under the area, thumbnails with object-cover
+t('2026-11 layout (arrows in spans, caption below, several pictures\' own max-w class): still exactly the picture', only({ pic: 'block max-h-full select-none rounded-xl object-contain shadow-2xl max-w-[min(calc(100%-7rem),1400px)] md:max-w-[min(calc(100%-10rem),1400px)]',
+  areaKids: p => [h('span', { class: 'absolute top-1/2 z-10 left-2' }, h('button', { 'aria-label': '前の画像' }, h('svg'))), h('span', { class: 'absolute top-1/2 z-10 right-2' }, h('button', { 'aria-label': '次の画像' }, h('svg'))), p] }));
 t('aria-modal="true" instead of role="dialog": still the picture', only({ root: { 'aria-modal': 'true' } }));
 t('one sign changed (wrapper / area / picture classes): still the picture', only({ wrap: 'flex h-full w-full flex-col items-center gap-3 p-8' })
   && only({ area: 'relative flex grow basis-0 items-center justify-center' }) && only({ pic: 'block h-auto select-none rounded-2xl' }));
@@ -147,5 +174,31 @@ t('round (avatar) / cropped (object-cover) / in a link, inside the area -> never
   && none({ areaKids: () => [h('a', { href: '#' }, h('img', { class: C.pic }))] }));
 { const other = h('html', {}, h('body', {}, h('div', { role: 'dialog' }, h('div', { class: 'flex flex-col gap-4' }, h('div', { class: 'flex items-center' }, h('img', { class: 'h-16 w-16 object-contain' })), h('img', { class: 'h-10 w-10 rounded-full object-cover' })))));
   t('another dialog (a form with an icon / an avatar, no zoom-out wrapper, no flex-1 area) -> never', pick(other).length === 0); }
+
+// ---- the other viewer (files / photos): backdrop + a zoom-out viewport > the dialog > a card > the picture, ‹ › under it ----
+const V = { view: 'fixed inset-0 z-[100] flex cursor-zoom-out items-center justify-center overflow-hidden', pop: 'group relative flex cursor-default items-center justify-center overflow-visible outline-hidden pb-12',
+  card: 'relative overflow-hidden rounded-lg', pic: 'select-none rounded-lg object-contain', style: 'max-width: 90vw; max-height: calc(-48px + 85vh);' };
+function cardPage(o = {}) {
+  const pic = h('img', { class: o.pic ?? V.pic, alt: '', ...(o.style === null ? {} : { style: o.style ?? V.style }) });
+  const pop = h('div', { role: 'dialog', tabindex: '-1', class: o.pop ?? V.pop, ...(o.popStyle ? { style: o.popStyle } : {}) },
+    h('div', { class: o.card ?? V.card }, ...(o.cardKids ? o.cardKids(pic) : [pic])),
+    h('div', { class: 'absolute left-1/2 top-[calc(100%+12px)] z-10 flex' }, h('button', { 'aria-label': '前へ' }, h('span', {}, h('svg'))), h('button', { 'aria-label': '次へ' }, h('span', {}, h('svg')))));
+  const doc = h('html', {}, h('body', {},
+    h('main', {}, h('div', { class: 'cursor-zoom-out' }, h('div', { class: V.card }, h('img', { class: V.pic, style: V.style }))), h('button', { class: 'cursor-zoom-in overflow-hidden' }, h('img', { class: 'h-full w-full rounded-xl object-contain' }))),
+    h('div', { class: 'fixed inset-0 z-[100] cursor-zoom-out bg-black/60' }),
+    h('div', { class: o.view ?? V.view }, pop)));
+  return { doc, pic };
+}
+const onlyC = (o, sel) => { const p = cardPage(o), got = pick(p.doc, sel); return got.length === 1 && got[0] === p.pic; };
+const noneC = (o, sel) => pick(cardPage(o).doc, sel).length === 0;
+t('card viewer: exactly its picture (not the chat\'s look-alike / its zoom-in button image / the arrows); each card rule alone too; no lightbox rule picks it', onlyC({}) && CARD.every(s => onlyC({}, [s])) && noneC({}, BOX));
+t('card viewer: one sign changed (backdrop / card / picture classes, or the picture\'s own limits gone): still the picture', onlyC({ view: 'fixed inset-0 z-[100] flex items-center justify-center' }) && onlyC({ card: 'relative rounded-lg' })
+  && onlyC({ pic: 'select-none rounded-lg' }) && onlyC({ style: null }));
+t('card viewer: two signs changed: nothing (grok.com\'s own look stays)', noneC({ view: 'fixed inset-0 flex', pic: 'select-none' }) && noneC({ pic: 'select-none', style: null }) && noneC({ view: 'fixed inset-0 flex', style: null, card: 'relative' }));
+t('card viewer: a card the page sizes itself (the opening animation: --lightbox-* style on the dialog, size-full picture) is left alone - either sign is enough', noneC({ popStyle: 'top: 80px; left: 60px; width: 900px; height: 600px; --lightbox-ease: cubic-bezier(0.16,1,0.3,1);', pop: 'group fixed origin-top-left cursor-default overflow-visible', card: 'relative size-full overflow-hidden shadow-2xl', pic: 'size-full select-none rounded-[inherit] object-contain', style: null })
+  && noneC({ popStyle: 'width: 900px; --lightbox-ease: ease;' }) && noneC({ pic: 'size-full select-none object-contain' }));
+t('card viewer: round / cropped / in a link or button -> never', noneC({ pic: V.pic + ' rounded-full' }) && noneC({ pic: 'select-none object-cover' }) && noneC({ cardKids: p => [h('a', { href: '#' }, p)] }) && noneC({ cardKids: p => [h('button', {}, p)] }));
+{ const confirm = h('html', {}, h('body', {}, h('div', { class: 'fixed inset-0 bg-overlay' }), h('div', { role: 'dialog', class: 'fixed left-[50%] top-[50%] flex flex-col overflow-hidden' }, h('div', { class: 'overflow-hidden rounded-lg' }, h('img', { class: 'h-16 w-16 object-contain' })), h('div', {}, h('img', { class: 'h-10 w-10' })))));
+  t('another dialog with a picture in a box (no zoom-out backdrop, no limits of its own on the img) -> never', pick(confirm).length === 0); }
 
 console.log(bad ? `${bad} failed` : 'all passed'); process.exit(bad ? 1 : 0);

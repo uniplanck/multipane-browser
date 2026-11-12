@@ -580,9 +580,11 @@ if (document.documentElement) startPcObs(); else window.addEventListener('DOMCon
 // (settings.autoImg). Images only: at least IMG_MIN px both ways (no avatar / icon), not an svg file, not in the sidebar / header / nav / an avatar
 // stack / a dialog already open / a link (that opens a page, not a viewer). The click itself goes on to the page untouched (no preventDefault /
 // stopPropagation). The viewer the page opens
-// for it = a dialog that was not there before the click and holds an image / video; once it is gone, main gets img-closed(true) and gives back
-// only what it maximized itself. No viewer within IMG_WAIT ms: img-closed(false) (the pane stays maximized; ⌘\ / Esc / ⤡ as usual)
-const IMG_MIN = 48, IMG_WAIT = 1500, VIEWER = '[role="dialog"],[aria-modal="true"]';
+// for it = a dialog that was not shown before the click and holds an image / video (grok.com keeps some viewers in the page, hidden, while they
+// are closed: those count once shown); once it is gone, main gets img-closed(true) and gives back only what it maximized itself. The viewer
+// may come late (grok.com loads the pictures first): no viewer within IMG_WAIT ms: img-closed(false) (the pane stays maximized; ⌘\ / Esc / ⤡
+// as usual). Closed = not there IMG_GONE looks in a row (0.9 s): a viewer drawn again by the page is still open
+const IMG_MIN = 48, IMG_WAIT = 6000, IMG_GONE = 3, VIEWER = '[role="dialog"],[aria-modal="true"]';
 let imgT = null;
 function imgOf(t) {
   if (!t || t.nodeType !== 1) return null;
@@ -596,15 +598,16 @@ function imgClicked(e) {
   if (img.closest(`[data-sidebar],header,nav,[data-testid="bot-avatar-stack"],a[href]:not([href^="#"]),${VIEWER}`)) return;
   const r = img.getBoundingClientRect(), src = String(img.currentSrc || img.src || '');
   if (r.width < IMG_MIN || r.height < IMG_MIN || /^data:image\/svg|\.svg(?:[?#]|$)/i.test(src)) return;
-  const before = new Set(document.querySelectorAll(VIEWER));
-  const viewer = () => [...document.querySelectorAll(VIEWER)].some(d => !before.has(d) && d.querySelector('img,video,canvas'));
+  const shown = () => [...document.querySelectorAll(VIEWER)].filter(d => !d.closest('[hidden]'));
+  const before = new Set(shown());
+  const viewer = () => shown().some(d => !before.has(d) && d.querySelector('img,video,canvas'));
   ipcRenderer.send('pane:img-opened');
   clearInterval(imgT);
   let seen = false, waited = 0, gone = 0;
-  imgT = setInterval(() => {                 // a re-rendered viewer is still the viewer: closed only when none is there twice in a row
+  imgT = setInterval(() => {                 // a re-rendered viewer is still the viewer: closed only when none is there IMG_GONE times in a row
     waited += 300;
     if (viewer()) { seen = true; gone = 0; return; }
-    if (seen ? ++gone < 2 : waited < IMG_WAIT) return;
+    if (seen ? ++gone < IMG_GONE : waited < IMG_WAIT) return;
     clearInterval(imgT); imgT = null;
     ipcRenderer.send('pane:img-closed', seen);
   }, 300);
@@ -618,13 +621,24 @@ window.addEventListener('click', draftClicked, true);
 // box = the area; the shadow would frame the empty part, so none): caption, thumbnails, arrows and close keep their places. Tailwind names may
 // change: each rule needs two of three signs (zoom-out wrapper, flex-1 area, object-contain img) and is a rule of its own. Never matched: an image
 // outside a dialog (the chat), in a button / link (thumbnails), round (avatars), cropped (object-cover), or in a box holding several images.
+// A floor under it: the picture's box is never less than 70% of the pane each way (less only where the pane leaves no room beside the viewer's
+// padding, caption and thumbnails), whatever the area's own size comes to - a small picture is drawn up to it, a large one still fits (contain).
+// The other viewer (files / photos: a card around the picture, the dialog inside a zoom-out backdrop) shows the picture at its own size up to
+// 90vw x 85vh when the page does not size the card itself: there the picture gets the full height of that limit (width by its aspect, at
+// most 90vw), so a small one fills the same card a large one does. A card the page sizes itself (its --lightbox-* style, size-full img) is
+// left alone: it already fits the picture's aspect to that limit. Two of three signs again (zoom-out backdrop, the card, the img's own limits).
 const IMG_DLG = ':is([role="dialog"],[aria-modal="true"])', IMG_AREA = 'div:not(:has(> img ~ img))';
 const IMG_PIC = 'img:not([class~="rounded-full"]):not([class~="object-cover"]):not(button img):not(a img):not([role="button"] img)';
-const IMG_VIEW_CSS = [
+const IMG_CARD = `${IMG_DLG}:not([style*="--lightbox"])`, IMG_OWN = `${IMG_PIC}:not([class~="size-full"])`;
+const IMG_VIEW_CSS = [...[
   `${IMG_DLG} [class~="cursor-zoom-out"] ${IMG_AREA}[class~="flex-1"] > ${IMG_PIC}`,             // today: zoom-out wrapper + flex-1 area
   `${IMG_DLG} [class~="cursor-zoom-out"] > ${IMG_AREA} > ${IMG_PIC}[class~="object-contain"]`,    // the area's classes changed
   `${IMG_DLG} ${IMG_AREA}[class~="flex-1"] > ${IMG_PIC}[class~="object-contain"]`,                   // the wrapper's classes changed
-].map(s => `${s}{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;min-width:0 !important;min-height:0 !important;object-fit:contain !important;box-shadow:none !important}`).join('\n');
+].map(s => `${s}{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;min-width:min(70vw,calc(100vw - 4rem)) !important;min-height:min(70vh,calc(100vh - 14rem)) !important;object-fit:contain !important;box-shadow:none !important}`), ...[
+  `[class~="cursor-zoom-out"] > ${IMG_CARD} > div > ${IMG_OWN}[class~="object-contain"]`,                                   // today: backdrop + the img's class
+  `[class~="cursor-zoom-out"] > ${IMG_CARD} > div[class~="overflow-hidden"] > ${IMG_OWN}[style*="max-height"]`,             // the img's classes changed
+  `${IMG_CARD}[class~="cursor-default"] > div[class~="overflow-hidden"] > ${IMG_OWN}[class~="object-contain"][style*="max-height"]`,   // the backdrop's classes changed
+].map(s => `${s}{height:calc(85vh - 48px) !important;width:auto !important;max-width:90vw !important;max-height:none !important;min-width:0 !important;min-height:0 !important;object-fit:contain !important}`)].join('\n');
 function imgViewCss() { if (location.hostname === 'grok.com') { try { webFrame.insertCSS(IMG_VIEW_CSS); } catch {} } }
 if (document.documentElement) imgViewCss(); else window.addEventListener('DOMContentLoaded', imgViewCss);
 

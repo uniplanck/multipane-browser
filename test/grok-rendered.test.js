@@ -24,13 +24,14 @@ function element(tagName, { ariaHidden, parentElement = null, width = 439, heigh
 }
 const hidden = () => element('TEXTAREA', { ariaHidden: 'true', width: 463, height: 14 });
 const composer = options => element('DIV', { contentEditable: 'true', ...options });
-function check(name, elements, probe, rendered, { text = 'メインコンテンツへスキップ', pathname = '/bot/test-bot', links = [] } = {}) {
+function check(name, elements, probe, rendered, { text = 'メインコンテンツへスキップ', pathname = '/bot/test-bot', links = [], dialogs = [] } = {}) {
   const context = vm.createContext({
     location: { pathname },
     document: {
       body: { innerText: text },
       querySelectorAll(selector) {
         if (selector === 'a[href]') return links;
+        if (selector === '[role="dialog"], [role="alertdialog"], [aria-modal="true"]') return dialogs;
         assert.strictEqual(selector, 'textarea, [contenteditable="true"], [contenteditable=""]');
         return elements.filter(el => el.tagName === 'TEXTAREA' || ['true', ''].includes(el.contentEditable));
       }
@@ -45,6 +46,14 @@ const ancestor = element('DIV', { ariaHidden: 'true' });
 for (const child of [element('TEXTAREA', { parentElement: ancestor }), composer({ parentElement: ancestor })]) {
   check('editable inside an aria-hidden ancestor', [child], 'nolink', false);
 }
+// A modal dialog of the page (grok.com's image viewer) hides everything outside it with aria-hidden: the chat under it is still rendered.
+for (const child of [element('TEXTAREA', { parentElement: ancestor }), composer({ parentElement: ancestor })]) {
+  check('editable under an open modal dialog (image viewer)', [child, hidden()], 'rendered', true, { dialogs: [element('DIV', { width: 1200, height: 800 })] });
+  check('a dialog kept in the page but not shown (zero size) is not an open one', [child], 'nolink', false, { dialogs: [element('DIV', { width: 0, height: 0 })] });
+  check('a dialog that is itself hidden is not an open one', [child], 'nolink', false, { dialogs: [element('DIV', { parentElement: ancestor })] });
+}
+check('open dialog, but only the aria-hidden autosize textarea: still blank', [hidden()], 'nolink', false, { dialogs: [element('DIV')] });
+check('open dialog over another bot path: not this bot', [composer({ parentElement: ancestor })], 'nolink', false, { pathname: '/bot/other', dialogs: [element('DIV')] });
 check('real contenteditable and hidden autosize textarea', [composer(), hidden()], 'rendered', true);
 check('ordinary textarea', [element('TEXTAREA')], 'rendered', true);
 check('empty contenteditable attribute, aria-hidden false', [composer({ contentEditable: '', ariaHidden: 'false' })], 'rendered', true);

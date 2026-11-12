@@ -304,24 +304,36 @@ function imgPreload(host = 'grok.com') {
   return { sent, click, tick, setDialogs: d => { dialogs = d; } };
 }
 const img = (o = {}) => ({ nodeType: 1, tagName: 'IMG', currentSrc: 'https://assets.grok.com/gen/abc.jpg', src: '', closest: () => null, getBoundingClientRect: () => ({ width: 320, height: 240 }), ...o });
-const dialog = (media = true) => ({ querySelector: () => (media ? {} : null) });
+const dialog = (media = true, hidden = false) => ({ querySelector: () => (media ? {} : null), closest: () => (hidden ? {} : null) });
 { const P = imgPreload(), e = P.click(img());
   t('img: a real click on a large image of grok.com -> img-opened; the click is not stopped or prevented', J(P.sent) === J([['pane:img-opened']]) && !e.prevented && !e.stopped);
   P.tick(2); P.setDialogs([dialog()]); P.tick(3);
   t('img: its viewer appeared -> nothing more while it is open', P.sent.length === 1);
-  P.setDialogs([]); P.tick(1);
-  t('img: a re-render (gone for one look) is still the viewer', P.sent.length === 1);
+  P.setDialogs([]); P.tick(2);
+  t('img: a re-render (gone for one or two looks) is still the viewer', P.sent.length === 1);
+  P.setDialogs([dialog()]); P.tick(1); P.setDialogs([]); P.tick(2); P.setDialogs([dialog()]); P.tick(200);
+  t('img: the page draws the viewer again (another dialog element), any number of times, and it stays open for a minute -> never reported closed', P.sent.length === 1);
+  P.setDialogs([]); P.tick(2);
+  t('img: gone for 0.6 s: not yet', P.sent.length === 1);
   P.tick(1);
-  t('img: the viewer gone (twice in a row) -> img-closed(true) once', J(P.sent) === J([['pane:img-opened'], ['pane:img-closed', true]]));
+  t('img: the viewer gone (three looks in a row) -> img-closed(true) once', J(P.sent) === J([['pane:img-opened'], ['pane:img-closed', true]]));
   P.tick(10);
   t('img: then the watch stops (no second message)', P.sent.length === 2); }
-{ const P = imgPreload(); P.click(img()); P.tick(4);
-  t('img: still looking for a viewer at 1.2 s', P.sent.length === 1); P.tick(1);
-  t('img: no viewer within 1.5 s -> img-closed(false) (the pane stays maximized)', J(P.sent) === J([['pane:img-opened'], ['pane:img-closed', false]]));
-  const Q = imgPreload(); Q.setDialogs([dialog()]); Q.click(img()); Q.tick(6);
-  t('img: a dialog already open before the click is not its viewer', J(Q.sent) === J([['pane:img-opened'], ['pane:img-closed', false]])); }
+{ const P = imgPreload(); P.click(img()); P.tick(19);
+  t('img: still looking for a viewer at 5.7 s (grok.com loads the pictures before it opens)', P.sent.length === 1); P.tick(1);
+  t('img: no viewer within 6 s -> img-closed(false) (the pane stays maximized)', J(P.sent) === J([['pane:img-opened'], ['pane:img-closed', false]]));
+  const L = imgPreload(); L.click(img()); L.tick(12); L.setDialogs([dialog()]); L.tick(30);
+  t('img: a viewer that opens late (3.6 s) is its viewer', L.sent.length === 1); L.setDialogs([]); L.tick(3);
+  t('img: ... and closing it gives the pane back', J(L.sent) === J([['pane:img-opened'], ['pane:img-closed', true]]));
+  const Q = imgPreload(); Q.setDialogs([dialog()]); Q.click(img()); Q.tick(20);
+  t('img: a dialog already open before the click is not its viewer', J(Q.sent) === J([['pane:img-opened'], ['pane:img-closed', false]]));
+  const K = imgPreload(), kept = dialog(true, true); K.setDialogs([kept]); K.click(img()); K.tick(2); kept.closest = () => null; K.tick(5);
+  t('img: a viewer kept in the page while closed ([hidden]) counts once it is shown', K.sent.length === 1); kept.closest = () => ({}); K.tick(3);
+  t('img: ... and hidden again = closed', J(K.sent) === J([['pane:img-opened'], ['pane:img-closed', true]])); }
 { const none = (target, o, host) => { const P = imgPreload(host); P.click(target, o); P.tick(8); return P.sent.length === 0; };
   t('img: untrusted (a script\'s click) / not the main button -> nothing', none(img(), { isTrusted: false }) && none(img(), { button: 1 }));
+  { const main = read('main.js'), sec = main.slice(main.indexOf('function setImgMax('), main.indexOf('function togglePc('));
+    t('main: only the page\'s own img-closed takes the image state back (no timer / layout / state push does)', (main.match(/setImgMax\(p, false/g) || []).length === 2 && !/setInterval|setTimeout/.test(sec)); }
   t('img: avatars / icons (< 48 px either way) and svg files -> nothing', none(img({ getBoundingClientRect: () => ({ width: 40, height: 300 }) })) && none(img({ getBoundingClientRect: () => ({ width: 300, height: 47 }) }))
     && none(img({ currentSrc: 'https://grok.com/icons/x.svg' })) && none(img({ currentSrc: 'data:image/svg+xml;base64,AAAA' })));
   t('img: in the sidebar / header / nav / an avatar stack / a link / a dialog -> nothing', none(img({ closest: () => ({}) })));

@@ -1505,8 +1505,13 @@ function navHolds(p, input) {
 // load grok.com/ and click it from there. Bounded retries, one cycle per user-initiated load.
 const GROK_BOT_RE = /^https:\/\/grok\.com\/bot\/([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/;
 // Grok's aria-hidden autosize textarea can have a real rect even when the chat UI is blank.
+// A modal dialog of the page (the image viewer, a confirmation) puts aria-hidden on everything outside it: the composer under an open dialog is
+// still the rendered chat (taken as blank, the watchdog reloaded the pane 10 s into an image viewer and closed it). An editable that is
+// aria-hidden itself (the autosize twin) never counts.
 const GROK_COMPOSER_JS = `[...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].some(el => {
-  const r = el.getBoundingClientRect(); return !el.closest('[aria-hidden="true"]') && r.width > 0 && r.height > 0;
+  const r = el.getBoundingClientRect(), h = el.closest('[aria-hidden="true"]');
+  const modal = () => [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')].some(d => { const b = d.getBoundingClientRect(); return !d.closest('[aria-hidden="true"]') && b.width > 0 && b.height > 0; });
+  return (!h || h !== el && modal()) && r.width > 0 && r.height > 0;
 })`;
 const probeCode = id => `(() => {
   const id = ${JSON.stringify(id)};
