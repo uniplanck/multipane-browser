@@ -41,6 +41,8 @@ const SidebarRules = (() => {
     return { side: { x: base.x, y: base.y, width: w, height: Math.max(0, base.h) }, handle: { x: base.x + w, y: base.y, w: gap, h: Math.max(0, base.h) },
       panes: { x: base.x + w + gap, y: base.y, w: base.w - w - gap, h: base.h } };
   }
+  // a point ({ x, y } of a mouse event in the window) on a rect of layout() ({ x, y, w, h }: the handle) -> true; no rect / no point -> false
+  const inRect = (p, r) => !!p && !!r && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
   // a drag of the strip: the pointer's x in the window -> the new width (the limits, and never past the panes' minimum)
   function dragWidth(x, base, gap) {
     const want = Math.round(x - base.x - gap / 2), room = Math.floor(base.w - gap - PANES_MIN);
@@ -238,7 +240,7 @@ const SidebarRules = (() => {
   const retryDue = (rec, s) => { const o = s || {}; return !(rec && rec.failed === true) || o.open !== true ? 'NONE' : o.crashed === true ? 'RECREATE' : o.loading === true ? 'WAIT' : 'RETRY'; };
 
   return { DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH, PANES_MIN, HIDE_BELOW, URL_MAX, NAME_MAX, KEEP_MS, PARTITION, RESULTS, NAMES_PER_TIER, STATE_PANES, WORLD, FOCUS_WAIT_MS, JUMP_WAIT_MS,
-    clampWidth, fit, layout, dragWidth, normalizeUrl, validUrl, originOf, navOk, httpUrl, view, decideSidebarUrl, normName, nameOk, findBot,
+    clampWidth, fit, layout, inRect, dragWidth, normalizeUrl, validUrl, originOf, navOk, httpUrl, view, decideSidebarUrl, normName, nameOk, findBot,
     agentOk, agentOf, botUrl, confirmOpen, jumpOk, jump, paneNames, state, focusComposer, FOCUS_JS, composerPage,
     RETRY_MS, RETRY_CODES, retryWait, failKind, retryRec, retryStep, retryDue };
 })();

@@ -175,51 +175,60 @@ mpb.onOverlayOpen(o => {
 // line, the field (↵ 送信 / ⇧↵ 改行 / esc 閉じる - an IME composition never sends or closes: InstructRules.keyAction), 送信. Every change of the text
 // goes to main as the draft of its tid (kept until the app quits). main sends it, closes the box when it went out, otherwise says why here (and in
 // a toast); no webhook: 設定を開く. This page never gets the URL / key.
-// An answer (the row's mode 'answer', the 1-second long-press): the wait prompt, the row's options as toggle buttons (a click picks / unpicks,
-// never sends; the field keeps the keyboard) and the field as well; one 送信 sends the picks (the row's order) with the text. 送信 / ↵ need a pick
-// or a usable text
+// An answer (the row's mode 'answer', the 1-second long-press): the wait prompt, the row's options as buttons and the field as well: a button sends
+// its label at once (with whatever was typed); 送信 / ↵ send the text alone (a usable one is needed).
+// A batch (a long-press while rows are selected on the page): the Bot and N件 on the head line, the selected rows (tid + title, scrolling when many)
+// and the field; one 送信 / ↵ sends them all - nothing typed is fine (main sends the titles)
 const insEl = $('#ins'), insText = $('#ins-text'), insSend = $('#ins-send'), insNote = $('#ins-note'), insSet = $('#ins-settings'), insCount = $('#ins-count');
-let insNo = 0, insBusy = false, insHook = { configured: false }, insIme = false, insOpts = [], insBtns = [];
-const insPick = new Set();
+let insNo = 0, insBusy = false, insHook = { configured: false }, insIme = false, insBatch = false, insBtns = [];
 insText.maxLength = InstructRules.TEXT_MAX;
 const insUnset = () => insHook.configured ? '' : 'NaoAIのwebhookが未設定です';
-const insPicked = () => insOpts.filter(s => insPick.has(s));
-const insReady = () => !!InstructRules.instruction(insText.value) || insPick.size > 0;
+const insReady = () => !!InstructRules.instruction(insText.value) || insBatch;
+const insMake = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; e.textContent = text; return e; };
 function insFit() { insText.style.height = 'auto'; insText.style.height = Math.min(insText.scrollHeight, 180) + 'px'; }
 function insFoot() {
   const n = insText.value.length;
   insSend.disabled = insBusy || !insReady();
   insText.readOnly = insBusy;
-  insBtns.forEach((b, i) => { b.disabled = insBusy; b.setAttribute('aria-pressed', String(insPick.has(insOpts[i]))); });   // picked: the button's colour / frame only
+  insBtns.forEach(b => { b.disabled = insBusy; });
   insCount.textContent = n > InstructRules.TEXT_MAX * 0.8 ? `${n}/${InstructRules.TEXT_MAX}` : '';
   insSet.hidden = insHook.configured === true;
 }
 function insSay(text, kind) { insNote.textContent = text || ''; insNote.className = text && kind ? 'k-' + kind : ''; }
 function renderInstruct(o) {
-  const t = o.task && typeof o.task === 'object' ? o.task : {};
-  insNo = o.no; insBusy = false; insIme = false; insHook = o.hook && typeof o.hook === 'object' ? o.hook : { configured: false };
-  $('#ins-tid').textContent = t.tid || '';
+  const bt = o.batch && typeof o.batch === 'object' && Array.isArray(o.batch.tasks) ? o.batch : null;
+  const t = bt ? { bot: bt.bot } : o.task && typeof o.task === 'object' ? o.task : {};
+  const rows = bt ? bt.tasks.filter(r => r && typeof r === 'object') : [];
+  insNo = o.no; insBusy = false; insIme = false; insBatch = !!bt; insHook = o.hook && typeof o.hook === 'object' ? o.hook : { configured: false };
+  $('#ins-tid').textContent = bt ? '' : t.tid || ''; $('#ins-tid').hidden = !!bt;
   $('#ins-bot').textContent = t.bot || ''; $('#ins-bot').hidden = !t.bot;
-  $('#ins-task').textContent = t.task || '';
-  $('.ins-head').title = [t.tid, t.bot, t.task, t.state].filter(Boolean).join(' · ');
+  const what = bt ? `${rows.length}件` : t.task || '';       // a batch: how many rows (the Bot is the badge)
+  $('#ins-task').textContent = what;
+  $('.ins-head').title = bt ? rows.map(r => r.tid).join(' · ') : [t.tid, t.bot, t.task, t.state].filter(Boolean).join(' · ');
   insText.value = typeof o.draft === 'string' ? o.draft : '';
-  const answer = t.mode === 'answer';
-  const opts = Array.isArray(t.options) ? t.options : [];
-  const askEl = $('#ins-ask'), chEl = $('#ins-choices'), inEl = $('.ins-in');
-  if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('answer', answer);
+  const answer = !bt && t.mode === 'answer';
+  const opts = answer && Array.isArray(t.options) ? t.options : [];
+  const askEl = $('#ins-ask'), chEl = $('#ins-choices'), listEl = $('#ins-list'), inEl = $('.ins-in');
+  if (typeof document !== 'undefined' && document.body) { document.body.classList.toggle('answer', answer); document.body.classList.toggle('batch', !!bt); }
   insText.placeholder = answer ? '回答を入力' : 'NaoAIへの指示';
   if (askEl) {
     if (answer && (t.ask || !opts.length)) { askEl.hidden = false; askEl.textContent = t.ask || '何を待っているか：待ちの内容が台帳にありません。'; }
     else { askEl.hidden = true; askEl.textContent = ''; }
   }
-  insOpts = answer ? opts.slice() : []; insBtns = []; insPick.clear();
-  if (chEl) { while (chEl.firstChild) chEl.removeChild(chEl.firstChild); chEl.hidden = !insOpts.length; chEl.scrollTop = 0; }
-  if (chEl && insOpts.length && typeof document !== 'undefined' && document.createElement) {
-    for (const label of insOpts) {
-      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
-      b.addEventListener('mousedown', e => e.preventDefault());   // the keyboard stays in the field (an IME composition too): ↵ sends, not this toggle
-      b.addEventListener('click', () => insToggle(label));
+  insBtns = [];
+  if (chEl) { while (chEl.firstChild) chEl.removeChild(chEl.firstChild); chEl.hidden = !opts.length; chEl.scrollTop = 0; }
+  if (chEl && opts.length && typeof document !== 'undefined' && document.createElement) {
+    for (const label of opts) {
+      const b = insMake('button', '', label); b.type = 'button';
+      b.addEventListener('click', () => insGoChoice(label));
       chEl.appendChild(b); insBtns.push(b);
+    }
+  }
+  if (listEl) { while (listEl.firstChild) listEl.removeChild(listEl.firstChild); listEl.hidden = !rows.length; listEl.scrollTop = 0; }
+  if (listEl && rows.length && typeof document !== 'undefined' && document.createElement) {
+    for (const r of rows) {
+      const li = insMake('div', 'ins-li', ''); li.appendChild(insMake('code', '', r.tid || '')); li.appendChild(insMake('span', '', r.task || ''));
+      listEl.appendChild(li);
     }
   }
   if (inEl) inEl.hidden = false;
@@ -227,16 +236,15 @@ function renderInstruct(o) {
   const b = $('.ins-box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
   insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n);
 }
-function insToggle(label) {
-  if (mode !== 'instruct' || insBusy || !insOpts.includes(label)) return;
-  if (insPick.has(label)) insPick.delete(label); else insPick.add(label);
-  insFoot();
+function insGoChoice(label) {
+  if (mode !== 'instruct' || insBusy || !InstructRules.instruction(label)) return;
+  insBusy = true; insSay('送信中…'); insFoot();
+  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value, choice: label });
 }
 function insGo() {
   if (mode !== 'instruct' || insBusy || !insReady()) return;
-  const choices = insPicked();
   insBusy = true; insSay('送信中…'); insFoot();
-  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value, ...(choices.length ? { choices } : {}) });
+  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value });
 }
 insText.addEventListener('compositionstart', () => { insIme = true; });
 insText.addEventListener('compositionend', () => { insIme = false; });

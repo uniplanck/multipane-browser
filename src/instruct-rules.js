@@ -2,11 +2,14 @@
 // test/instruct-*.test.js. A row of the 進捗サイドバー page (right-click -> window.xgBotsSidebar.instruct({ tid, task, bot, state, memo })) opens a
 // Spotlight-like box in the centre of the window; its text is POSTed as JSON to one webhook the user set (settings: URL + key, stored encrypted
 // by main - instruct-webhook.js - never in panes.json, never handed to a renderer). Nothing here knows the URL / key beyond checking them.
+// A batch: the rows the user selected on the page (one Bot; a 1-second long-press while selecting) -> one box, one POST for all of them.
 //   request() / requestOk(): the page's fields -> { tid, task, bot, state, memo } (strings only, control characters out, each cut to its limit)
+//   batch() / batchOk(): the page's selected rows ({ tasks: [row, ...] }, 1..BATCH_MAX, one Bot) -> { bot, tasks: [request(row), ...] }
 //   instruction(): the box's text -> what is sent (trimmed, 1..TEXT_MAX) or ''
 //   hookUrl() / hostOk() / hookHost() / hookKey(): the setting - https on cursor.com / cursor.sh (or a subdomain), a key of KEY_MIN..KEY_MAX
-//   payload() / messageId() / jst(): the JSON body (kind, messageId, instruction, task, source, createdAt, createdAtJst; an answer: mode, choices?, choice?)
-//   choicesOk() / choicesOf(): the answer box's picked labels (the IPC shape; only the row's own options are kept)
+//   payload() / messageId() / jst(): the JSON body (kind, messageId, instruction, task, source, createdAt, createdAtJst; an answer: mode, choice?;
+//     a batch: tasks + bot + mode 'batch' instead of task)
+//   choiceOf(): the answer box's choice button -> the row's own option of that label, or ''
 //   keyAction(): a keydown in the box -> send / newline / close / ignore / none (an IME composition never sends or closes)
 //   toastText() / toastKind() / hookView(): what the user is told (never the URL / key: at most the host)
 //   boxRect() / toastRect() / draftSet(): the box's view in the window, the result toast, the drafts kept per tid (memory only)
@@ -40,6 +43,7 @@ const InstructRules = (() => {
   }
   const ASK_MAX = 500, OPT_MAX = 80, OPT_N = 8;   // 待ち内容 / 選択肢 (task.sh --ask / --options; the answer box)
   const EXTRA = ['mode', 'ask', 'options'];        // optional: mode "answer", the wait prompt, up to 8 choice strings
+  const BATCH_MAX = 20;                            // rows in one batch (the page's selection; at most this many go in one POST)
   // the IPC payload: the row fields (strings) plus the optional answer keys; tid present
   const requestOk = v => obj(v) && Object.keys(v).every(k => FIELDS.includes(k) || EXTRA.includes(k)) && typeof v.tid === 'string'
     && FIELDS.every(k => v[k] === undefined || (typeof v[k] === 'string' && v[k].length <= RAW_MAX))
@@ -56,14 +60,9 @@ const InstructRules = (() => {
     }
     return out;
   }
-  // the answer box's picks (IPC: an array of at most OPT_N labels of at most OPT_MAX each; a lone string = the legacy one choice) -> the row's own
-  // options that were picked (optionsOf: the row's order, cleaned, no duplicates); a label not on the row / empty / not a string is dropped
-  const CHOICE_SEP = '\n';                         // the picks one per line = the instruction when nothing usable was typed
-  const choicesOk = v => Array.isArray(v) && v.length <= OPT_N && v.every(x => typeof x === 'string' && x.length <= OPT_MAX);
-  function choicesOf(picked, options) {
-    const p = [].concat(picked).filter(x => typeof x === 'string' && x.length <= RAW_MAX).map(x => clean(x, OPT_MAX));
-    return optionsOf(options).filter(s => p.includes(s));
-  }
+  // the answer box's choice button (IPC: a string of at most OPT_MAX) -> that label as the row keeps it (optionsOf: cleaned), or '' when it is not one
+  // of the row's options / not a string
+  const choiceOf = (label, options) => { const s = typeof label === 'string' && label.length <= RAW_MAX ? clean(label, OPT_MAX) : ''; return s && optionsOf(options).includes(s) ? s : ''; };
   // -> { tid, task, bot, state, memo, mode?, ask?, options? }, or null (not usable / no tid left after cleaning)
   function request(v) {
     if (!requestOk(v)) return null;
@@ -76,6 +75,27 @@ const InstructRules = (() => {
     const opts = optionsOf(v.options);
     if (opts.length) o.options = opts;
     return o;
+  }
+  // the selected rows (IPC: { tasks } only, 1..BATCH_MAX rows of the five fields - no answer keys) -> { bot, tasks }: each row as request() makes
+  // it, in the page's order (the order they were selected), a tid once; unusable rows dropped. null: none left, or two Bots (never mixed)
+  const batchOk = v => obj(v) && Object.keys(v).length === 1 && Array.isArray(v.tasks) && v.tasks.length >= 1 && v.tasks.length <= BATCH_MAX
+    && v.tasks.every(x => obj(x) && Object.keys(x).every(k => FIELDS.includes(k)) && requestOk(x));
+  function batch(v) {
+    if (!batchOk(v)) return null;
+    const tasks = [];
+    for (const x of v.tasks) { const o = request(x); if (o && !tasks.some(y => y.tid === o.tid)) tasks.push(o); }
+    return tasks.length && tasks.every(o => o.bot === tasks[0].bot) ? { bot: tasks[0].bot, tasks } : null;
+  }
+  // a batch's draft key (main keeps drafts by tid): one per Bot, so a box opened again for another selection of that Bot still has the text. A
+  // cleaned tid never holds a line break, so the two never meet
+  const batchKey = bot => 'batch\n' + (typeof bot === 'string' ? bot : '');
+  // a batch sent with nothing typed: the titles one per line (TITLE_SEP; a row without one: its tid), as many whole lines as fit in TEXT_MAX - the
+  // body's tasks always carry every row
+  const TITLE_SEP = '\n';
+  function titles(tasks) {
+    let s = '';
+    for (const o of tasks) { const l = o.task || o.tid, n = s ? s + TITLE_SEP + l : l; if (n.length > TEXT_MAX) break; s = n; }
+    return s;
   }
   // the box's text -> what is sent: line breaks kept (CR LF -> LF), other control characters out, trimmed; '' = nothing to send / too long
   function instruction(text) {
@@ -116,20 +136,28 @@ const InstructRules = (() => {
     const j = new Date(t + 9 * 3600000), p = n => String(n).padStart(2, '0');
     return Number.isNaN(j.getTime()) ? '' : `${j.getUTCFullYear()}-${p(j.getUTCMonth() + 1)}-${p(j.getUTCDate())} ${p(j.getUTCHours())}:${p(j.getUTCMinutes())} JST`;
   }
-  // { id: messageId(), instruction: the box's text, task: the row (request()), now: a Date[, mode: 'answer', choices: [labels], choice: label] }
-  // -> the JSON body, or null (anything unusable). mode answer: task { tid, task } only; choices = the picks on the row's options (choicesOf;
-  // others dropped), choice = the same label when exactly one (an older receiver reads choice only: with two or more it is left out, never cut
-  // to one); instruction = the typed text, or the picks one per line when nothing usable was typed. The app never closes / removes the task
+  // { id: messageId(), instruction: the box's text, task: the row (request()), now: a Date[, mode: 'answer', choice: label] } or
+  // { id, instruction, now, mode: 'batch', tasks: the selected rows } -> the JSON body, or null (anything unusable). The app never closes / removes a task.
+  // mode answer: task { tid, task } only; choice = the button's label when it is one of the row's options (choiceOf; else left out); instruction =
+  // the typed text, or that label when nothing usable was typed.
+  // mode batch (one Bot, 1..BATCH_MAX rows: batch(); mixed Bots / none usable -> null): tasks [{ tid, task }] in the page's order + bot, and no task
+  // key (a receiver that knows only one task never takes a batch for its first row); instruction = the typed text, or the titles (titles())
   function payload(o) {
-    const x = obj(o) ? o : {}, task = request(x.task), t = timeOf(x.now);
-    const picks = x.mode === 'answer' && task ? choicesOf([].concat(x.choices, x.choice), task.options) : [];
-    const ins = instruction(x.instruction) || instruction(picks.join(CHOICE_SEP));
-    if (typeof x.id !== 'string' || !ID_RE.test(x.id) || !task || !ins || !Number.isFinite(t) || Number.isNaN(new Date(t).getTime())) return null;
+    const x = obj(o) ? o : {}, t = timeOf(x.now);
+    const head = typeof x.id === 'string' && ID_RE.test(x.id) && Number.isFinite(t) && !Number.isNaN(new Date(t).getTime());
+    if (x.mode === 'batch') {
+      const b = batch({ tasks: x.tasks }), ins = b ? instruction(x.instruction) || instruction(titles(b.tasks)) : '';
+      if (!head || !b || !ins) return null;
+      return { kind: KIND, messageId: x.id, instruction: ins, tasks: b.tasks.map(r => ({ tid: r.tid, task: r.task })), bot: b.bot,
+        source: SOURCE, createdAt: new Date(t).toISOString(), createdAtJst: jst(t), mode: 'batch' };
+    }
+    const task = request(x.task), pick = x.mode === 'answer' && task ? choiceOf(x.choice, task.options) : '';
+    const ins = instruction(x.instruction) || instruction(pick);
+    if (!head || !task || !ins) return null;
     if (x.mode === 'answer') {
       const body = { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task },
         source: SOURCE, createdAt: new Date(t).toISOString(), createdAtJst: jst(t), mode: 'answer' };
-      if (picks.length) body.choices = picks;
-      if (picks.length === 1) body.choice = picks[0];
+      if (pick) body.choice = pick;
       return body;
     }
     return { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task, bot: task.bot, state: task.state, memo: task.memo },
@@ -181,7 +209,7 @@ const InstructRules = (() => {
   const toastKind = r => { const o = obj(r) ? r : {}; return o.ok === true ? 'ok' : o.code === 'UNSET' || o.code === 'TEXT' ? 'warn' : 'err'; };
 
   return { LIMITS, FIELDS, EXTRA, ASK_MAX, OPT_MAX, OPT_N, RAW_MAX, TEXT_MAX, URL_MAX, KEY_MIN, KEY_MAX, HOSTS, TIMEOUT_MS, TOAST_MS, DRAFTS_MAX, PARTITION, KIND, SOURCE, RESULTS, ID_RE, BOX, TOAST,
-    CHOICE_SEP, clean, requestOk, request, optionsOf, choicesOk, choicesOf, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
+    BATCH_MAX, TITLE_SEP, clean, requestOk, request, optionsOf, choiceOf, batchOk, batch, batchKey, titles, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
     toastText, toastKind };
 })();
 if (typeof module !== 'undefined') module.exports = InstructRules;

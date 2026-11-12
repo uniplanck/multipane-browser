@@ -82,6 +82,7 @@ body.upop #ins{display:none}
 .ins-box>*{flex:none}
 @keyframes inspop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
 .ins-head{display:flex;align-items:center;gap:8px;min-width:0;padding:11px 16px 0;font-size:12px;white-space:nowrap;overflow:hidden}
+#ins-tid[hidden]{display:none}
 #ins-tid{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);background:var(--ctl);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
 #ins-bot{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;background:rgba(10,132,255,.16);color:#0a84ff;border-radius:9px;padding:1px 8px;font-weight:600;font-size:11px}
 #ins-bot[hidden]{display:none}
@@ -162,19 +163,25 @@ body.update #update-panel{display:block;padding:26px 28px 24px}
 .update-first-actions{flex-direction:column;align-items:stretch}
 .update-first-actions button{text-align:center;padding:11px 14px}
 
-/* 待ちの回答: the wait prompt (4 lines at most, then it scrolls), the choices (toggles: picked = blue tint + frame) - only the choices give way
-   when the view is short (the list scrolls); the field + 送信 and the foot always stay whole. The field grows 3 lines at most here */
+/* 待ちの回答: the wait prompt (4 lines at most, then it scrolls), the choices (a click sends that one) - only the choices give way when the view is
+   short (the list scrolls); the field + 送信 and the foot always stay whole. The field grows 3 lines at most here (a batch's too) */
 #ins-ask{max-height:calc(10px + 4lh);overflow-y:auto;scrollbar-gutter:stable;padding:10px 6px 0 16px;color:var(--text);font-size:13.5px;line-height:1.55;white-space:pre-wrap;
   word-break:auto-phrase;overflow-wrap:anywhere;text-wrap:pretty}
-#ins-ask[hidden],#ins-choices[hidden],.ins-in[hidden]{display:none}
+#ins-ask[hidden],#ins-choices[hidden],#ins-list[hidden],.ins-in[hidden]{display:none}
 #ins-choices{flex:0 1 auto;min-height:56px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;display:flex;flex-direction:column;gap:6px;padding:10px 6px 4px 16px}
-#ins-ask::-webkit-scrollbar,#ins-choices::-webkit-scrollbar{width:10px}   /* more than fits: a thin thumb that stays visible (the gutter is always kept: 16px in either way) */
-#ins-ask::-webkit-scrollbar-thumb,#ins-choices::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dim) 55%,transparent);background-clip:padding-box;border:3px solid transparent;border-radius:5px}
+#ins-ask::-webkit-scrollbar,#ins-choices::-webkit-scrollbar,#ins-list::-webkit-scrollbar{width:10px}   /* more than fits: a thin thumb that stays visible (the gutter is always kept: 16px in either way) */
+#ins-ask::-webkit-scrollbar-thumb,#ins-choices::-webkit-scrollbar-thumb,#ins-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dim) 55%,transparent);background-clip:padding-box;border:3px solid transparent;border-radius:5px}
 #ins-choices button{flex:none;appearance:none;border:1px solid var(--line);background:var(--ctl);color:var(--text);border-radius:10px;padding:8px 12px;font:600 13.5px/1.4 var(--font);text-align:left;cursor:pointer;
   word-break:auto-phrase;overflow-wrap:anywhere;text-wrap:pretty}
 #ins-choices button:hover{background:var(--ctl-hi)}
-#ins-choices button[aria-pressed="true"]{background:rgba(10,132,255,.16);border-color:#0a84ff;box-shadow:inset 0 0 0 1px #0a84ff}
-#ins-choices button[aria-pressed="true"]:hover{background:rgba(10,132,255,.22)}
 #ins-choices button:disabled{opacity:.4;cursor:default}
-body.instruct.answer #ins-text{max-height:calc(4px + 3lh)}
+body.instruct.answer #ins-text,body.instruct.batch #ins-text{max-height:calc(4px + 3lh)}
+/* 一括: the selected rows - tid | title on a shared grid (every title starts at the same x), wrapped, never cut; a hairline between rows. Like the
+   choices, only this list gives way when the view is short */
+#ins-list{flex:0 1 auto;min-height:56px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);
+  column-gap:12px;align-content:start;padding:6px 6px 2px 16px}
+.ins-li{grid-column:1/-1;display:grid;grid-template-columns:subgrid;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}
+.ins-li:first-child{border-top:0}
+.ins-li code{font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);overflow-wrap:anywhere}
+.ins-li span{min-width:0;font-size:13px;line-height:1.5;color:var(--text);word-break:auto-phrase;overflow-wrap:anywhere;text-wrap:pretty}
 body.instruct.answer #ins{align-items:center}

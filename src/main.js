@@ -606,7 +606,7 @@ function guardUi(wc) {                                       // the window's own
 // ---- 進捗サイドバー (sidebar-rules.js): one optional page (settings.sidebarUrl: https, or http on localhost; none by default) docked left of the
 // panes in every window - settings.sidebarOpen / sidebarWidth are one shared setting, like the rest of the bar. Each window has its own view
 // (makeWindow: side*) in its own partition (persist:xg-sidebar: storage the only permission, no download, nothing shared with the panes' login)
-// with its own preload (sidebar-preload.js: window.xgBotsSidebar focusBot / jump / onState / getState / openSettings on 'sidebar:*', its only IPC). It stays on its URL's
+// with its own preload (sidebar-preload.js: window.xgBotsSidebar focusBot / jump / onState / getState / openSettings / instruct / onClearSelection on 'sidebar:*', its only IPC). It stays on its URL's
 // origin (routes / hash inside it as usual); a link elsewhere goes to the default browser after a click, window.open never opens a window.
 // Not a pane: never in panes[] (no input guard / sleep / unread / queue / counts / snapshot / Grok bar / closed panes / the panes' recovery).
 // Closed: hidden, destroyed SR.KEEP_MS later (opened again in time: the same page). Nothing polls; a failed load / its renderer gone only: the
@@ -690,6 +690,8 @@ ipcOn('sidebar:open-settings', r => { if (recentGesture(r.wc) && !r.ctx.overlayO
 // { configured, host, available }). The setting: 進捗サイドバーの設定 > NaoAIへの指示（webhook）, encrypted by safeStorage into its own file
 // (userData/instruct-webhook.json, 0600; never panes.json). Drafts: per tid, in memory until the app quits. Logs: result codes / HTTP status only -
 // never the text, the row, the URL or the key.
+// A batch: the rows the user selected on the page (one Bot, SI.batch) -> instruct({ tasks }) -> one box listing them -> one POST (mode 'batch',
+// SI.payload); its draft is kept per Bot (SI.batchKey). Sent -> the page drops its selection (makeWindow: sideClear), as after a click outside it.
 // Scripted setup from a main-process debugger (the same checks and encryption as the settings screen; no page can call it):
 //   process.mainModule.exports.instructWebhook.set({ url: 'https://hooks.cursor.com/routine', key: '…' })  -> { ok, code?, configured, host, available }
 //   process.mainModule.exports.instructWebhook.status()                                                       -> { configured, host, available }
@@ -707,23 +709,24 @@ const instructWebhook = Object.freeze({
 });
 if (typeof module !== 'undefined' && module.exports) module.exports.instructWebhook = instructWebhook;
 const insDrafts = new Map();                                 // tid -> the box's text not sent yet (SI.draftSet: memory only, DRAFTS_MAX)
-const insBoxes = new Map();                                  // box number -> its tid (a draft that arrives after the box got another row still lands right)
+const insBoxes = new Map();                                  // box number -> its draft key: the tid / SI.batchKey(bot) (a draft that arrives after the box got another row still lands right)
 let insNo = 0;
-// the same gate as jump (right after a click / key in the sidebar - a right-click's mouse-down is one; no other prompt over it: the box itself may
-// be open and gets the new row), then the fields cleaned / cut (SI.request; unusable -> 'bad'). One box at a time: another window's closes
+// the same gate as jump (right after a click / key in the sidebar - a right-click's mouse-down / the end of a long-press's second are one; no other
+// prompt over it: the box itself may be open and gets the new row), then the fields cleaned / cut (SI.request, or SI.batch for { tasks }: one Bot,
+// unusable rows dropped; unusable / mixed Bots -> 'bad'). One box at a time: another window's closes
 ipcHandle('sidebar:instruct', (r, req) => ({ result: sidebarInstruct(r, req) }));
 function sidebarInstruct(r, req) {
   if (!recentGesture(r.wc) || (r.ctx.overlayOpen && r.ctx.overlayMode !== 'instruct')) { dlog('sidebar', 'instruct: not right after a click / key in it'); return 'blocked'; }
-  const task = SI.request(req);
-  if (!task) { dlog('sidebar', 'instruct: unusable fields'); return 'bad'; }
+  const task = SI.request(req), batch = task ? null : SI.batch(req);
+  if (!task && !batch) { dlog('sidebar', 'instruct: unusable fields'); return 'bad'; }
   ctxs.forEach(c => { if (c !== r.ctx) { try { c.closeInstruct(); } catch {} } });
-  const no = ++insNo;
-  insBoxes.set(no, task.tid); while (insBoxes.size > SI.DRAFTS_MAX) insBoxes.delete(insBoxes.keys().next().value);
-  r.ctx.openInstruct(no, task, insDrafts.get(task.tid) || '');
-  dlog('sidebar', 'instruct: box open');
+  const no = ++insNo, key = task ? task.tid : SI.batchKey(batch.bot);
+  insBoxes.set(no, key); while (insBoxes.size > SI.DRAFTS_MAX) insBoxes.delete(insBoxes.keys().next().value);
+  r.ctx.openInstruct(no, task || batch, insDrafts.get(key) || '');
+  dlog('sidebar', batch ? 'instruct: batch box open' : 'instruct: box open');
   return 'open';
 }
-const instructDraft = (no, text) => { const tid = insBoxes.get(no); if (tid) SI.draftSet(insDrafts, tid, text); };
+const instructDraft = (no, text) => { const key = insBoxes.get(no); if (key) SI.draftSet(insDrafts, key, text); };
 // the POST (instruct-webhook.js post): the setting read here, the body built here (SI.payload: a new messageId, the time now), its own memory-only
 // session (no cookie / cache of the panes or the sidebar), 15 s at most -> { ok, status } | { ok: false, code, status? }
 let insSesReady = null;
@@ -930,7 +933,7 @@ let panes = [], focused = 0, layout = PRESETS[spec.layout] ? spec.layout : '2x2'
 let side = null, sideUrl = '', sideTimer = null, sideDrag = null;   // 進捗サイドバー: this window's view, the URL it shows, its destroy timer, an edge drag
 let sideSent = '';                                           // (進捗サイドバー) the state its page was told last (JSON; '' = none yet)
 let sideFail = SR.retryRec(), sideRetryTimer = null;        // (進捗サイドバー) its page's failed loads (SR.retryStep: in a row, nothing loaded since), the retry planned
-let ins = null;                                              // NaoAIへの指示: this window's box while the overlay shows it ({ no, task, sending })
+let ins = null;                                              // NaoAIへの指示: this window's box while the overlay shows it ({ no, task, batch, key, sending }: a row, or a batch of rows)
 let toastWin = null, toastReady = null, toastTimer = null;   // NaoAIへの指示: the result toast (a display-only child window, made on first use)
 function updateViewBackgrounds() {
   const color = nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff';
@@ -2236,6 +2239,7 @@ function addPane(spec = {}, { focus = true, defer = false, asleep = null, from =
   wc.on('focus', () => paneGotFocus(p));
   wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown' && !p.sleeping) focusPane(panes.indexOf(p)); });   // native input, never a fix's synthetic click
   wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown') p.cmpAt = null; });   // (進捗サイドバー) a click in the page: a jump's keyboard move waiting for it is dropped
+  wc.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown') sideClear(); });   // (進捗サイドバー) a click in a pane = outside the sidebar: its row selection goes
   wc.on('before-mouse-event', (e, m) => {
     if (m.type === 'mouseDown' || m.type === 'mouseWheel' || (m.type === 'mouseMove' && tipWindow?.isVisible())) dismissTip();
   });
@@ -2707,36 +2711,47 @@ function sideMenu(wc, params) {
 }
 function sideToggle() { const v = SR.view(settings); if (!v.configured) openSidebarSettings(); else sidebarSet({ sidebarOpen: !v.open }); }   // no URL: the setting
 function openSidebarSettings() { if (approveOpen) hideApprove(); openOverlay('sidebar-settings', { sidebar: { url: SR.view(settings).url, confirm: SR.confirmOpen(settings) }, hook: hookView() }); }
-// ---- NaoAIへの指示: this window's box (sidebarInstruct). The overlay in mode 'instruct' on SI.boxRect only, focused at once; the page gets the row,
-// the draft of its tid and { configured, host, available }. Closed by Esc / a click outside it (its view's margin, the sidebar, a pane, the bar: the
-// keyboard stays where the user went) / another screen - the draft stays (instruct-draft, kept by tid). Another app in front: it stays open
+// ---- NaoAIへの指示: this window's box (sidebarInstruct). The overlay in mode 'instruct' on SI.boxRect only, focused at once; the page gets the row
+// (a batch: { bot, tasks } instead), the draft of its tid (a batch: of its Bot) and { configured, host, available }. Closed by Esc / a click outside
+// it (its view's margin, the sidebar, a pane, the bar: the keyboard stays where the user went) / another screen - the draft stays (instruct-draft,
+// kept by its key). Another app in front: it stays open
 const insRect = () => { const [w, h] = win.getContentSize(); return SI.boxRect(w, h); };
-function openInstruct(no, task, draft) {
+function openInstruct(no, req, draft) {
   if (approveOpen) hideApprove();
-  ins = { no, task, sending: false };
-  openOverlay('instruct', { no, task, draft, hook: hookView() });
+  const batch = Array.isArray(req.tasks) ? req : null, task = batch ? null : req;
+  ins = { no, task, batch, key: batch ? SI.batchKey(batch.bot) : task.tid, sending: false };
+  openOverlay('instruct', batch ? { no, batch, draft, hook: hookView() } : { no, task, draft, hook: hookView() });
 }
 function closeInstruct() { if (overlayOpen && overlayMode === 'instruct') closeOverlay(true); }
 function instructBlur() { if (overlayOpen && overlayMode === 'instruct' && windowActive() && !overlay.webContents.isDestroyed() && !overlay.webContents.isFocused()) closeInstruct(); }
 // 送信 / ↵ in the box (its number = the box on screen; the row / the webhook are main's own): once at a time, the text kept as the draft until it
 // went out. Sent -> the draft gone, the box closed, 「NaoAIに送りました（tid）」; not sent -> the box stays with the text and says why; a toast either way.
-// An answer (the row's mode 'answer'): the choices picked that are the row's own options (SI.choicesOf) go with it; picks alone are enough to send
+// An answer (the row's mode 'answer'): a choice button sends its label (SI.choiceOf: one of the row's own options) with whatever was typed; the label
+// alone is enough. A batch: every selected row in one POST (mode 'batch'; nothing typed is fine: the titles are the instruction), 「（N件）」, and
+// the page drops its selection once it went out (sideClear)
 const insTell = (box, v) => { if (ins === box && overlayOpen && overlayMode === 'instruct' && !overlay.webContents.isDestroyed()) overlay.webContents.send('instruct-state', { no: box.no, ...v }); };
-async function instructSend(no, text, picked) {
+async function instructSend(no, text, choice) {
   const box = ins;
   if (!box || box.no !== no || box.sending) return;
   instructDraft(no, text);
   box.sending = true; insTell(box, { sending: true });
   let r;
-  const answer = !!box.task && box.task.mode === 'answer', choices = answer ? SI.choicesOf(picked, box.task.options) : [];
-  const extra = answer ? { mode: 'answer', ...(choices.length ? { choices } : {}) } : {};
-  try { r = SI.instruction(text) || choices.length ? await instructPost(box.task, text, extra) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
+  const pick = box.task && box.task.mode === 'answer' ? SI.choiceOf(choice, box.task.options) : '';
+  const extra = box.batch ? { mode: 'batch', tasks: box.batch.tasks } : box.task.mode === 'answer' ? { mode: 'answer', ...(pick ? { choice: pick } : {}) } : {};
+  try { r = SI.instruction(text) || pick || box.batch ? await instructPost(box.task, text, extra) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
   box.sending = false;
-  if (r.ok && insDrafts.get(box.task.tid) === text) SI.draftSet(insDrafts, box.task.tid, '');
-  const m = { text: SI.toastText(r, box.task.tid), kind: SI.toastKind(r) };
+  if (r.ok && insDrafts.get(box.key) === text) SI.draftSet(insDrafts, box.key, '');
+  if (r.ok && box.batch) sideClear();
+  const m = { text: SI.toastText(r, box.batch ? `${box.batch.tasks.length}件` : box.task.tid), kind: SI.toastKind(r) };
   showToast(m);
   if (ins !== box || !overlayOpen || overlayMode !== 'instruct') return;
   if (r.ok) closeOverlay(); else insTell(box, { sending: false, note: m.text, kind: m.kind, hook: hookView() });
+}
+// (進捗サイドバー) its page drops its row selection (window.xgBotsSidebar.onClearSelection; nothing else is sent): the user pressed the mouse outside
+// the sidebar in this window - a pane, the bar (not the sidebar's edge: a resize) - or a batch went out. A press in the sidebar / the box: kept
+function sideClear() {
+  const wc = side && side.webContents;
+  if (wc && !wc.isDestroyed() && !wc.isCrashed()) wc.send('sidebar:clear-selection');
 }
 // the state for its page (sideState: every window's panes, this one's first), sent only when it differs from the last one it got (force: a new page)
 function sidePush(force = false) {
@@ -2940,7 +2955,7 @@ function runAction(a) {
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
     case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
-    case 'instruct-send': instructSend(a.no, a.text, [].concat(a.choices, a.choice)).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ (+ the choices picked)
+    case 'instruct-send': instructSend(a.no, a.text, a.choice).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ / a choice button
     case 'instruct-draft': instructDraft(a.no, a.text); break;
     case 'instruct-settings': if (overlayOpen && overlayMode === 'instruct') openSidebarSettings(); break;
     case 'instruct-hook-save': if (overlayOpen && overlayMode === 'sidebar-settings') overlay.webContents.send('instruct-hook', hookReply(instructWebhook.set({ url: a.url, key: a.key }))); break;
@@ -3409,6 +3424,7 @@ if (restore && spec.window?.maximized && !process.env.MPB_SCREENSHOT) win.maximi
 win.loadFile(path.join(__dirname, 'index.html'));
 win.once('ready-to-show', () => { win.show(); updateFirstWhenReady(ctx); });
 win.webContents.on('before-input-event', (e, input) => { if (handleKey(input)) e.preventDefault(); });
+win.webContents.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown' && !SR.inRect(m, sideLay().handle)) sideClear(); });   // (進捗サイドバー) a click on the bar = outside the sidebar (its edge: a resize, kept)
 win.on('resize', () => { dismissTip(); relayout(); if (overlayOpen && overlayMode === 'approve-inline') win.webContents.send('approve-anchor-request'); });
 win.on('move', dismissTip);
 win.on('move', hideToast);                                   // NaoAIへの指示: the toast does not follow a moved window

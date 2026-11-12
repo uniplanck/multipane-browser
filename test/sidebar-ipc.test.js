@@ -66,8 +66,8 @@ const tests = [];                                           // async checks, awa
     on: (ch, f) => { (listeners[ch] = listeners[ch] || []).push(f); } }, { get: (o, k) => k in o ? o[k] : (...a) => { other.push(k); } });
   vm.runInNewContext(read('sidebar-preload.js'), { require: m => { if (m !== 'electron') throw new Error(`requires ${m}`); return { contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } }, ipcRenderer: ipc }; } });
   const api = exposed.xgBotsSidebar;
-  t('preload: exposes only window.xgBotsSidebar = { focusBot, jump, onState, getState, openSettings, instruct } (frozen, functions)', Object.keys(exposed).join() === 'xgBotsSidebar'
-    && Object.keys(api).join() === 'focusBot,jump,onState,getState,openSettings,instruct' && Object.isFrozen(api) && Object.values(api).every(f => typeof f === 'function'));
+  t('preload: exposes only window.xgBotsSidebar = { focusBot, jump, onState, getState, openSettings, instruct, onClearSelection } (frozen, functions)', Object.keys(exposed).join() === 'xgBotsSidebar'
+    && Object.keys(api).join() === 'focusBot,jump,onState,getState,openSettings,instruct,onClearSelection' && Object.isFrozen(api) && Object.values(api).every(f => typeof f === 'function'));
   const r = api.focusBot('Grok Bot');
   t('preload: focusBot sends exactly one fixed channel with the name, returns nothing', r === undefined && sent.length === 1 && sent[0][0] === CH && sent[0][1].length === 1 && sent[0][1][0] === 'Grok Bot');
   api.focusBot(5); api.focusBot({ toString: () => 'x' }); api.focusBot('x'.repeat(81)); api.focusBot();
@@ -95,12 +95,19 @@ const tests = [];                                           // async checks, awa
   const got = [], got2 = [];
   const off = api.onState(s => got.push(s)); api.onState(() => { throw new Error('page bug'); }); api.onState(s => got2.push(s));
   const st = { panes: [{ agentId: A1, names: ['Bot'], active: true }], confirmOpen: false }, EVENT = { sender: ipc, senderFrame: {}, ports: [] };
-  t('preload: one listener on the fixed state channel', J(Object.keys(listeners)) === J(['sidebar:state']) && listeners['sidebar:state'].length === 1);
+  t('preload: one listener on the fixed state channel, one on the fixed clear-selection channel', J(Object.keys(listeners)) === J(['sidebar:state', 'sidebar:clear-selection'])
+    && listeners['sidebar:state'].length === 1 && listeners['sidebar:clear-selection'].length === 1);
   listeners['sidebar:state'][0](EVENT, st, 'extra');
   t('preload: onState callbacks get the state only (never the IPC event / ipcRenderer); a throwing callback does not stop the others', got.length === 1 && got[0] === st && got2.length === 1
     && !got.flat().includes(EVENT));
   t('preload: onState returns an unsubscribe function; a non-function is ignored', typeof off === 'function' && (off(), listeners['sidebar:state'][0](EVENT, st), got.length === 1 && got2.length === 2)
     && typeof api.onState('x') === 'function');
+  // onClearSelection: main says "drop the selection" (a click outside the sidebar / a batch went out) - nothing of the event or any argument passed on
+  { const calls = [], off2 = api.onClearSelection((...a) => calls.push(a)); api.onClearSelection(() => { throw new Error('page bug'); }); const calls2 = []; api.onClearSelection((...a) => calls2.push(a));
+    listeners['sidebar:clear-selection'][0](EVENT, { x: 1 }, 'extra');
+    t('preload: onClearSelection callbacks get no argument (never the event / a payload); a throwing callback does not stop the others', J(calls) === J([[]]) && J(calls2) === J([[]]));
+    t('preload: onClearSelection returns an unsubscribe function; a non-function is ignored; it sends nothing', typeof off2 === 'function' && (off2(), listeners['sidebar:clear-selection'][0](EVENT), calls.length === 1 && calls2.length === 2)
+      && typeof api.onClearSelection('x') === 'function' && !Object.keys(P.CHANNELS).includes('sidebar:clear-selection')); }
   sent.length = 0; reply = st;
   { const g = api.getState(), m = sent[0];
     tests.push(g.then(v => t('preload: getState invokes its fixed channel without arguments and resolves the state', sent.length >= 1 && m[0] === GET && m[1].length === 0 && m[2] === 'invoke' && v === st))); }
@@ -110,7 +117,8 @@ const tests = [];                                           // async checks, awa
   t('preload: openSettings sends its fixed channel without arguments, returns nothing', api.openSettings('x', 1) === undefined && sent.length === 1 && sent[0][0] === OPEN && sent[0][1].length === 0 && !sent[0][2]);
   const code = read('sidebar-preload.js'), chans = [...code.matchAll(/ipcRenderer\.(\w+)\('([^']+)'/g)].map(m => [m[1], m[2]]);
   t('preload: only send / invoke / on, on fixed channels (no sendSync / sendTo / once / removeAllListeners, nothing else of ipcRenderer)', other.length === 0
-    && !/ipcRenderer\.(sendSync|sendTo|sendToHost|once|removeAllListeners|postMessage)\b/.test(code) && chans.length === 6 && chans.every(([f]) => ['send', 'invoke', 'on'].includes(f)));
+    && !/ipcRenderer\.(sendSync|sendTo|sendToHost|once|removeAllListeners|postMessage)\b/.test(code) && chans.length === 7 && chans.every(([f]) => ['send', 'invoke', 'on'].includes(f))
+    && J(chans.filter(([f]) => f === 'on').map(([, ch]) => ch)) === J(['sidebar:state', 'sidebar:clear-selection']));
   t('preload: every channel it sends is in the policy for the sidebar only', chans.filter(([f]) => f !== 'on').every(([, ch]) => SIDE_CH.includes(ch) && P.CHANNELS[ch].roles.join() === 'sidebar')
     && J(SIDE_CH.slice().sort()) === J([...new Set(chans.filter(([f]) => f !== 'on').map(([, ch]) => ch))].sort()));
   t('preload: its UUID pattern / results = sidebar-rules.js', (() => { const m = code.match(/const AGENT = (\/.*\/);/), re = m && vm.runInNewContext(m[1]);

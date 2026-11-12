@@ -106,10 +106,10 @@ const ACTIONS = {
   'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again) + 開く前に確認する
   // NaoAIへの指示 (instruct-rules.js): the box sends its text with the number main gave the box (main takes its own row / webhook for it), keeps the
   // draft the same way, or asks for the settings; the settings screen saves the webhook (https on cursor.com / cursor.sh, a key: main checks again,
-  // encrypts it and never sends it back) or removes it. An answer's send may carry the choices picked (at most OPT_N labels of at most OPT_MAX
-  // each; main keeps only the row's own options) and / or the legacy one choice; no other key
-  'instruct-send': { shape: x => Object.keys(x).every(k => ['type', 'no', 'text', 'choices', 'choice'].includes(k)) && id(x.no) && str(x.text, SI.TEXT_MAX)
-    && (x.choices === undefined || SI.choicesOk(x.choices)) && (x.choice === undefined || str(x.choice, SI.OPT_MAX)) },
+  // encrypts it and never sends it back) or removes it. An answer's send may carry the choice button's label (at most OPT_MAX; main keeps it only
+  // when it is one of the row's options); no other key (a batch's rows are main's own, never sent back by the box)
+  'instruct-send': { shape: x => Object.keys(x).every(k => ['type', 'no', 'text', 'choice'].includes(k)) && id(x.no) && str(x.text, SI.TEXT_MAX)
+    && (x.choice === undefined || str(x.choice, SI.OPT_MAX)) },
   'instruct-draft': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
   'instruct-settings': { shape: x => Object.keys(x).length === 1 },
   'instruct-hook-save': { shape: x => Object.keys(x).length === 3 && str(x.url, SI.URL_MAX) && str(x.key, SI.KEY_MAX + 100) && !!SI.hookUrl(x.url) && !!SI.hookKey(x.key) },
@@ -226,12 +226,14 @@ const CHANNELS = {
   'pane:sel': { roles: PANE, shape: a => bool(a[0]) },        // a selection in the page outside any field (選択部分だけコピー)
   // ---- the 進捗サイドバー page (sidebar-preload.js; contextBridge window.xgBotsSidebar): a Bot's name (focusBot), a jump ({ name, agentId?: a UUID,
   // open?: boolean } - never a URL; ipcHandle: main answers with the result), the state of the panes (ipcHandle, no argument), its settings screen,
-  // the NaoAIへの指示 box for a row ({ tid, task?, bot?, state?, memo? }: strings only; ipcHandle: main cleans / cuts them and answers the result) ----
+  // the NaoAIへの指示 box for a row ({ tid, task?, bot?, state?, memo?, mode?, ask?, options? }: strings only) or for the rows the user selected
+  // ({ tasks: [{ tid, task?, bot?, state?, memo? }] }, 1..BATCH_MAX; one Bot - main refuses mixed ones); ipcHandle: main cleans / cuts them and
+  // answers the result. Main tells the page to drop its selection on 'sidebar:clear-selection' (main -> page only, no payload) ----
   'sidebar:focus-bot': { roles: ['sidebar'], shape: a => a.length === 1 && SR.nameOk(a[0]) },
   'sidebar:jump': { roles: ['sidebar'], shape: a => a.length === 1 && SR.jumpOk(a[0]) },
   'sidebar:get-state': { roles: ['sidebar'], shape: a => a.length === 0 },
   'sidebar:open-settings': { roles: ['sidebar'], shape: a => a.length === 0 },
-  'sidebar:instruct': { roles: ['sidebar'], shape: a => a.length === 1 && SI.requestOk(a[0]) },
+  'sidebar:instruct': { roles: ['sidebar'], shape: a => a.length === 1 && (SI.requestOk(a[0]) || SI.batchOk(a[0])) },
 };
 
 // a file: URL shows this bundled file? Compared as paths (Chromium and Node escape a few characters differently); query / hash ignored
