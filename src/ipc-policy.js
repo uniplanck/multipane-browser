@@ -106,8 +106,10 @@ const ACTIONS = {
   'sidebar-save': { shape: x => Object.keys(x).every(k => k === 'type' || k === 'url' || k === 'confirm') && SR.validUrl(x.url) && (x.confirm === undefined || bool(x.confirm)) },   // 進捗サイドバーのURL ('' = none; main normalises it again) + 開く前に確認する
   // NaoAIへの指示 (instruct-rules.js): the box sends its text with the number main gave the box (main takes its own row / webhook for it), keeps the
   // draft the same way, or asks for the settings; the settings screen saves the webhook (https on cursor.com / cursor.sh, a key: main checks again,
-  // encrypts it and never sends it back) or removes it
-  'instruct-send': { shape: x => (Object.keys(x).length === 3 || (Object.keys(x).length === 4 && str(x.choice, SI.OPT_MAX))) && id(x.no) && str(x.text, SI.TEXT_MAX) },
+  // encrypts it and never sends it back) or removes it. An answer's send may carry the choices picked (at most OPT_N labels of at most OPT_MAX
+  // each; main keeps only the row's own options) and / or the legacy one choice; no other key
+  'instruct-send': { shape: x => Object.keys(x).every(k => ['type', 'no', 'text', 'choices', 'choice'].includes(k)) && id(x.no) && str(x.text, SI.TEXT_MAX)
+    && (x.choices === undefined || SI.choicesOk(x.choices)) && (x.choice === undefined || str(x.choice, SI.OPT_MAX)) },
   'instruct-draft': { shape: x => Object.keys(x).length === 3 && id(x.no) && str(x.text, SI.TEXT_MAX) },
   'instruct-settings': { shape: x => Object.keys(x).length === 1 },
   'instruct-hook-save': { shape: x => Object.keys(x).length === 3 && str(x.url, SI.URL_MAX) && str(x.key, SI.KEY_MAX + 100) && !!SI.hookUrl(x.url) && !!SI.hookKey(x.key) },

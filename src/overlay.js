@@ -174,16 +174,23 @@ mpb.onOverlayOpen(o => {
 // ---- NaoAIへの指示 (instruct-rules.js): the box over the panes (main shows this page on the box's rect only). The row (tid · Bot · task) on one
 // line, the field (↵ 送信 / ⇧↵ 改行 / esc 閉じる - an IME composition never sends or closes: InstructRules.keyAction), 送信. Every change of the text
 // goes to main as the draft of its tid (kept until the app quits). main sends it, closes the box when it went out, otherwise says why here (and in
-// a toast); no webhook: 設定を開く. This page never gets the URL / key
+// a toast); no webhook: 設定を開く. This page never gets the URL / key.
+// An answer (the row's mode 'answer', the 1-second long-press): the wait prompt, the row's options as toggle buttons (a click picks / unpicks,
+// never sends; the field keeps the keyboard) and the field as well; one 送信 sends the picks (the row's order) with the text. 送信 / ↵ need a pick
+// or a usable text
 const insEl = $('#ins'), insText = $('#ins-text'), insSend = $('#ins-send'), insNote = $('#ins-note'), insSet = $('#ins-settings'), insCount = $('#ins-count');
-let insNo = 0, insBusy = false, insHook = { configured: false }, insIme = false;
+let insNo = 0, insBusy = false, insHook = { configured: false }, insIme = false, insOpts = [], insBtns = [];
+const insPick = new Set();
 insText.maxLength = InstructRules.TEXT_MAX;
 const insUnset = () => insHook.configured ? '' : 'NaoAIのwebhookが未設定です';
+const insPicked = () => insOpts.filter(s => insPick.has(s));
+const insReady = () => !!InstructRules.instruction(insText.value) || insPick.size > 0;
 function insFit() { insText.style.height = 'auto'; insText.style.height = Math.min(insText.scrollHeight, 180) + 'px'; }
 function insFoot() {
   const n = insText.value.length;
-  insSend.disabled = insBusy || !InstructRules.instruction(insText.value);
+  insSend.disabled = insBusy || !insReady();
   insText.readOnly = insBusy;
+  insBtns.forEach((b, i) => { b.disabled = insBusy; b.setAttribute('aria-pressed', String(insPick.has(insOpts[i]))); });   // picked: the button's colour / frame only
   insCount.textContent = n > InstructRules.TEXT_MAX * 0.8 ? `${n}/${InstructRules.TEXT_MAX}` : '';
   insSet.hidden = insHook.configured === true;
 }
@@ -205,30 +212,31 @@ function renderInstruct(o) {
     if (answer && (t.ask || !opts.length)) { askEl.hidden = false; askEl.textContent = t.ask || '何を待っているか：待ちの内容が台帳にありません。'; }
     else { askEl.hidden = true; askEl.textContent = ''; }
   }
-  if (chEl) { while (chEl.firstChild) chEl.removeChild(chEl.firstChild); }
-  if (answer && opts.length && chEl) {
-    chEl.hidden = false; if (inEl) inEl.hidden = true;
-    if (typeof document !== 'undefined' && document.createElement) {
-      for (const label of opts) {
-        const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
-        b.addEventListener('click', () => insGoChoice(label));
-        chEl.appendChild(b);
-      }
+  insOpts = answer ? opts.slice() : []; insBtns = []; insPick.clear();
+  if (chEl) { while (chEl.firstChild) chEl.removeChild(chEl.firstChild); chEl.hidden = !insOpts.length; chEl.scrollTop = 0; }
+  if (chEl && insOpts.length && typeof document !== 'undefined' && document.createElement) {
+    for (const label of insOpts) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.addEventListener('mousedown', e => e.preventDefault());   // the keyboard stays in the field (an IME composition too): ↵ sends, not this toggle
+      b.addEventListener('click', () => insToggle(label));
+      chEl.appendChild(b); insBtns.push(b);
     }
-  } else { if (chEl) chEl.hidden = true; if (inEl) inEl.hidden = false; }
+  }
+  if (inEl) inEl.hidden = false;
   insSay(insUnset(), 'warn'); insFoot(); insFit();
   const b = $('.ins-box'); b.style.animation = 'none'; b.offsetHeight; b.style.animation = '';
-  if (!inEl || !inEl.hidden) { insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n); }
+  insText.focus(); const n = insText.value.length; insText.setSelectionRange(n, n);
 }
-function insGoChoice(label) {
-  if (mode !== 'instruct' || insBusy || !InstructRules.instruction(label)) return;
-  insBusy = true; insSay('送信中…'); $('#ins-choices')?.querySelectorAll('button').forEach(b => { b.disabled = true; }); insFoot();
-  mpb.run({ type: 'instruct-send', no: insNo, text: label, choice: label });
+function insToggle(label) {
+  if (mode !== 'instruct' || insBusy || !insOpts.includes(label)) return;
+  if (insPick.has(label)) insPick.delete(label); else insPick.add(label);
+  insFoot();
 }
 function insGo() {
-  if (mode !== 'instruct' || insBusy || !InstructRules.instruction(insText.value)) return;
+  if (mode !== 'instruct' || insBusy || !insReady()) return;
+  const choices = insPicked();
   insBusy = true; insSay('送信中…'); insFoot();
-  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value });
+  mpb.run({ type: 'instruct-send', no: insNo, text: insText.value, ...(choices.length ? { choices } : {}) });
 }
 insText.addEventListener('compositionstart', () => { insIme = true; });
 insText.addEventListener('compositionend', () => { insIme = false; });

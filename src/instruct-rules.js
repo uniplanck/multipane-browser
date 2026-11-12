@@ -5,7 +5,8 @@
 //   request() / requestOk(): the page's fields -> { tid, task, bot, state, memo } (strings only, control characters out, each cut to its limit)
 //   instruction(): the box's text -> what is sent (trimmed, 1..TEXT_MAX) or ''
 //   hookUrl() / hostOk() / hookHost() / hookKey(): the setting - https on cursor.com / cursor.sh (or a subdomain), a key of KEY_MIN..KEY_MAX
-//   payload() / messageId() / jst(): the JSON body (kind, messageId, instruction, task, source, createdAt, createdAtJst)
+//   payload() / messageId() / jst(): the JSON body (kind, messageId, instruction, task, source, createdAt, createdAtJst; an answer: mode, choices?, choice?)
+//   choicesOk() / choicesOf(): the answer box's picked labels (the IPC shape; only the row's own options are kept)
 //   keyAction(): a keydown in the box -> send / newline / close / ignore / none (an IME composition never sends or closes)
 //   toastText() / toastKind() / hookView(): what the user is told (never the URL / key: at most the host)
 //   boxRect() / toastRect() / draftSet(): the box's view in the window, the result toast, the drafts kept per tid (memory only)
@@ -54,6 +55,14 @@ const InstructRules = (() => {
       if (out.length >= OPT_N) break;
     }
     return out;
+  }
+  // the answer box's picks (IPC: an array of at most OPT_N labels of at most OPT_MAX each; a lone string = the legacy one choice) -> the row's own
+  // options that were picked (optionsOf: the row's order, cleaned, no duplicates); a label not on the row / empty / not a string is dropped
+  const CHOICE_SEP = '\n';                         // the picks one per line = the instruction when nothing usable was typed
+  const choicesOk = v => Array.isArray(v) && v.length <= OPT_N && v.every(x => typeof x === 'string' && x.length <= OPT_MAX);
+  function choicesOf(picked, options) {
+    const p = [].concat(picked).filter(x => typeof x === 'string' && x.length <= RAW_MAX).map(x => clean(x, OPT_MAX));
+    return optionsOf(options).filter(s => p.includes(s));
   }
   // -> { tid, task, bot, state, memo, mode?, ask?, options? }, or null (not usable / no tid left after cleaning)
   function request(v) {
@@ -107,15 +116,20 @@ const InstructRules = (() => {
     const j = new Date(t + 9 * 3600000), p = n => String(n).padStart(2, '0');
     return Number.isNaN(j.getTime()) ? '' : `${j.getUTCFullYear()}-${p(j.getUTCMonth() + 1)}-${p(j.getUTCDate())} ${p(j.getUTCHours())}:${p(j.getUTCMinutes())} JST`;
   }
-  // { id: messageId(), instruction: the box's text, task: the row (request()), now: a Date } -> the JSON body, or null (anything unusable)
+  // { id: messageId(), instruction: the box's text, task: the row (request()), now: a Date[, mode: 'answer', choices: [labels], choice: label] }
+  // -> the JSON body, or null (anything unusable). mode answer: task { tid, task } only; choices = the picks on the row's options (choicesOf;
+  // others dropped), choice = the same label when exactly one (an older receiver reads choice only: with two or more it is left out, never cut
+  // to one); instruction = the typed text, or the picks one per line when nothing usable was typed. The app never closes / removes the task
   function payload(o) {
-    const x = obj(o) ? o : {}, task = request(x.task), ins = instruction(x.instruction), t = timeOf(x.now);
+    const x = obj(o) ? o : {}, task = request(x.task), t = timeOf(x.now);
+    const picks = x.mode === 'answer' && task ? choicesOf([].concat(x.choices, x.choice), task.options) : [];
+    const ins = instruction(x.instruction) || instruction(picks.join(CHOICE_SEP));
     if (typeof x.id !== 'string' || !ID_RE.test(x.id) || !task || !ins || !Number.isFinite(t) || Number.isNaN(new Date(t).getTime())) return null;
     if (x.mode === 'answer') {
       const body = { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task },
         source: SOURCE, createdAt: new Date(t).toISOString(), createdAtJst: jst(t), mode: 'answer' };
-      const ch = typeof x.choice === 'string' ? clean(x.choice, OPT_MAX) : '';
-      if (ch) body.choice = ch;
+      if (picks.length) body.choices = picks;
+      if (picks.length === 1) body.choice = picks[0];
       return body;
     }
     return { kind: KIND, messageId: x.id, instruction: ins, task: { tid: task.tid, task: task.task, bot: task.bot, state: task.state, memo: task.memo },
@@ -167,7 +181,7 @@ const InstructRules = (() => {
   const toastKind = r => { const o = obj(r) ? r : {}; return o.ok === true ? 'ok' : o.code === 'UNSET' || o.code === 'TEXT' ? 'warn' : 'err'; };
 
   return { LIMITS, FIELDS, EXTRA, ASK_MAX, OPT_MAX, OPT_N, RAW_MAX, TEXT_MAX, URL_MAX, KEY_MIN, KEY_MAX, HOSTS, TIMEOUT_MS, TOAST_MS, DRAFTS_MAX, PARTITION, KIND, SOURCE, RESULTS, ID_RE, BOX, TOAST,
-    clean, requestOk, request, optionsOf, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
+    CHOICE_SEP, clean, requestOk, request, optionsOf, choicesOk, choicesOf, instruction, hostOk, hookUrl, hookHost, hookKey, hookView, messageId, jst, payload, keyAction, boxRect, toastRect, draftSet,
     toastText, toastKind };
 })();
 if (typeof module !== 'undefined') module.exports = InstructRules;

@@ -2719,16 +2719,18 @@ function openInstruct(no, task, draft) {
 function closeInstruct() { if (overlayOpen && overlayMode === 'instruct') closeOverlay(true); }
 function instructBlur() { if (overlayOpen && overlayMode === 'instruct' && windowActive() && !overlay.webContents.isDestroyed() && !overlay.webContents.isFocused()) closeInstruct(); }
 // 送信 / ↵ in the box (its number = the box on screen; the row / the webhook are main's own): once at a time, the text kept as the draft until it
-// went out. Sent -> the draft gone, the box closed, 「NaoAIに送りました（tid）」; not sent -> the box stays with the text and says why; a toast either way
+// went out. Sent -> the draft gone, the box closed, 「NaoAIに送りました（tid）」; not sent -> the box stays with the text and says why; a toast either way.
+// An answer (the row's mode 'answer'): the choices picked that are the row's own options (SI.choicesOf) go with it; picks alone are enough to send
 const insTell = (box, v) => { if (ins === box && overlayOpen && overlayMode === 'instruct' && !overlay.webContents.isDestroyed()) overlay.webContents.send('instruct-state', { no: box.no, ...v }); };
-async function instructSend(no, text, choice) {
+async function instructSend(no, text, picked) {
   const box = ins;
   if (!box || box.no !== no || box.sending) return;
   instructDraft(no, text);
   box.sending = true; insTell(box, { sending: true });
   let r;
-  const extra = box.task && box.task.mode === 'answer' ? { mode: 'answer', ...(typeof choice === 'string' && choice ? { choice } : {}) } : {};
-  try { r = SI.instruction(text) ? await instructPost(box.task, text, extra) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
+  const answer = !!box.task && box.task.mode === 'answer', choices = answer ? SI.choicesOf(picked, box.task.options) : [];
+  const extra = answer ? { mode: 'answer', ...(choices.length ? { choices } : {}) } : {};
+  try { r = SI.instruction(text) || choices.length ? await instructPost(box.task, text, extra) : { ok: false, code: 'TEXT' }; } catch { r = { ok: false, code: 'NETWORK' }; }
   box.sending = false;
   if (r.ok && insDrafts.get(box.task.tid) === text) SI.draftSet(insDrafts, box.task.tid, '');
   const m = { text: SI.toastText(r, box.task.tid), kind: SI.toastKind(r) };
@@ -2938,7 +2940,7 @@ function runAction(a) {
     }
     case 'approve-reset': if (overlayOpen && (overlayMode === 'approve-settings' || overlayMode === 'approve-inline')) { setApproveSettings(null); closeOverlay(); } break;
     case 'sidebar-save': if (overlayOpen && overlayMode === 'sidebar-settings' && setSidebarUrl(a.url, a.confirm)) closeOverlay(); break;   // 進捗サイドバーのURL ('' = none) + 開く前に確認する
-    case 'instruct-send': instructSend(a.no, a.text, a.choice).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ / a choice button
+    case 'instruct-send': instructSend(a.no, a.text, [].concat(a.choices, a.choice)).catch(() => {}); break;   // NaoAIへの指示: the box's 送信 / ↵ (+ the choices picked)
     case 'instruct-draft': instructDraft(a.no, a.text); break;
     case 'instruct-settings': if (overlayOpen && overlayMode === 'instruct') openSidebarSettings(); break;
     case 'instruct-hook-save': if (overlayOpen && overlayMode === 'sidebar-settings') overlay.webContents.send('instruct-hook', hookReply(instructWebhook.set({ url: a.url, key: a.key }))); break;

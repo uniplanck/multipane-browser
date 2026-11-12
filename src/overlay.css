@@ -1,6 +1,6 @@
 :root{--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
-  --panel:rgba(36,36,40,.92);--text:#ececf0;--dim:#9a9aa2;--line:rgba(255,255,255,.1);--sel:rgba(10,132,255,.9);--ctl:rgba(255,255,255,.08);--glow:#ff9f0a}
-body.light{--panel:rgba(250,250,252,.94);--text:#1d1d1f;--dim:#6e6e73;--line:rgba(0,0,0,.1);--ctl:rgba(0,0,0,.05)}
+  --panel:rgba(36,36,40,.92);--text:#ececf0;--dim:#9a9aa2;--line:rgba(255,255,255,.1);--sel:rgba(10,132,255,.9);--ctl:rgba(255,255,255,.08);--ctl-hi:rgba(255,255,255,.13);--glow:#ff9f0a}
+body.light{--panel:rgba(250,250,252,.94);--text:#1d1d1f;--dim:#6e6e73;--line:rgba(0,0,0,.1);--ctl:rgba(0,0,0,.05);--ctl-hi:rgba(0,0,0,.09)}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:transparent;font:13px var(--font);color:var(--text);-webkit-font-smoothing:antialiased;overflow:hidden}
 #scrim{position:fixed;inset:0;background:rgba(0,0,0,.28);animation:fade .12s ease-out}
@@ -77,8 +77,9 @@ body.upop #upop{display:block}
 body.instruct #scrim,body.instruct #box,body.instruct #apshadow{display:none}
 body.instruct #ins{display:flex;position:fixed;inset:0;align-items:center;justify-content:center;padding:12px 20px}
 body.upop #ins{display:none}
-.ins-box{width:100%;background:var(--panel);backdrop-filter:blur(30px) saturate(180%);border:1px solid var(--line);border-radius:16px;
+.ins-box{width:100%;max-height:100%;display:flex;flex-direction:column;background:var(--panel);backdrop-filter:blur(30px) saturate(180%);border:1px solid var(--line);border-radius:16px;
   box-shadow:0 18px 50px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.25);overflow:hidden;animation:inspop .14s cubic-bezier(.2,.9,.3,1.2)}
+.ins-box>*{flex:none}
 @keyframes inspop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
 .ins-head{display:flex;align-items:center;gap:8px;min-width:0;padding:11px 16px 0;font-size:12px;white-space:nowrap;overflow:hidden}
 #ins-tid{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);background:var(--ctl);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
@@ -91,7 +92,7 @@ body.upop #ins{display:none}
 #ins-text::placeholder{color:var(--dim)}
 #ins-send{flex:none;align-self:flex-end;margin-bottom:1px;border:0;border-radius:8px;background:var(--sel);color:#fff;font:600 13px var(--font);padding:6px 14px}
 #ins-send:disabled{opacity:.4}
-.ins-foot{display:flex;align-items:center;gap:10px;min-height:30px;padding:6px 16px 8px;border-top:1px solid var(--line);color:var(--dim);font-size:11px;white-space:nowrap}
+.ins-foot{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px 10px;min-height:30px;padding:6px 16px 8px;border-top:1px solid var(--line);color:var(--dim);font-size:11px;white-space:nowrap}
 .ins-foot .sp{flex:1}
 #ins-note{min-width:0;overflow:hidden;text-overflow:ellipsis}
 #ins-note.k-err{color:#ff6b6b}
@@ -161,10 +162,19 @@ body.update #update-panel{display:block;padding:26px 28px 24px}
 .update-first-actions{flex-direction:column;align-items:stretch}
 .update-first-actions button{text-align:center;padding:11px 14px}
 
-#ins-ask{padding:10px 16px 0;color:var(--text);font-size:13.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+/* 待ちの回答: the wait prompt (4 lines at most, then it scrolls), the choices (toggles: picked = blue tint + frame) - only the choices give way
+   when the view is short (the list scrolls); the field + 送信 and the foot always stay whole. The field grows 3 lines at most here */
+#ins-ask{max-height:calc(10px + 4lh);overflow-y:auto;scrollbar-gutter:stable;padding:10px 6px 0 16px;color:var(--text);font-size:13.5px;line-height:1.55;white-space:pre-wrap;
+  word-break:auto-phrase;overflow-wrap:anywhere;text-wrap:pretty}
 #ins-ask[hidden],#ins-choices[hidden],.ins-in[hidden]{display:none}
-#ins-choices{display:flex;flex-direction:column;gap:6px;padding:10px 16px 6px}
-#ins-choices button{appearance:none;border:1px solid var(--line);background:var(--ctl);color:var(--text);border-radius:10px;padding:8px 12px;font:600 13.5px var(--font);text-align:left;cursor:pointer}
+#ins-choices{flex:0 1 auto;min-height:56px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;display:flex;flex-direction:column;gap:6px;padding:10px 6px 4px 16px}
+#ins-ask::-webkit-scrollbar,#ins-choices::-webkit-scrollbar{width:10px}   /* more than fits: a thin thumb that stays visible (the gutter is always kept: 16px in either way) */
+#ins-ask::-webkit-scrollbar-thumb,#ins-choices::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dim) 55%,transparent);background-clip:padding-box;border:3px solid transparent;border-radius:5px}
+#ins-choices button{flex:none;appearance:none;border:1px solid var(--line);background:var(--ctl);color:var(--text);border-radius:10px;padding:8px 12px;font:600 13.5px/1.4 var(--font);text-align:left;cursor:pointer;
+  word-break:auto-phrase;overflow-wrap:anywhere;text-wrap:pretty}
 #ins-choices button:hover{background:var(--ctl-hi)}
+#ins-choices button[aria-pressed="true"]{background:rgba(10,132,255,.16);border-color:#0a84ff;box-shadow:inset 0 0 0 1px #0a84ff}
+#ins-choices button[aria-pressed="true"]:hover{background:rgba(10,132,255,.22)}
 #ins-choices button:disabled{opacity:.4;cursor:default}
+body.instruct.answer #ins-text{max-height:calc(4px + 3lh)}
 body.instruct.answer #ins{align-items:center}

@@ -97,33 +97,47 @@ t('toastRect: bottom centre, 480 wide at most', J(R.toastRect(1400, 900)) === J(
 t('nothing personal in the rules: no URL but the hosts rule, no UUID, no key', !/https?:\/\/[^\s'"`]*cursor/.test(require('fs').readFileSync(require.resolve('../src/instruct-rules'), 'utf8'))
   && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(require('fs').readFileSync(require.resolve('../src/instruct-rules'), 'utf8')));
 
+// ---- 待ちの回答 (mode answer): the row's wait prompt / options, the picks and the body (an older block of these never ran: it sat after the exit) ----
+{ const id = 'x_' + '1'.repeat(24), now = new Date('2026-11-11T07:00:00.000Z');
+  const ROW = { tid: 'T1', task: '仕事', bot: 'NaoAI', state: '待ち', memo: 'x', mode: 'answer', ask: 'どれにしますか', options: ['案A', '案B', '案C'] };
+  const P = o => R.payload({ id, task: ROW, now, mode: 'answer', ...o });
+  const BASE = ['kind', 'messageId', 'instruction', 'task', 'source', 'createdAt', 'createdAtJst', 'mode'];
+  const r = R.request({ tid: 'T1', task: '仕事', mode: 'answer', ask: '  どちら？  ', options: [' 案A ', '', '案B', '案A'] });
+  t('request: mode answer + ask + options are kept and cleaned (no empties / duplicates); unknown keys / modes still refused', r.mode === 'answer' && r.ask === 'どちら？' && J(r.options) === J(['案A', '案B'])
+    && R.request({ tid: 'T1', extra: 'x' }) === null && R.request({ tid: 'T1', mode: 'instruct' }) === null);
+  t('choicesOk = the IPC shape: an array of at most OPT_N (8) strings of at most OPT_MAX (80)', R.OPT_N === 8 && R.OPT_MAX === 80 && R.choicesOk([]) && R.choicesOk(['a']) && R.choicesOk(Array(8).fill('x'.repeat(80)))
+    && [Array(9).fill('a'), ['x'.repeat(81)], ['a', 5], [null], 'a', { 0: 'a', length: 1 }, null, undefined].every(v => !R.choicesOk(v)));
+  t('choicesOf: only the row\'s own options, in the row\'s order, once each; others / empties / non-strings dropped; a lone string = one pick',
+    J(R.choicesOf(['案C', '案A', '案Z', '', '案A', 5, null], ROW.options)) === J(['案A', '案C']) && J(R.choicesOf('案B', ROW.options)) === J(['案B'])
+    && J(R.choicesOf([' 案B\n'], ROW.options)) === J(['案B']) && J(R.choicesOf(['案A'], [])) === J([]) && J(R.choicesOf(['案A'], undefined)) === J([]) && J(R.choicesOf(undefined, ROW.options)) === J([]));
+  t('choicesOf: a label is compared as the row keeps it (cleaned, cut to OPT_MAX)', (() => { const o = R.request({ tid: 'T', options: ['y'.repeat(100)] }).options; return J(R.choicesOf([o[0]], o)) === J(o) && o[0].length === 80; })());
+  let p = P({ instruction: '', choices: ['案C', '案A'] });
+  t('payload: 2+ picks, no text -> choices (the row\'s order), no choice, instruction = the picks one per line', R.CHOICE_SEP === '\n' && J(p.choices) === J(['案A', '案C']) && !('choice' in p)
+    && p.instruction === '案A\n案C' && J(Object.keys(p)) === J([...BASE, 'choices']));
+  p = P({ instruction: '  ', choices: ['案B'] });
+  t('payload: exactly 1 pick, no text -> choices [label] + the legacy choice = label, instruction = label', J(p.choices) === J(['案B']) && p.choice === '案B' && p.instruction === '案B'
+    && J(Object.keys(p)) === J([...BASE, 'choices', 'choice']));
+  p = P({ instruction: '案Aで。見出しは短く', choices: ['案A'] });
+  const p2 = P({ instruction: '両方やって', choices: ['案A', '案B'] });
+  t('payload: picks + text -> instruction = the text, choices present, choice only when exactly one', p.instruction === '案Aで。見出しは短く' && J(p.choices) === J(['案A']) && p.choice === '案A'
+    && p2.instruction === '両方やって' && J(p2.choices) === J(['案A', '案B']) && !('choice' in p2));
+  p = P({ instruction: '自由に書きます' });
+  const w = R.payload({ id, instruction: '返事です', task: { tid: 'T2', task: '待ち', mode: 'answer' }, now, mode: 'answer', choices: ['案A'] });
+  t('payload: text only (no picks / a wait with no options) -> no choices, no choice', p.instruction === '自由に書きます' && !('choices' in p) && !('choice' in p) && J(Object.keys(p)) === J(BASE)
+    && w.instruction === '返事です' && !('choices' in w) && !('choice' in w));
+  p = P({ instruction: 'メモ', choices: ['案Z', '案A'] });
+  t('payload: a label not on the row never appears; only such labels and no text -> null (nothing to send)', J(p.choices) === J(['案A']) && p.choice === '案A' && !J(p).includes('案Z')
+    && P({ instruction: '', choices: ['案Z'] }) === null && P({ instruction: '' }) === null && P({ instruction: '', choices: [] }) === null);
+  p = P({ instruction: '', choice: '案C' });
+  t('payload: the legacy one choice is still read (a pick like the others)', J(p.choices) === J(['案C']) && p.choice === '案C' && p.instruction === '案C');
+  p = P({ instruction: '', choices: ['案A'], task: ROW });
+  t('payload: answer mode: kind as before, task { tid, task } only', p.kind === 'xg-bots-instruction' && p.mode === 'answer' && J(p.task) === J({ tid: 'T1', task: '仕事' }));
+  const n = R.payload({ id, instruction: '普通', task: ROW, now, choices: ['案A'], choice: '案A' });
+  t('payload: not an answer -> the row as before, picks ignored, nothing of mode / choices', n.instruction === '普通' && !('mode' in n) && !('choices' in n) && !('choice' in n)
+    && J(Object.keys(n.task)) === J(['tid', 'task', 'bot', 'state', 'memo']) && R.payload({ id, instruction: '', task: ROW, now, choices: ['案A'] }) === null);
+  t('payload: the instruction from picks stays within TEXT_MAX (8 x 80 + separators)', (() => { const o = Array.from({ length: 8 }, (_, i) => String(i) + 'z'.repeat(79));
+    const q = R.payload({ id, instruction: '', task: { tid: 'T', options: o }, now, mode: 'answer', choices: o }); return q && q.instruction.length === 8 * 80 + 7 && J(q.choices) === J(o) && !('choice' in q); })());
+  t('keyAction: an IME composition still never sends (answer box too)', K('Enter', { isComposing: true }) === 'none' && K('Enter', { keyCode: 229 }) === 'none' && K('Enter', { composing: true }) === 'none'); }
+
 console.log(bad ? `${bad} failed` : 'all passed');
 process.exit(bad ? 1 : 0);
-
-{ const { test: t } = require('node:test'), assert = require('node:assert/strict'), R = require('../src/instruct-rules');
-  const J = v => JSON.stringify(v);
-  const id = R.messageId(Buffer.from('0123456789ab', 'utf8').length === 12 ? Buffer.from([1,2,3,4,5,6,7,8,9,10,11,12]) : Buffer.alloc(12, 7));
-  const now = new Date('2026-11-11T07:00:00.000Z');
-  t('request: mode answer + ask + options are kept and cleaned; unknown keys still refused', () => {
-    const r = R.request({ tid: 'T1', task: '仕事', mode: 'answer', ask: '  どちら？  ', options: [' 案A ', '', '案B', '案A'] });
-    assert.equal(r.mode, 'answer');
-    assert.equal(r.ask, 'どちら？');
-    assert.deepEqual(r.options, ['案A', '案B']);
-    assert.equal(R.request({ tid: 'T1', extra: 'x' }), null);
-    assert.equal(R.request({ tid: 'T1', mode: 'instruct' }), null);
-  });
-  t('payload: answer mode has mode, task{tid,task} only, optional choice, same kind', () => {
-    const p = R.payload({ id, instruction: '案A', task: { tid: 'T1', task: '仕事', bot: 'NaoAI', state: '待ち', memo: 'x' }, now, mode: 'answer', choice: '案A' });
-    assert.equal(p.kind, 'xg-bots-instruction');
-    assert.equal(p.mode, 'answer');
-    assert.deepEqual(p.task, { tid: 'T1', task: '仕事' });
-    assert.equal(p.choice, '案A');
-    assert.equal(p.instruction, '案A');
-    const f = R.payload({ id, instruction: '自由に書きます', task: { tid: 'T1', task: '仕事' }, now, mode: 'answer' });
-    assert.equal(f.mode, 'answer');
-    assert.ok(!('choice' in f));
-    const n = R.payload({ id, instruction: '普通', task: { tid: 'T1', task: '仕事', bot: 'B', state: '', memo: '' }, now });
-    assert.ok(!('mode' in n));
-    assert.deepEqual(Object.keys(n.task), ['tid', 'task', 'bot', 'state', 'memo']);
-  });
-}

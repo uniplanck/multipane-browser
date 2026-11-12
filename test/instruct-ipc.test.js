@@ -37,6 +37,15 @@ t('overlay actions: the box\'s send / draft / settings and the webhook save / re
 t('overlay actions: send / draft = the box\'s number + text (4000 at most), nothing else - never a row, URL or key', [{ type: 'instruct-send', no: 1, text: 'x'.repeat(SI.TEXT_MAX + 1) }, { type: 'instruct-send', no: 0, text: 'x' },
   { type: 'instruct-send', no: '1', text: 'x' }, { type: 'instruct-send', no: 1, text: 5 }, { type: 'instruct-send', no: 1, text: 'x', tid: 'T' }, { type: 'instruct-send', no: 1, text: 'x', url: HOOK },
   { type: 'instruct-draft', no: 1 }, { type: 'instruct-draft', no: 1, text: 'x', task: {} }, { type: 'instruct-settings', x: 1 }, { type: 'instruct-hook-clear', url: '' }].every(a => run(OV, a) === 'E_PAYLOAD'));
+const SEND = { type: 'instruct-send', no: 1, text: '' };
+t('overlay actions: an answer\'s send may carry the picks (choices: up to 8 labels of up to 80) and / or the legacy one choice',
+  [{ ...SEND, choices: ['案A', '案B'] }, { ...SEND, choices: [] }, { ...SEND, choices: Array(8).fill('x'.repeat(SI.OPT_MAX)) }, { ...SEND, choice: '案A' }, { ...SEND, choices: ['案A'], choice: '案A' },
+    { ...SEND, text: '補足', choices: ['案A'] }].every(a => run(OV, a) === null));
+t('overlay actions: oversize / malformed picks, unknown keys, a missing number / text -> E_PAYLOAD', [{ ...SEND, choices: Array(9).fill('a') }, { ...SEND, choices: ['x'.repeat(SI.OPT_MAX + 1)] },
+  { ...SEND, choices: '案A' }, { ...SEND, choices: ['案A', 5] }, { ...SEND, choices: [['案A']] }, { ...SEND, choices: { 0: '案A' } }, { ...SEND, choices: null }, { ...SEND, choice: 'x'.repeat(SI.OPT_MAX + 1) },
+  { ...SEND, choice: ['案A'] }, { ...SEND, choices: ['案A'], options: ['案A'] }, { ...SEND, choices: ['案A'], mode: 'answer' }, { ...SEND, choices: ['案A'], task: { tid: 'T' } },
+  { type: 'instruct-send', no: 1, choices: ['案A'] }, { type: 'instruct-send', text: '', choices: ['案A'] }, { ...SEND, text: 'x'.repeat(SI.TEXT_MAX + 1), choices: ['案A'] }].every(a => run(OV, a) === 'E_PAYLOAD')
+  && run(UI, { ...SEND, choices: ['案A'] }) === 'E_ROLE' && run(SIDE, { ...SEND, choices: ['案A'] }) === 'E_ROLE');
 t('overlay actions: the webhook save takes a usable URL (https, cursor.com / cursor.sh) and key only', [{ type: 'instruct-hook-save', url: 'http://hooks.cursor.com/x', key: KEY }, { type: 'instruct-hook-save', url: 'https://evil.example/', key: KEY },
   { type: 'instruct-hook-save', url: HOOK, key: 'short' }, { type: 'instruct-hook-save', url: HOOK, key: 'a b c d e f g h' }, { type: 'instruct-hook-save', url: HOOK }, { type: 'instruct-hook-save', url: HOOK, key: KEY, extra: 1 },
   { type: 'instruct-hook-save', url: 'x'.repeat(SI.URL_MAX + 1), key: KEY }].every(a => run(OV, a) === 'E_PAYLOAD'));
@@ -116,8 +125,38 @@ const tests = [];
     && /preload: path\.join\(__dirname, 'toast-preload\.js'\), contextIsolation: true, nodeIntegration: false, sandbox: true/.test(toast) && /guardUi\(toastWin\.webContents\);/.test(toast)
     && /SI\.toastRect\(c\.width, c\.height\)/.test(toast) && /child\.showInactive\(\)/.test(toast) && /setTimeout\(hideToast, SI\.TOAST_MS\)/.test(toast)
     && /child\.webContents\.send\('toast-display', \{ text: m\.text, kind: m\.kind, dark: nativeTheme\.shouldUseDarkColors \}\);/.test(toast) && (main.match(/showToast\(/g) || []).length >= 2);
-  t('main: the box\'s actions: send / draft / settings (the box on screen only)', /case 'instruct-send': instructSend\(a\.no, a\.text, a\.choice\)\.catch\(\(\) => \{\}\); break;/.test(main) && /case 'instruct-draft': instructDraft\(a\.no, a\.text\); break;/.test(main)
-    && /case 'instruct-settings': if \(overlayOpen && overlayMode === 'instruct'\) openSidebarSettings\(\); break;/.test(main)); }
+  t('main: the box\'s actions: send / draft / settings (the box on screen only)', /case 'instruct-send': instructSend\(a\.no, a\.text, \[\]\.concat\(a\.choices, a\.choice\)\)\.catch\(\(\) => \{\}\); break;/.test(main) && /case 'instruct-draft': instructDraft\(a\.no, a\.text\); break;/.test(main)
+    && /case 'instruct-settings': if \(overlayOpen && overlayMode === 'instruct'\) openSidebarSettings\(\); break;/.test(main));
+
+  // main's own instructSend (vm): the picks go through SI.choicesOf (the row's options) into the object SI.payload sees; picks alone are enough to send
+  const posts = [], toasts = [], told = [];
+  const mctx = { SI, ins: null, insDrafts: new Map(), overlayOpen: true, overlayMode: 'instruct', hookView: () => ({ configured: true, host: '', available: true }), instructDraft() {},
+    insTell: (box, v) => told.push(v), showToast: m => toasts.push(m), closeOverlay: () => told.push('closed'),
+    instructPost: async (task, text, extra) => { const body = SI.payload({ id: 'x_' + '1'.repeat(24), instruction: text, task, now: new Date(0), ...extra }); posts.push({ extra, body }); return body ? { ok: true, status: 200 } : { ok: false, code: 'TEXT' }; } };
+  vm.runInNewContext('async ' + send, mctx);   // fn() starts at 'function'
+  t('main: instructSend is the async function run here', /^async function instructSend\(no, text, picked\) \{$/m.test(main));
+  const ROWA = SI.request({ tid: 'T-5', task: '方針', mode: 'answer', ask: 'どれ？', options: ['案A', '案B', '案C'] });
+  const go = (task, msg) => { mctx.ins = { no: 5, task, sending: false }; posts.length = 0; toasts.length = 0; told.length = 0;
+    return chk('overlay-run', OV, [{ type: 'instruct-send', no: 5, ...msg }]) === null ? mctx.instructSend(5, msg.text, [].concat(msg.choices, msg.choice)).then(() => posts[0]) : Promise.resolve('refused'); };
+  tests.push((async () => {
+    let q = await go(ROWA, { text: '', choices: ['案C', '案A'] });
+    t('main: 2 picks, no text -> payload choices (the row\'s order), no choice, instruction = the picks one per line', J(q.extra) === J({ mode: 'answer', choices: ['案A', '案C'] })
+      && J(q.body.choices) === J(['案A', '案C']) && !('choice' in q.body) && q.body.instruction === '案A\n案C' && J(q.body.task) === J({ tid: 'T-5', task: '方針' }) && told.includes('closed'));
+    q = await go(ROWA, { text: '', choices: ['案B'] });
+    t('main: 1 pick, no text -> choices [label] + choice label', J(q.body.choices) === J(['案B']) && q.body.choice === '案B' && q.body.instruction === '案B');
+    q = await go(ROWA, { text: ' 急ぎで ', choices: ['案A', '案B'] });
+    t('main: picks + text -> the text is the instruction; choices; no choice for two', q.body.instruction === '急ぎで' && J(q.body.choices) === J(['案A', '案B']) && !('choice' in q.body));
+    q = await go(ROWA, { text: '', choice: '案C' });
+    t('main: the legacy one choice -> choices [label] + choice', J(q.body.choices) === J(['案C']) && q.body.choice === '案C');
+    q = await go(ROWA, { text: 'メモ', choices: ['案Z'] });
+    t('main: a label not on the row is dropped before the POST (never in the body)', J(q.extra) === J({ mode: 'answer' }) && !J(q.body).includes('案Z') && q.body.instruction === 'メモ' && !('choices' in q.body));
+    q = await go(ROWA, { text: '  ', choices: ['案Z'] });
+    t('main: nothing usable (no text, no pick on the row) -> no POST, 「指示を入力してください」 and the box stays', q === undefined && toasts.length === 1 && /指示を入力してください/.test(toasts[0].text)
+      && told.some(v => v && v.note && /指示を入力/.test(v.note)) && !told.includes('closed'));
+    q = await go(SI.request({ tid: 'T-6', task: '普通' }), { text: '普通', choices: ['案A'] });
+    t('main: not an answer -> picks ignored, the row as before', J(q.extra) === J({}) && !('mode' in q.body) && !('choices' in q.body) && J(Object.keys(q.body.task)) === J(SI.FIELDS));
+    t('main: the app never removes / completes a ledger task (no delete / done in the send path)', !/delete|remove|done|complete/i.test(noStr(send).replace(/insDrafts|draftSet/g, '')));
+  })()); }
 
 // ---- toast page / preload ----
 { const tp = read('toast-preload.js');
@@ -172,6 +211,77 @@ const tests = [];
   t('box: 設定を開く asks main for the settings screen', J(calls.pop()) === J({ type: 'instruct-settings' }));
   const seg = ov.slice(a, b);
   t('box: never reads / shows a URL or key (the page gets none)', !/\.url\b|\.key\b(?!Code)|hookUrl|hookKey/.test(seg.replace(/e\.key/g, '')) && !/innerHTML/.test(seg)); }
+
+// ---- 待ちの回答 in the box (overlay.js): the field + 送信 stay with the choices; a choice toggles (never sends); one send = the picks + the text ----
+{ const ov = read('overlay.js'), a = ov.indexOf('// ---- NaoAIへの指示 (instruct-rules.js): the box over the panes'), b = ov.indexOf('// ---- update settings:', a);
+  let focused = null;
+  const mk = tag => ({ tag, handlers: {}, style: {}, attrs: {}, children: [], textContent: '', hidden: false, className: '', value: '', disabled: false, readOnly: false, scrollHeight: 30, scrollTop: 0,
+    offsetHeight: 0, title: '', maxLength: -1, placeholder: '', type: '',
+    addEventListener(type, f) { (this.handlers[type] = this.handlers[type] || []).push(f); }, focus() { focused = this; }, setSelectionRange(x, y) { this.sel = [x, y]; },
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return Object.hasOwn(this.attrs, k) ? this.attrs[k] : null; },
+    get firstChild() { return this.children[0] || null; }, appendChild(c) { this.children.push(c); return c; }, removeChild(c) { this.children.splice(this.children.indexOf(c), 1); return c; } });
+  const els = Object.fromEntries(['#ins', '#ins-text', '#ins-send', '#ins-note', '#ins-settings', '#ins-count', '#ins-tid', '#ins-bot', '#ins-task', '#ins-ask', '#ins-choices', '.ins-head', '.ins-box', '.ins-in'].map(s => [s, mk(s)]));
+  const bodyCls = new Set(), document = { body: { classList: { toggle: (c, on) => { if (on) bodyCls.add(c); else bodyCls.delete(c); } } }, createElement: tag => mk(tag) };
+  const calls = []; let onIns = null;
+  const ctx = { $: s => els[s], mode: 'instruct', InstructRules: SI, document, addEventListener() {},
+    mpb: { run: x => calls.push(x), closeOverlay: () => calls.push('close'), onInstruct: cb => { onIns = cb; } } };
+  vm.runInNewContext(ov.slice(a, b), ctx);
+  const text = els['#ins-text'], sendB = els['#ins-send'], chEl = els['#ins-choices'], btns = () => chEl.children, pressed = () => btns().map(x => x.getAttribute('aria-pressed')).join();
+  const key = (k, o = {}) => { const e = { key: k, shiftKey: false, altKey: false, repeat: false, isComposing: false, keyCode: k === 'Enter' ? 13 : 65, ...o, prevented: false, target: text, preventDefault() { this.prevented = true; } };
+    text.handlers.keydown.forEach(f => f(e)); return e; };
+  const typeIn = v => { text.value = v; text.handlers.input.forEach(f => f({ target: text })); calls.splice(calls.findIndex(c => c && c.type === 'instruct-draft'), 1); };
+  const click = label => btns().find(x => x.textContent === label).handlers.click.forEach(f => f({ detail: 1 }));
+  const HOOKV = { configured: true, host: 'hooks.cursor.com', available: true };
+  ctx.renderInstruct({ mode: 'instruct', no: 9, task: { tid: 'T-9', task: '方針', bot: 'Writer', mode: 'answer', ask: 'どれにしますか', options: ['案A', '案B', '案C'] }, draft: '', hook: HOOKV });
+  t('answer box: with choices the field + 送信 stay visible (「回答を入力」), the wait prompt above, the choices as buttons, the keyboard in the field', els['.ins-in'].hidden === false
+    && text.placeholder === '回答を入力' && els['#ins-ask'].hidden === false && els['#ins-ask'].textContent === 'どれにしますか' && chEl.hidden === false && bodyCls.has('answer')
+    && btns().map(x => x.textContent).join() === '案A,案B,案C' && btns().every(x => x.tag === 'button' && x.type === 'button') && pressed() === 'false,false,false' && focused === text);
+  t('answer box: nothing picked, nothing typed -> 送信 off, Enter sends nothing', sendB.disabled === true && (key('Enter'), calls.length === 0));
+  const md = { prevented: false, preventDefault() { this.prevented = true; } }; btns()[0].handlers.mousedown.forEach(f => f(md));
+  t('answer box: pressing a choice keeps the keyboard in the field (mousedown not taken)', md.prevented === true);
+  click('案C');
+  t('answer box: a click picks (aria-pressed) and sends nothing; 送信 on', pressed() === 'false,false,true' && calls.length === 0 && sendB.disabled === false);
+  click('案C');
+  t('answer box: a second click unpicks; 送信 off again', pressed() === 'false,false,false' && calls.length === 0 && sendB.disabled === true);
+  typeIn('   ');
+  t('answer box: spaces only -> still off', sendB.disabled === true && (key('Enter'), calls.length === 0));
+  typeIn('');
+  click('案C'); click('案A');
+  let e = key('Enter', { isComposing: true }); const e2 = key('Enter', { keyCode: 229 });
+  text.handlers.compositionstart.forEach(f => f()); const e3 = key('Enter'); text.handlers.compositionend.forEach(f => f());
+  t('answer box: Enter during an IME composition sends nothing, even with picks', calls.length === 0 && !e.prevented && !e2.prevented && !e3.prevented);
+  e = key('Enter');
+  const m1 = calls.pop();
+  t('answer box: Enter sends once: the picks in the row\'s order + the text, the IPC shape', e.prevented && J(m1) === J({ type: 'instruct-send', no: 9, text: '', choices: ['案A', '案C'] })
+    && chk('overlay-run', OV, [m1]) === null && calls.length === 0);
+  click('案B');
+  t('answer box: while sending: choices off, a click changes nothing, no second send', btns().every(x => x.disabled) && pressed() === 'true,false,true' && sendB.disabled && (sendB.onclick(), calls.length === 0));
+  onIns({ no: 9, sending: false, note: '送れませんでした（HTTP 500）', kind: 'err', hook: HOOKV });
+  t('answer box: not sent -> the picks kept, choices + 送信 on again, the reason shown', btns().every(x => !x.disabled) && pressed() === 'true,false,true' && !sendB.disabled && els['#ins-note'].textContent === '送れませんでした（HTTP 500）');
+  click('案A'); typeIn('補足です'); sendB.onclick();
+  const m2 = calls.pop();
+  t('answer box: 送信 sends the text with the one pick left', J(m2) === J({ type: 'instruct-send', no: 9, text: '補足です', choices: ['案C'] }) && chk('overlay-run', OV, [m2]) === null);
+  onIns({ no: 9, sending: false, note: 'x', kind: 'err', hook: HOOKV }); click('案C'); sendB.onclick();
+  t('answer box: no pick + a text -> the text only (no choices key)', J(calls.pop()) === J({ type: 'instruct-send', no: 9, text: '補足です' }));
+  ctx.renderInstruct({ mode: 'instruct', no: 10, task: { tid: 'T-10', task: '別', mode: 'answer', options: ['はい', 'いいえ'] }, draft: '', hook: HOOKV });
+  t('answer box: another row -> its own choices, nothing picked, the prompt hidden (none given)', btns().map(x => x.textContent).join() === 'はい,いいえ' && pressed() === 'false,false' && sendB.disabled
+    && els['#ins-ask'].hidden === true);
+  ctx.renderInstruct({ mode: 'instruct', no: 11, task: { tid: 'T-11', task: '待ち', mode: 'answer' }, draft: '', hook: HOOKV });
+  t('answer box: a wait with no options -> 「何を待っているか」, no choices, the field; a text is needed', chEl.hidden === true && btns().length === 0 && els['.ins-in'].hidden === false
+    && /何を待っているか/.test(els['#ins-ask'].textContent) && sendB.disabled && (typeIn('了解'), !sendB.disabled) && (key('Enter'), J(calls.pop()) === J({ type: 'instruct-send', no: 11, text: '了解' })));
+  ctx.renderInstruct({ mode: 'instruct', no: 12, task: { tid: 'T-12', task: '普通', options: ['案A'] }, draft: '', hook: HOOKV });
+  t('box: a right-click row (not an answer) -> no choices, 「NaoAIへの指示」', chEl.hidden === true && btns().length === 0 && text.placeholder === 'NaoAIへの指示' && !bodyCls.has('answer'));
+  // no new copy: the box's markup and its strings are the ones it had
+  const html = read('overlay.html'), ins = html.slice(html.indexOf('<div id="ins"'), html.indexOf('<script', html.indexOf('<div id="ins"')));
+  t('markup: the box\'s visible text is unchanged (no helper sentence); the choices / field elements are there', ins.replace(/<[^>]*>/g, '').replace(/\s+/g, '') === '✦送信設定を開く↵送信⇧↵改行esc閉じる'
+    && /<div id="ins-choices" hidden><\/div>/.test(ins) && /<div class="ins-in">/.test(ins) && /placeholder="NaoAIへの指示"/.test(ins));
+  const seg = ov.slice(a, b).replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, ''), ja = [...new Set([...seg.matchAll(/'([^'\n]*[぀-ヿ一-鿿][^'\n]*)'/g)].map(m => m[1]))].sort();
+  t('overlay.js: the box says nothing new (its Japanese strings are the ones it had)', J(ja) === J(['NaoAIのwebhookが未設定です', 'NaoAIへの指示', '何を待っているか：待ちの内容が台帳にありません。', '回答を入力', '送信中…'].sort()));
+  const css = read('overlay.css');
+  t('overlay.css: picked = colour / frame only (no ::before / ::after / content mark); many choices scroll inside the box, which never outgrows its view',
+    /#ins-choices button\[aria-pressed="true"\]\{background:[^}]*border-color:[^}]*\}/.test(css) && !/#ins-choices[^{]*::?(before|after)/.test(css) && !/#ins-choices[^}]*content:/.test(css)
+    && /\.ins-box\{[^}]*max-height:100%;display:flex;flex-direction:column/.test(css) && /#ins-choices\{flex:0 1 auto;min-height:\d+px;overflow-y:auto/.test(css)
+    && /\.ins-box>\*\{flex:none\}/.test(css) && /--ctl-hi:/.test(css.slice(0, css.indexOf('*{box-sizing'))) && !/[\u{1F300}-\u{1FAFF}☀-➿]/u.test(css.slice(css.indexOf('/* 待ちの回答'), css.indexOf('body.instruct.answer #ins{')))); }
 
 // ---- the settings section (overlay.js renderSidebarSettings + the webhook form), real handlers on a fake panel ----
 { const ov = read('overlay.js'), a = ov.indexOf("const updatePanel = $('#update-panel');"), b = ov.indexOf('function renderUpdate(o) {', a);
