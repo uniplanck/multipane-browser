@@ -360,7 +360,7 @@ async function grokRefresh() {
       const d = GB.decide(rs, { ...(o && typeof o === 'object' ? o : { ready: false }), left }, Date.now()); rs = d.rs;
       if (d.act === 'open') await gbJs(wc, GB.CLICK_JS('trigger'));
       else if (d.act === 'more') await gbJs(wc, GB.CLICK_JS('more'));
-      else if (d.act === 'collect') { bots = GB.parse(o); code = bots.length ? 'OK' : 'EMPTY'; break; }
+      else if (d.act === 'collect') { bots = GB.parse(o, grok); code = bots.length ? 'OK' : 'EMPTY'; break; }   // a section closed in grok.com: its Bots as they were
       else if (d.act !== 'wait') { code = d.act; break; }
     }
     await undo();                                            // the shared sidebar state back first, then the icons

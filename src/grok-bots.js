@@ -5,6 +5,8 @@
 // list as the page shows it: no internal API, no conversation opened / typed into / sent. The only clicks are the sidebar toggle and さらに表示 /
 // 少なく表示, each undone before the window closes (`sidebarOpen` in grok.com's localStorage is shared with the real panes). decide() drives the
 // read from plain observations of the page; scanSidebar() is the one DOM reader (in the page's own world, and in Node on a tiny fake DOM).
+// grok.com draws the ボット section only once its Bot list has arrived (after the page itself is complete, at times well after): the read waits
+// for the links up to TIMEOUT_MS and never takes "nothing yet" for an empty list. A section closed in grok.com shows no links: its Bots stay.
 // Nothing here is logged: names, URLs and icons stay in panes.json and the bar.
 const { stamp } = require('./state-backup');
 const { authPage } = require('./probe-policy');                // a clear sign-in page (the same test as the background check's)
@@ -59,13 +61,21 @@ function clean(g) {
 const valid = g => clean(g).same;                             // state-schema validate(): exactly what clean() keeps
 
 // the page's sidebar (scanSidebar items) -> bots in the page's order, each with the section label above it. Unknown hrefs, duplicates (a Bot
-// shown in two sections: the first) and nameless links are left out; the icon is the page's own image URL (iconsOf below makes it a data URL)
-function parse(raw) {
+// shown in two sections: the first) and nameless links are left out; the icon is the page's own image URL (iconsOf below makes it a data URL).
+// A section closed in grok.com (closed: true) shows none of its links: with prev (the saved list) its Bots stay as they were, in its place
+function parse(raw, prev) {
   const items = Array.isArray(own(raw, 'items')) ? raw.items.slice(0, 4000) : [];
   const out = [], seen = new Set(); let sec = '';
+  const kept = prev === undefined ? [] : clean(prev).grok.bots;
+  const shown = new Set(kept.length ? items.map(it => isObj(it) && it.t === 'bot' && typeof it.href === 'string' && (it.href.match(HREF_RE) || [])[1]).filter(Boolean) : []);
   for (const it of items) {
     if (!isObj(it)) continue;
-    if (it.t === 'sec') { sec = text(it.text, SEC_MAX); continue; }
+    if (it.t === 'sec') {
+      sec = text(it.text, SEC_MAX);
+      if (it.closed === true && sec) for (const b of kept) if (b.section === sec && !shown.has(b.id) && !seen.has(b.id) && out.length < MAX_BOTS) { seen.add(b.id); out.push({ ...b, order: out.length }); }
+      continue;
+    }
+    if (out.length >= MAX_BOTS) break;
     if (it.t !== 'bot' || typeof it.href !== 'string') continue;
     const m = it.href.match(HREF_RE), name = text(it.name, NAME_MAX);
     if (!m || seen.has(m[1]) || !name || m[1] === '__proto__') continue;
@@ -139,17 +149,21 @@ function migration(favorites, now = new Date()) {
 // where it may go: grok.com only (a sign-in redirect / anything else is stopped there and ends the read)
 const navOk = u => { try { const x = new URL(String(u)); return x.protocol === 'https:' && x.hostname === 'grok.com' && !x.port && !x.username && !x.password; } catch { return false; } };
 // rs: what this read did so far (sidebarOpen as found, clicks, times)
-const start = now => ({ t0: now, readyAt: 0, orig: undefined, opened: false, openAt: 0, more: 0, moreAt: 0, n: -1, nAt: 0 });
+const start = now => ({ t0: now, readyAt: 0, orig: undefined, opened: false, openAt: 0, more: 0, moreAt: 0, n: -1, nAt: 0, head: false });
 // one observation (STATE_JS + main: left = a stopped move away from grok.com; a sign-in page = AUTH) -> { act, rs }. act: 'wait' / 'open'
 // (click the sidebar toggle, once) / 'more' (さらに表示) / 'collect' (the list is complete and still) / a failure code. The toggle is clicked only
-// when the sidebar is found closed (sidebarOpen not 'true', no ボット heading after a moment); さらに表示 only under the ボット heading
+// when the sidebar is found closed: the page says so (data-state "collapsed"), or sidebarOpen is 'false', or the sidebar is not in the page at
+// all - never an open one whose list is still loading (never set = open on grok.com). さらに表示 only under the ボット heading. No Bot link yet
+// is not EMPTY: the list comes after the page (slowly with many panes open), so the read waits for it until the timeout - EMPTY then only when
+// the ボット heading was there (a list without Bots), else TIMEOUT
 function decide(rs, o, now) {
   const r = { ...rs }, out = act => ({ act, rs: r });
-  if (now - r.t0 > TIMEOUT_MS) return out('TIMEOUT');
+  if (now - r.t0 > TIMEOUT_MS) return out(r.head && r.n < 1 ? 'EMPTY' : 'TIMEOUT');
   if (o && o.left) return out(authPage(o.left) ? 'AUTH' : 'OFFSITE');
   if (!o || o.ready !== true) return out('wait');
   if (!r.readyAt) { r.readyAt = now; r.orig = typeof o.ls === 'string' ? o.ls : null; }   // as found, before any click of ours
-  const n = Array.isArray(o.items) ? o.items.filter(x => isObj(x) && x.t === 'bot').length : 0;
+  const items = Array.isArray(o.items) ? o.items.filter(isObj) : [], n = items.filter(x => x.t === 'bot').length;
+  if (o.head === true) r.head = true;
   const since = now - Math.max(r.readyAt, r.openAt, r.moreAt);
   if (n > 0) {
     if (o.more === true && o.head === true && r.more < MORE_MAX) { if (since < 900) return out('wait'); r.more++; r.moreAt = now; return out('more'); }
@@ -157,17 +171,22 @@ function decide(rs, o, now) {
     return now - r.nAt >= 800 && since >= 800 ? out('collect') : out('wait');
   }
   if (o.head === true && o.expanded === 'false' && since >= 1500) return out('COLLAPSED');
-  // closed: said so ('false') after a moment, or never set and still no ボット heading after a longer one (the page may still be loading it)
-  if (!r.opened && o.trigger === true && o.ls !== 'true' && o.head !== true && since >= (o.ls === 'false' ? 1500 : 4000)) { r.opened = true; r.openAt = now; return out('open'); }
+  // every section under the heading closed in grok.com: no link will come (they are not opened for the user)
+  if (o.head === true && items.some(x => x.t === 'sec' && x.closed === true) && since >= 8000) return out('COLLAPSED');
+  // closed: said so (the page's data-state / 'false') after a moment, or no sidebar in the page after a longer one (it may still be drawing it)
+  const said = o.state === 'collapsed' || (o.state !== 'expanded' && o.ls === 'false'), gone = o.state !== 'expanded' && o.sidebar !== true && o.ls !== 'true';
+  if (!r.opened && o.trigger === true && o.head !== true && (said || gone) && since >= (said ? 1500 : 4000)) { r.opened = true; r.openAt = now; return out('open'); }
   if (o.signin === true && since >= 3000) return out('AUTH');
-  return since >= 8000 ? out('EMPTY') : out('wait');
+  return out('wait');
 }
 
-// The sidebar as the page shows it -> { sidebar, head, expanded, more, less, items: [{ t: 'sec', text } | { t: 'bot', href, name, group, icon }], el }.
+// The sidebar as the page shows it -> { sidebar, state, head, expanded, more, less, items: [{ t: 'sec', text, closed? } | { t: 'bot', href, name, group, icon }], el }.
 // Self-contained (it is also run in the page as its own source text): only tagName / children / parentElement / getAttribute / textContent.
 // The ボット section = the closest box around its heading that holds the Bot links; in it, in order: a Bot link (a[href^="/bot/"]: its text, a
 // group when it holds [data-testid="bot-avatar-stack"], its first image) and the section labels = leaf SPANs outside the links (not a button
-// label of the heading / さらに表示 / 少なく表示 / an item's options, not screen-reader-only text). el: the さらに表示 / 少なく表示 buttons (page only)
+// label of the heading / さらに表示 / 少なく表示 / an item's options, not screen-reader-only text). A label inside a button with aria-expanded
+// "false" = a section closed in grok.com (closed: true; its links are not in the page). state: data-state of the sidebar's own box
+// ("expanded" / "collapsed", '' when the page does not say). el: the さらに表示 / 少なく表示 buttons (page only)
 function scanSidebar(doc) {
   const kids = e => Array.from((e && e.children) || []);
   const attr = (e, k) => (e && e.getAttribute && e.getAttribute(k)) || '';
@@ -178,16 +197,17 @@ function scanSidebar(doc) {
   const HEAD = /^(ボット|bots?)(\s*\d+)?$/i, MORE = /^(さらに表示|もっと見る|show more)$/i, LESS = /^(少なく表示|表示を減らす|show less)$/i, OPT = /のオプション$|options?$/i;
   const isBot = e => tag(e) === 'A' && /^(https:\/\/grok\.com)?\/bot\/[A-Za-z0-9_-]/.test(attr(e, 'href'));
   const isBtn = e => tag(e) === 'BUTTON' || attr(e, 'role') === 'button';
-  const res = { sidebar: false, head: false, expanded: '', more: false, less: false, items: [], el: { more: null, less: null } };
+  const res = { sidebar: false, state: '', head: false, expanded: '', more: false, less: false, items: [], el: { more: null, less: null } };
   const sb = desc(doc.documentElement || doc, []).find(e => attr(e, 'data-sidebar') === 'sidebar');
   if (!sb) return res;
   res.sidebar = true;
+  for (let x = sb; x && !res.state; x = x.parentElement) if (/^(expanded|collapsed)$/.test(attr(x, 'data-state'))) res.state = attr(x, 'data-state');
   const all = desc(sb, []), head = all.find(e => isBtn(e) && HEAD.test(txt(e))) || null, first = all.find(isBot) || null;
   res.head = !!head; res.expanded = head ? attr(head, 'aria-expanded') : '';
   let box = head ? head.parentElement || sb : sb;              // no Bot link (yet): the heading's own group
   if (head && first) for (let x = head.parentElement; x && x !== sb; x = x.parentElement) if (inside(first, x)) { box = x; break; }
   let on = !head || !inside(head, box);
-  const walk = e => {
+  const walk = (e, shut) => {
     for (const c of kids(e)) {
       if (c === head) { on = true; continue; }
       if (isBot(c)) {
@@ -205,13 +225,13 @@ function scanSidebar(doc) {
       }
       if (tag(c) === 'SPAN' && !kids(c).length) {
         const s = txt(c);
-        if (on && s && s.length <= 40 && !HEAD.test(s) && !MORE.test(s) && !LESS.test(s) && !OPT.test(s) && !/(^|\s)sr-only(\s|$)/.test(attr(c, 'class'))) res.items.push({ t: 'sec', text: s });
+        if (on && s && s.length <= 40 && !HEAD.test(s) && !MORE.test(s) && !LESS.test(s) && !OPT.test(s) && !/(^|\s)sr-only(\s|$)/.test(attr(c, 'class'))) res.items.push(shut ? { t: 'sec', text: s, closed: true } : { t: 'sec', text: s });
         continue;
       }
-      walk(c);
+      walk(c, shut || (isBtn(c) && attr(c, 'aria-expanded') === 'false'));
     }
   };
-  walk(box);
+  walk(box, false);
   return res;
 }
 // the page-side scripts (fixed code; only JSON values main checked are put in). Run in the hidden window's own world (WORLD)

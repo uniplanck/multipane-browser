@@ -78,11 +78,42 @@ const SIDEBAR = (o = {}) => `<html><body>
   t('scan: no history link / no non-/bot/ link', !bots.some(b => /\/c\//.test(b.href)) && !s.items.some(x => /会話|ホーム|履歴|Toggle/.test(x.text || x.name || '')));
   const c = GB.scanSidebar(parseHtml(SIDEBAR({ expanded: 'false', noBots: true })));
   t('scan: the ボット section closed -> heading, expanded "false", no items', c.head && c.expanded === 'false' && c.items.length === 0 && !c.more);
-  t('scan: no sidebar in the page -> sidebar false, nothing else', J(GB.scanSidebar(parseHtml('<html><body><main><a href="/bot/x"><span>x</span></a></main></body></html>'))) === J({ sidebar: false, head: false, expanded: '', more: false, less: false, items: [], el: { more: null, less: null } }));
+  t('scan: no sidebar in the page -> sidebar false, nothing else', J(GB.scanSidebar(parseHtml('<html><body><main><a href="/bot/x"><span>x</span></a></main></body></html>'))) === J({ sidebar: false, state: '', head: false, expanded: '', more: false, less: false, items: [], el: { more: null, less: null } }));
   const l = GB.scanSidebar(parseHtml(SIDEBAR({ less: true })));
   t('scan: after さらに表示: 少なく表示 seen (the button to undo it)', l.less === true && l.more === false && l.el.less && l.el.less.tagName === 'BUTTON');
   const nh = GB.scanSidebar(parseHtml(SIDEBAR().replace('<span>ボット</span>', '<span>Library</span>')));
   t('scan: no ボット heading -> the whole sidebar is read (its Bots still found), but さらに表示 is never pressed without the heading', !nh.head && nh.items.filter(x => x.t === 'bot').length === 8 && GB.decide({ ...GB.start(0), readyAt: 1, orig: null }, { ready: true, items: nh.items, more: true, head: false }, 5000).act !== 'more'); }
+
+// ---- the sidebar as grok.com draws it since 2026-11 (structure only): the sidebar's box says expanded / collapsed, each section has its own
+// open / close button (aria-expanded) around its label, a closed section shows no links, さらに表示 carries aria-expanded too ----
+const SEC = (label, open, rows) => `<li class="relative rounded-xl"><ul class="flex flex-col gap-px"><li class="flex items-center"><button type="button" aria-expanded="${open}" class="group/section-header flex"><span class="text-xs">${label}</span><span class="inline-flex"><span><svg></svg></span></span></button></li>${open ? rows : ''}</ul></li>`;
+const ROW = (i, name) => `<li data-sidebar="menu-item"><span><a data-sidebar="menu-button" href="/bot/${U(i)}"><span class="inline-flex"><span class="relative"><img src="https://assets.grok.com/n${i}.png"></span></span><span>${name}</span><span></span></a></span><button data-sidebar="menu-action" aria-haspopup="menu"><span class="sr-only">${name}のオプション</span></button></li>`;
+const SIDEBAR2 = (o = {}) => `<html><body><div><button data-sidebar="trigger"><span class="sr-only">Toggle Sidebar</span></button>
+<div class="group peer" data-state="${o.state || 'expanded'}" data-collapsible="" data-variant="sidebar"><div><div data-sidebar="sidebar">
+  <div data-sidebar="group"><a href="/c/1"><span>会話A</span></a></div>
+  ${o.loading ? '' : `<div data-sidebar="group">
+    <div class="pt-4 pb-1 flex items-center gap-1"><button type="button" aria-expanded="true" class="group/section-header flex"><span class="select-none text-sm">ボット</span><span class="inline-flex"><span><svg></svg></span></span></button><button type="button" aria-label="新しいボット"><svg></svg></button></div>
+    <ul data-sidebar="menu">
+      ${o.pins === false ? '' : `<li class="relative rounded-xl"><ul class="flex flex-col gap-px"><li class="flex items-center"><span class="text-xs">ピン留め済み</span></li>${ROW(1, 'Pin A')}${ROW(2, 'Pin B')}</ul></li>`}
+      ${SEC('稼働', o.a !== false, ROW(3, 'Run A'))}
+      ${SEC('待機', o.b !== false, ROW(4, 'Idle A') + ROW(5, 'Idle B'))}
+      <li><button type="button" aria-expanded="false" class="justify-start"><span class="size-6" aria-hidden="true"></span><span>さらに表示</span></button></li>
+    </ul>
+  </div>`}
+</div></div></div></div></body></html>`;
+{ const s = GB.scanSidebar(parseHtml(SIDEBAR2())), bots = s.items.filter(x => x.t === 'bot');
+  t(`scan (2026-11 markup): heading, state, every link under its section label in page order (${bots.length})`, s.sidebar && s.state === 'expanded' && s.head && s.expanded === 'true' && s.more && bots.length === 5
+    && J(s.items.filter(x => x.t === 'sec')) === J([{ t: 'sec', text: 'ピン留め済み' }, { t: 'sec', text: '稼働' }, { t: 'sec', text: '待機' }]) && J(GB.parse(s).map(b => b.section)) === J(['ピン留め済み', 'ピン留め済み', '稼働', '待機', '待機']));
+  const c = GB.scanSidebar(parseHtml(SIDEBAR2({ b: false })));
+  t('scan: a section closed in grok.com -> its label marked closed, no links of it', J(c.items.filter(x => x.t === 'sec')) === J([{ t: 'sec', text: 'ピン留め済み' }, { t: 'sec', text: '稼働' }, { t: 'sec', text: '待機', closed: true }]) && c.items.filter(x => x.t === 'bot').length === 3);
+  const prev = GB.merge(GB.empty(), GB.parse(s), 1000).grok, got = GB.parse(c, prev), m = GB.merge(prev, got, 2000);
+  t('parse: the Bots of a closed section stay as they were, in its place (nothing removed by closing a section in grok.com)', J(got.map(b => b.id)) === J(prev.bots.map(b => b.id)) && m.removed === 0 && m.added === 0 && m.changed === 0 && GB.valid(m.grok)
+    && GB.parse(c).length === 3 && GB.parse(c, GB.empty()).length === 3);
+  const moved = { ...prev, bots: prev.bots.map(b => b.id === U(3) ? { ...b, section: '待機' } : b) };
+  t('parse: a Bot shown elsewhere in the page is not kept twice; a kept Bot never passes MAX_BOTS / junk prev is harmless', GB.parse(c, moved).filter(b => b.id === U(3)).length === 1 && GB.parse(c, moved).find(b => b.id === U(3)).section === '稼働'
+    && [null, 5, 'x', { bots: 'x' }].every(p => GB.parse(c, p).length === 3));
+  const l = GB.scanSidebar(parseHtml(SIDEBAR2({ loading: true }))), k = GB.scanSidebar(parseHtml(SIDEBAR2({ state: 'collapsed', loading: true })));
+  t('scan: the list not there yet (the section is drawn once it arrived) -> sidebar, no heading, no items; the box\'s state as the page says', l.sidebar && !l.head && l.items.length === 0 && l.state === 'expanded' && k.state === 'collapsed'); }
 
 // ---- scan -> the list (parse) ----
 const scanned = GB.scanSidebar(parseHtml(SIDEBAR()));
@@ -151,15 +182,27 @@ t('note: counts only (+added −removed); a failure keeps the list and says so',
   const bot = { t: 'bot', href: '/bot/a', name: 'a' };
   const run = (steps) => { let rs = GB.start(0); const acts = []; for (const [at, o] of steps) { const d = GB.decide(rs, o, at); rs = d.rs; acts.push(d.act); } return { acts, rs }; };
   t('decide: waits for the page; gives up after TIMEOUT_MS', GB.decide(GB.start(0), { ready: false }, 100).act === 'wait' && GB.decide(GB.start(0), null, 100).act === 'wait' && GB.decide(GB.start(0), H(), GB.TIMEOUT_MS + 1).act === 'TIMEOUT');
+  const P = (o = {}) => H({ ls: 'true', state: 'expanded', ...o });   // an open sidebar
   t('decide: a stopped move off grok.com -> AUTH on a sign-in page, else OFFSITE', GB.decide(GB.start(0), { left: 'https://accounts.x.ai/sign-in?redirect=grok-com' }, 10).act === 'AUTH' && GB.decide(GB.start(0), { left: 'https://example.com/' }, 10).act === 'OFFSITE');
   const a = run([[400, H()], [1000, H()], [1900, H()], [2300, H({ ls: 'true' })], [3000, H({ ls: 'true', head: true })], [3400, H({ ls: 'true', head: true, items: [bot] })], [4300, H({ ls: 'true', head: true, items: [bot] })]]);
   t(`decide: closed sidebar ("false") -> toggle once after 1.5 s, then the list, collected once still (${a.acts.join(' ')})`, J(a.acts) === J(['wait', 'wait', 'open', 'wait', 'wait', 'wait', 'collect']) && a.rs.orig === 'false' && a.rs.opened && GB.touched(a.rs));
-  const b = run([[400, H({ ls: null })], [2000, H({ ls: null })], [4500, H({ ls: null })]]);
-  t('decide: sidebarOpen never set -> waits longer (4 s) before the toggle; orig = null', J(b.acts) === J(['wait', 'wait', 'open']) && b.rs.orig === null);
-  const c = run([[400, H({ ls: 'true' })], [3000, H({ ls: 'true' })], [9000, H({ ls: 'true' })]]);
-  t('decide: sidebar said open: never toggled; nothing found -> EMPTY after 8 s', J(c.acts) === J(['wait', 'wait', 'EMPTY']) && !c.rs.opened && !GB.touched(c.rs));
-  const d = run([[400, H()], [2000, H()], [2400, H()], [12000, H()]]);
-  t('decide: the toggle is pressed at most once', d.acts.filter(x => x === 'open').length === 1 && d.acts[3] === 'EMPTY');
+  const b = run([[400, H({ ls: null, sidebar: false })], [2000, H({ ls: null, sidebar: false })], [4500, H({ ls: null, sidebar: false })]]);
+  t('decide: sidebarOpen never set and no sidebar in the page -> waits longer (4 s) before the toggle; orig = null', J(b.acts) === J(['wait', 'wait', 'open']) && b.rs.orig === null);
+  const b2 = run([[400, H({ ls: null })], [4500, H({ ls: null })], [20000, H({ ls: null })], [29000, H({ ls: null, state: 'expanded' })]]);
+  t('decide: sidebarOpen never set but the sidebar is there (open by default, its list still loading) -> never toggled', b2.acts.every(x => x === 'wait') && !b2.rs.opened && !GB.touched(b2.rs));
+  const b3 = run([[400, H({ ls: 'true', state: 'collapsed' })], [2000, H({ ls: 'true', state: 'collapsed' })]]), b4 = run([[400, H({ state: 'expanded' })], [5000, H({ state: 'expanded' })]]);
+  t('decide: the page itself says collapsed / expanded: that decides, whatever sidebarOpen holds', J(b3.acts) === J(['wait', 'open']) && J(b4.acts) === J(['wait', 'wait']));
+  const c = run([[400, P()], [3000, P()], [9000, P()], [20000, P()], [29900, P()]]);
+  t('decide: sidebar open, no Bot link yet -> not EMPTY at 8 s: it waits for the list (it arrives after the page) as long as the timeout allows', c.acts.every(x => x === 'wait') && !c.rs.opened && !GB.touched(c.rs));
+  const c2 = run([[400, P()], [9000, P()], [14000, P({ head: true, items: [bot] })], [15000, P({ head: true, items: [bot] })]]);
+  t(`decide: a list that arrives late (14 s) is still read (${c2.acts.join(' ')})`, J(c2.acts) === J(['wait', 'wait', 'wait', 'collect']));
+  t('decide: at the timeout: the ボット heading was there but never a Bot -> EMPTY; no heading at all (the list never arrived) -> TIMEOUT', run([[400, P()], [9000, P({ head: true })], [GB.TIMEOUT_MS + 1, P({ head: true })]]).acts[2] === 'EMPTY'
+    && run([[400, P()], [9000, P()], [GB.TIMEOUT_MS + 1, P()]]).acts[2] === 'TIMEOUT' && run([[400, P({ head: true, items: [bot] })], [GB.TIMEOUT_MS + 1, P({ head: true, items: [bot], more: true })]]).acts[1] === 'TIMEOUT');
+  const d = run([[400, H()], [2000, H()], [2400, H()], [12000, H()], [GB.TIMEOUT_MS + 1, H()]]);
+  t('decide: the toggle is pressed at most once', d.acts.filter(x => x === 'open').length === 1 && d.acts[3] === 'wait' && d.acts[4] === 'TIMEOUT');
+  const shut = [{ t: 'sec', text: '稼働', closed: true }];
+  t('decide: every section under the heading closed in grok.com (no link will come) -> COLLAPSED after 8 s, never before; signed out still AUTH', J(run([[400, P({ head: true, expanded: 'true', items: shut })], [5000, P({ head: true, expanded: 'true', items: shut })], [8500, P({ head: true, expanded: 'true', items: shut })]]).acts) === J(['wait', 'wait', 'COLLAPSED'])
+    && run([[400, P({ signin: true })], [3500, P({ signin: true })]]).acts[1] === 'AUTH');
   const e = run([[400, H({ ls: 'true', head: true, expanded: 'false' })], [2000, H({ ls: 'true', head: true, expanded: 'false' })]]);
   t('decide: the ボット section closed in grok.com -> COLLAPSED (it is not opened for the user)', J(e.acts) === J(['wait', 'COLLAPSED']));
   const f = run([[400, H({ ls: 'true', head: false, signin: true, trigger: false })], [3500, H({ ls: 'true', signin: true, trigger: false })]]);
@@ -234,6 +277,9 @@ async function pageRuns() {
     t('page: sidebarOpen never set -> after the read it is not set again (removed: the page had written "false" on the second toggle)', r.code === 'collect' && !p.store.has('sidebarOpen') && r.back.ok && r.back.fixed && !p.pg.open); }
   { const p = fakePage({ ls: 'true' }), r = await readOn(p);
     t('page: sidebar already open -> no toggle at all; only さらに表示 / 少なく表示; sidebarOpen untouched', r.code === 'collect' && J(p.pg.clicks) === J(['さらに表示', '少なく表示']) && p.pg.open && !p.pg.expanded && p.store.get('sidebarOpen') === 'true' && r.back.ok); }
+  { const p = fakePage({ ls: 'true' }); let n = 0; const run0 = p.run; p.run = async code => { const o = await run0(code); return code === GB.STATE_JS && ++n <= 30 ? { ...o, head: false, more: false, items: [] } : o; };   // the list arrives 12 s in
+    const r = await readOn(p);
+    t(`page: the Bot list arrives 12 s after the page -> still read, no toggle (${r.acts.length} looks)`, r.code === 'collect' && r.bots.length === 6 && !p.pg.clicks.includes('toggle') && p.store.get('sidebarOpen') === 'true'); }
   { const p = fakePage({ ls: 'false', signin: true }), r = await readOn(p);
     t(`page: signed out (no list, a sign-in link) -> AUTH, the toggle undone (${r.code})`, r.code === 'AUTH' && J(p.pg.clicks) === J(['toggle', 'toggle']) && p.store.get('sidebarOpen') === 'false' && r.back.ok && !r.bots); }
 }
