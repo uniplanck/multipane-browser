@@ -4,9 +4,11 @@
 // A read (the Grok button only, never by itself) opens https://grok.com/ in a hidden window of the shared session and takes the sidebar's ボット
 // list as the page shows it: no internal API, no conversation opened / typed into / sent. The only clicks are the sidebar toggle and さらに表示 /
 // 少なく表示, each undone before the window closes (`sidebarOpen` in grok.com's localStorage is shared with the real panes). decide() drives the
-// read from plain observations of the page; scanSidebar() is the one DOM reader (in the page's own world, and in Node on a tiny fake DOM).
+// read from plain observations of the page; scanSidebar() is the one DOM reader (in the page, and in Node on a tiny fake DOM); findToggle()
+// finds the sidebar's toggle. Both of grok.com's sidebars are read: [data-sidebar="sidebar"] with a link per Bot (until 2026-11) and
+// #app-sidebar with a button per Bot (since: the Bot behind a row is what the page's React keeps on it, see scanSidebar).
 // grok.com draws the ボット section only once its Bot list has arrived (after the page itself is complete, at times well after): the read waits
-// for the links up to TIMEOUT_MS and never takes "nothing yet" for an empty list. A section closed in grok.com shows no links: its Bots stay.
+// for the Bots up to TIMEOUT_MS and never takes "nothing yet" for an empty list. A section closed in grok.com shows no links: its Bots stay.
 // Nothing here is logged: names, URLs and icons stay in panes.json and the bar.
 const { stamp } = require('./state-backup');
 const { authPage } = require('./probe-policy');                // a clear sign-in page (the same test as the background check's)
@@ -152,7 +154,7 @@ const navOk = u => { try { const x = new URL(String(u)); return x.protocol === '
 const start = now => ({ t0: now, readyAt: 0, orig: undefined, opened: false, openAt: 0, more: 0, moreAt: 0, n: -1, nAt: 0, head: false });
 // one observation (STATE_JS + main: left = a stopped move away from grok.com; a sign-in page = AUTH) -> { act, rs }. act: 'wait' / 'open'
 // (click the sidebar toggle, once) / 'more' (さらに表示) / 'collect' (the list is complete and still) / a failure code. The toggle is clicked only
-// when the sidebar is found closed: the page says so (data-state "collapsed"), or sidebarOpen is 'false', or the sidebar is not in the page at
+// when the sidebar is found closed: the page says so (scanSidebar's state "collapsed"), or sidebarOpen is 'false', or the sidebar is not in the page at
 // all - never an open one whose list is still loading (never set = open on grok.com). さらに表示 only under the ボット heading. No Bot link yet
 // is not EMPTY: the list comes after the page (slowly with many panes open), so the read waits for it until the timeout - EMPTY then only when
 // the ボット heading was there (a list without Bots), else TIMEOUT
@@ -180,16 +182,37 @@ function decide(rs, o, now) {
   return out('wait');
 }
 
+// The sidebar's open / close button: [data-sidebar="trigger"] (grok.com until 2026-11), else the button named サイドバーを切り替え / Toggle sidebar
+// (aria-label / title: the header button of the newer page; never 右ペインの切り替え). Self-contained, as scanSidebar: the one finder of STATE_JS,
+// CLICK_JS('trigger') and RESTORE_JS
+function findToggle(doc) {
+  const attr = (e, k) => (e && e.getAttribute && e.getAttribute(k)) || '';
+  const find = (e, f) => { for (const c of Array.from((e && e.children) || [])) { if (f(c)) return c; const x = find(c, f); if (x) return x; } return null; };
+  const root = doc.documentElement || doc, NAME = /サイドバーを切り替え|toggle sidebar/i;
+  return (doc.querySelector ? doc.querySelector('[data-sidebar="trigger"]') : find(root, e => attr(e, 'data-sidebar') === 'trigger'))
+    || find(root, e => (String(e.tagName || '').toUpperCase() === 'BUTTON' || attr(e, 'role') === 'button') && (NAME.test(attr(e, 'aria-label')) || NAME.test(attr(e, 'title'))));
+}
 // The sidebar as the page shows it -> { sidebar, state, head, expanded, more, less, items: [{ t: 'sec', text, closed? } | { t: 'bot', href, name, group, icon }], el }.
-// Self-contained (it is also run in the page as its own source text): only tagName / children / parentElement / getAttribute / textContent.
-// The ボット section = the closest box around its heading that holds the Bot links; in it, in order: a Bot link (a[href^="/bot/"]: its text, a
-// group when it holds [data-testid="bot-avatar-stack"], its first image) and the section labels = leaf SPANs outside the links (not a button
-// label of the heading / さらに表示 / 少なく表示 / an item's options, not screen-reader-only text). A label inside a button with aria-expanded
-// "false" = a section closed in grok.com (closed: true; its links are not in the page). state: data-state of the sidebar's own box
-// ("expanded" / "collapsed", '' when the page does not say). el: the さらに表示 / 少なく表示 buttons (page only)
-function scanSidebar(doc) {
+// Self-contained (it is also run in the page as its own source text): only tagName / children / parentElement / getAttribute / textContent
+// (and, in the newer page, what React keeps on a row's node). Two pages are read:
+// - [data-sidebar="sidebar"] (until 2026-11). The ボット section = the closest box around its heading that holds the Bot links; in it, in
+//   order: a Bot link (a[href^="/bot/"]: its text, a group when it holds [data-testid="bot-avatar-stack"], its first image) and the section
+//   labels = leaf SPANs outside the links (not a button label of the heading / さらに表示 / 少なく表示 / an item's options, not screen-reader-only
+//   text). A label inside a button with aria-expanded "false" = a section closed in grok.com (closed: true; its links are not in the page).
+//   state: data-state of the sidebar's own box ("expanded" / "collapsed", '' when the page does not say)
+// - #app-sidebar (since 2026-11). It stays in the page while closed: state "collapsed" = aria-hidden "true" / inert / the toggle (findToggle's,
+//   when given) says aria-expanded "false", else "expanded". A Bot is a button, not a link: the rows are the buttons of the box the ボット
+//   heading controls (aria-controls; without one: what follows the heading up to さらに表示 / the next heading), an item's options
+//   (data-icon-button) left out. Which Bot a row is, is only in React's props above its node (agent: agentId / name / avatar / isGroup /
+//   isTeamBot / hiddenFromSidebar, pinned; further up the list's agents) - seen from the page's own world only, so STATE_JS runs there. A
+//   pinned row gets the label ピン留め済み (the page shows no other label). The Bots of the list not drawn as a row (before さらに表示) follow the
+//   rows, in the list's order - not the page's, so さらに表示 is still reported and pressed. A Bot hidden from the sidebar is left out. Nothing
+//   else of an agent is taken (no instructions, no message text)
+// el: the さらに表示 / 少なく表示 buttons (page only)
+function scanSidebar(doc, toggle) {
   const kids = e => Array.from((e && e.children) || []);
   const attr = (e, k) => (e && e.getAttribute && e.getAttribute(k)) || '';
+  const has = (e, k) => !!(e && e.getAttribute) && e.getAttribute(k) !== null;
   const tag = e => String((e && e.tagName) || '').toUpperCase();
   const txt = e => String((e && e.textContent) || '').replace(/\s+/g, ' ').trim();
   const desc = (e, out) => { for (const c of kids(e)) { out.push(c); desc(c, out); } return out; };
@@ -197,10 +220,60 @@ function scanSidebar(doc) {
   const HEAD = /^(ボット|bots?)(\s*\d+)?$/i, MORE = /^(さらに表示|もっと見る|show more)$/i, LESS = /^(少なく表示|表示を減らす|show less)$/i, OPT = /のオプション$|options?$/i;
   const isBot = e => tag(e) === 'A' && /^(https:\/\/grok\.com)?\/bot\/[A-Za-z0-9_-]/.test(attr(e, 'href'));
   const isBtn = e => tag(e) === 'BUTTON' || attr(e, 'role') === 'button';
+  const imgOf = d => { const img = d.find(x => tag(x) === 'IMG'); return img ? String(img.currentSrc || img.src || attr(img, 'src') || '') : ''; };
+  const stack = d => d.some(x => attr(x, 'data-testid') === 'bot-avatar-stack');
   const res = { sidebar: false, state: '', head: false, expanded: '', more: false, less: false, items: [], el: { more: null, less: null } };
-  const sb = desc(doc.documentElement || doc, []).find(e => attr(e, 'data-sidebar') === 'sidebar');
+  const every = desc(doc.documentElement || doc, []), old = every.find(e => attr(e, 'data-sidebar') === 'sidebar'), sb = old || every.find(e => attr(e, 'id') === 'app-sidebar');
   if (!sb) return res;
   res.sidebar = true;
+  if (!old) {
+    res.state = attr(sb, 'aria-hidden') === 'true' || has(sb, 'inert') || attr(toggle, 'aria-expanded') === 'false' ? 'collapsed' : 'expanded';
+    const all = desc(sb, []), head = all.find(e => isBtn(e) && HEAD.test(txt(e))) || null;
+    if (!head) return res;
+    res.head = true; res.expanded = attr(head, 'aria-expanded');
+    const okA = a => !!a && typeof a === 'object' && typeof a.agentId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(a.agentId);
+    const above = e => {                                       // React's props above a node: the row's agent / pinned, the list's agents
+      const o = { agent: null, pinned: false, agents: null };
+      try {
+        const k = Object.keys(e).find(x => x.indexOf('__reactFiber$') === 0 || x.indexOf('__reactInternalInstance$') === 0);
+        for (let f = k ? e[k] : null, i = 0; f && i < 60; f = f.return, i++) {
+          const p = f.memoizedProps;
+          if (!p || typeof p !== 'object') continue;
+          if (Array.isArray(p.agents)) { if (p.agents.some(okA)) o.agents = p.agents; break; }
+          if (!okA(p.agent)) continue;
+          if (!o.agent) o.agent = p.agent;
+          if (p.pinned === true && p.agent.agentId === o.agent.agentId) o.pinned = true;
+        }
+      } catch (x) {}
+      return o;
+    };
+    const item = (a, e) => {
+      const d = e ? desc(e, []) : [], u = a.avatar && typeof a.avatar === 'object' ? a.avatar.imageDataUrl : '';   // an image data URL, or the image's https URL
+      return { t: 'bot', href: '/bot/' + a.agentId, name: (typeof a.name === 'string' && a.name.trim() ? a.name : txt(e)).slice(0, 200), group: a.isGroup === true || a.isTeamBot === true || stack(d),
+        icon: typeof u === 'string' && u.length <= 400000 && /^(data:image\/(png|jpeg|webp|gif);base64,|https:\/\/)/.test(u) ? u : imgOf(d) };
+    };
+    const pid = attr(head, 'aria-controls'), panel = pid ? every.find(e => attr(e, 'id') === pid) || null : null;
+    const seen = new Set(), PIN = /ボット/.test(txt(head)) ? 'ピン留め済み' : 'Pinned';
+    let agents = null, pin = false;
+    for (const e of panel ? desc(panel, []) : all.slice(all.indexOf(head) + 1)) {
+      if (isBot(e)) { const d = desc(e, []); res.items.push({ t: 'bot', href: attr(e, 'href'), name: txt(e), group: stack(d), icon: imgOf(d) }); continue; }
+      if (!isBtn(e) || has(e, 'data-icon-button')) continue;
+      const s = txt(e);
+      if (MORE.test(s)) { res.more = true; res.el.more = e; break; }
+      if (LESS.test(s)) { res.less = true; res.el.less = e; break; }
+      const u = above(e);
+      if (!agents) agents = u.agents;
+      if (!u.agent) { if (!panel && (has(e, 'aria-expanded') || has(e, 'data-panel-open'))) break; continue; }   // the next heading
+      if (u.agent.hiddenFromSidebar === true || seen.has(u.agent.agentId)) continue;
+      seen.add(u.agent.agentId);
+      if (u.pinned !== pin) { pin = u.pinned; res.items.push({ t: 'sec', text: pin ? PIN : '' }); }
+      res.items.push(item(u.agent, e));
+    }
+    const rest = (agents || []).filter(a => okA(a) && a.hiddenFromSidebar !== true && !seen.has(a.agentId)).slice(0, 400);
+    if (rest.length && pin) res.items.push({ t: 'sec', text: '' });
+    for (const a of rest) { if (seen.has(a.agentId)) continue; seen.add(a.agentId); res.items.push(item(a, null)); }
+    return res;
+  }
   for (let x = sb; x && !res.state; x = x.parentElement) if (/^(expanded|collapsed)$/.test(attr(x, 'data-state'))) res.state = attr(x, 'data-state');
   const all = desc(sb, []), head = all.find(e => isBtn(e) && HEAD.test(txt(e))) || null, first = all.find(isBot) || null;
   res.head = !!head; res.expanded = head ? attr(head, 'aria-expanded') : '';
@@ -212,8 +285,8 @@ function scanSidebar(doc) {
       if (c === head) { on = true; continue; }
       if (isBot(c)) {
         if (!on) continue;
-        const d = desc(c, []), img = d.find(x => tag(x) === 'IMG');
-        res.items.push({ t: 'bot', href: attr(c, 'href'), name: txt(c), group: d.some(x => attr(x, 'data-testid') === 'bot-avatar-stack'), icon: img ? String(img.currentSrc || img.src || attr(img, 'src') || '') : '' });
+        const d = desc(c, []);
+        res.items.push({ t: 'bot', href: attr(c, 'href'), name: txt(c), group: stack(d), icon: imgOf(d) });
         continue;
       }
       if (tag(c) === 'A') continue;                          // another link: neither a Bot nor a section label
@@ -234,12 +307,15 @@ function scanSidebar(doc) {
   walk(box, false);
   return res;
 }
-// the page-side scripts (fixed code; only JSON values main checked are put in). Run in the hidden window's own world (WORLD)
-const SCAN = `(${scanSidebar})`;
-const STATE_JS = `(()=>{/*mpb:gbar-state*/const s=${SCAN}(document);delete s.el;let ls=null;try{ls=localStorage.getItem('sidebarOpen');}catch(e){}
-return Object.assign(s,{ready:document.readyState==='complete',ls,trigger:!!document.querySelector('[data-sidebar="trigger"]'),
+// the page-side scripts (fixed code; only JSON values main checked are put in). Run in the hidden window's own world (WORLD) - but STATE_JS in
+// the page's own (inPage, asked by main): what React keeps on the rows is not seen from any other. It only reads; what it returns is plain
+// strings / booleans that parse() checks again
+const SCAN = `(${scanSidebar})`, TOGGLE = `(${findToggle})`;
+const STATE_JS = `(()=>{/*mpb:gbar-state*/const t=${TOGGLE}(document),s=${SCAN}(document,t);delete s.el;let ls=null;try{ls=localStorage.getItem('sidebarOpen');}catch(e){}
+return Object.assign(s,{ready:document.readyState==='complete',ls,trigger:!!t,
 signin:!!document.querySelector('input[type="password"],a[href*="/sign-in"],a[href*="accounts.x.ai"]')});})()`;
-const CLICK_JS = what => what === 'trigger' ? `(()=>{/*mpb:gbar-open*/const t=document.querySelector('[data-sidebar="trigger"]');if(t){t.click();return true;}return false;})()`
+const inPage = code => code === STATE_JS;
+const CLICK_JS = what => what === 'trigger' ? `(()=>{/*mpb:gbar-open*/const t=${TOGGLE}(document);if(t){t.click();return true;}return false;})()`
   : `(()=>{/*mpb:gbar-more*/const s=${SCAN}(document);if(s.head&&s.el.more){s.el.more.click();return true;}return false;})()`;
 // each https / data image -> a centred square ICON_PX PNG data URL when the image allows it (CORS); { src: dataURL } of the ones that worked
 const ICONS_JS = srcs => `(async()=>{/*mpb:gbar-icons*/const S=${JSON.stringify([...new Set(srcs.filter(s => icon(s) || dataIcon(s, 400000)))].slice(0, MAX_BOTS))},o={};
@@ -248,15 +324,21 @@ im.crossOrigin='anonymous';im.onerror=()=>done('');im.onload=()=>{try{const w=im
 const c=document.createElement('canvas');c.width=c.height=${ICON_PX};c.getContext('2d').drawImage(im,(w-s)/2,(h-s)/2,s,s,0,0,${ICON_PX},${ICON_PX});done(c.toDataURL('image/png'));}catch(e){done('');}};im.src=src;})));
 return o;})()`;
 // undo this read's clicks: 少なく表示 when it pressed さらに表示, the toggle when it opened the sidebar, then sidebarOpen exactly as found
-// (set / removed directly if the clicks did not bring it back) -> { ok: sidebarOpen is as found, fixed: it had to be set directly }
-const RESTORE_JS = rs => `(async()=>{/*mpb:gbar-restore*/const O=${JSON.stringify(typeof rs.orig === 'string' ? rs.orig : null)},w=ms=>new Promise(r=>setTimeout(r,ms));
+// (set / removed directly if the clicks did not bring it back) -> { ok: sidebarOpen is as found, fixed: it had to be set directly }.
+// grok.com writes sidebarOpen a moment after a click of the toggle (0.3 s, at times over 1 s): a read that ends right after its own click waits
+// for that write (up to SETTLE_MS after the click) before it looks, and after the toggle back for the page's write of that - the page is not to
+// write after the last look here. All of it within main's 4 s
+const SETTLE_MS = 2500;
+const RESTORE_JS = rs => { const age = Date.now() - rs.openAt, W = rs.opened === true && age >= 0 ? Math.max(0, Math.min(1700, SETTLE_MS - age)) : 0;
+  return `(async()=>{/*mpb:gbar-restore*/const O=${JSON.stringify(typeof rs.orig === 'string' ? rs.orig : null)},w=ms=>new Promise(r=>setTimeout(r,ms));
 const ls=()=>{try{return localStorage.getItem('sidebarOpen');}catch(e){return undefined;}};
 if(${rs.more > 0}){const s=${SCAN}(document);if(s.el.less){s.el.less.click();await w(500);}}
-if(${rs.opened === true}&&ls()!==O){const t=document.querySelector('[data-sidebar="trigger"]');if(t){t.click();await w(500);}}
+for(let i=0;i<${Math.ceil(W / 100)}&&ls()===O;i++)await w(100);
+if(${rs.opened === true}&&ls()!==O){const t=${TOGGLE}(document);if(t){const v=ls();t.click();await w(100);for(let i=0;i<14&&ls()===v;i++)await w(100);}}
 let fixed=false;if(ls()!==O){fixed=true;try{if(O===null)localStorage.removeItem('sidebarOpen');else localStorage.setItem('sidebarOpen',O);}catch(e){}}
-return {ok:ls()===O,fixed};})()`;
+return {ok:ls()===O,fixed};})()`; };
 const touched = rs => rs.orig !== undefined && (rs.opened === true || rs.more > 0);   // anything to undo
 
 module.exports = { HOME, TIMEOUT_MS, MAX_BOTS, NAME_MAX, SEC_MAX, ICON_MAX, ICON_PX, MORE_MAX, WORLD, CODES, NOTE,
   empty, clean, valid, parse, withIcons, merge, absorbFavs, addUrl, pin, movePin, rename, nameOf, view, note, botId, icon, okId,
-  migration, navOk, start, decide, scanSidebar, STATE_JS, CLICK_JS, ICONS_JS, RESTORE_JS, touched };
+  migration, navOk, start, decide, scanSidebar, findToggle, inPage, STATE_JS, CLICK_JS, ICONS_JS, RESTORE_JS, touched };

@@ -332,7 +332,9 @@ function gbChanged() { save(); gbPush(); }
 function gbModeNext() { settings.gbarMode = GM.nextMode(settings.gbarMode); save(); gbPush(); }   // 表示モード: kept in panes.json, every bar redrawn
 function gbSecToggle(name) { settings.gbarSecOpen = GS.toggle(settings.gbarSecOpen, name); save(); gbPush(); }
 function gbSay(text, ms) { gbNote = text; clearTimeout(gbNoteTimer); if (text) gbNoteTimer = setTimeout(() => { gbNote = ''; gbPush(); }, ms); gbPush(); }
-const gbJs = (wc, code, ms = 5000) => Promise.race([Promise.resolve().then(() => wc.executeJavaScriptInIsolatedWorld(GB.WORLD, [{ code }])), sleep(ms).then(() => null)]).catch(() => null);
+// GB.inPage: the state script alone runs in the page's own world (which Bot a sidebar row is, is kept by the page on the row itself and seen
+// from no other world; it only reads, and GB.parse checks what comes back). Every click and the undo run in the read's own world
+const gbJs = (wc, code, ms = 5000) => Promise.race([Promise.resolve().then(() => GB.inPage(code) ? wc.executeJavaScript(code) : wc.executeJavaScriptInIsolatedWorld(GB.WORLD, [{ code }])), sleep(ms).then(() => null)]).catch(() => null);
 // The hidden window: grok.com only (a move anywhere else is stopped and ends the read: a sign-in page = AUTH), no window.open, muted, the
 // background-check role (storage only, no other permission / download, no preload so no IPC). Whatever it clicked is undone before it closes
 // (GB.RESTORE_JS: さらに表示 / the sidebar toggle / sidebarOpen exactly as found). A failure keeps the list as it was and says why in the bar.
